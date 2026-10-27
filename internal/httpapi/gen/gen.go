@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -93,18 +94,26 @@ type AccountKind string
 type Balance struct {
 	AccountId openapi_types.UUID `json:"account_id"`
 
+	// AsKnownAt Corte de conocimiento del saldo bitemporal; no viene en el materializado.
+	AsKnownAt *time.Time `json:"as_known_at,omitempty"`
+
+	// AsOfValueDate Corte de fecha valor del saldo bitemporal; no viene en el materializado.
+	AsOfValueDate *openapi_types.Date `json:"as_of_value_date,omitempty"`
+
 	// Natural Saldo en la naturaleza de la cuenta (un depósito de cliente es positivo).
 	Natural Money `json:"natural"`
 
-	// PendingCredits Holds de crédito pendientes (importe no negativo).
-	PendingCredits Money `json:"pending_credits"`
+	// PendingCredits Holds de crédito pendientes (importe no negativo). Solo en el materializado.
+	PendingCredits *Money `json:"pending_credits,omitempty"`
 
-	// PendingDebits Holds de débito pendientes (importe no negativo).
-	PendingDebits Money `json:"pending_debits"`
+	// PendingDebits Holds de débito pendientes (importe no negativo). Solo en el materializado.
+	PendingDebits *Money `json:"pending_debits,omitempty"`
 
 	// Posted Saldo con signo (débito positivo, crédito negativo).
-	Posted  Money `json:"posted"`
-	Version int64 `json:"version"`
+	Posted Money `json:"posted"`
+
+	// Version Versión del saldo materializado. Solo en el materializado.
+	Version *int64 `json:"version,omitempty"`
 }
 
 // BalanceMode defines model for BalanceMode.
@@ -239,6 +248,15 @@ type ReleaseHoldParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// GetLedgerAccountBalanceParams defines parameters for GetLedgerAccountBalance.
+type GetLedgerAccountBalanceParams struct {
+	// AsOfValueDate Fecha valor de corte (inclusive). Vacío (o 0001-01-01) cuenta como ausente.
+	AsOfValueDate *openapi_types.Date `form:"as_of_value_date,omitempty" json:"as_of_value_date,omitempty"`
+
+	// AsKnownAt Saldo como se conocía en este instante RFC 3339 (posted_at hasta él, inclusive; se aplica en UTC y en microsegundos, y así se devuelve). posted_at es la hora de inserción y no la del commit, así que el corte es definitivo solo para instantes anteriores a la transacción en curso más larga. Vacío (o el instante cero) cuenta como ausente.
+	AsKnownAt *time.Time `form:"as_known_at,omitempty" json:"as_known_at,omitempty"`
+}
+
 // PostTransactionParams defines parameters for PostTransaction.
 type PostTransactionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -273,9 +291,9 @@ type ServerInterface interface {
 	// GetLedgerAccount Leer una cuenta del ledger
 	// (GET /v1/ledger-accounts/{id})
 	GetLedgerAccount(w http.ResponseWriter, r *http.Request, id ID)
-	// GetLedgerAccountBalance Leer el saldo materializado de una cuenta
+	// GetLedgerAccountBalance Leer el saldo de una cuenta
 	// (GET /v1/ledger-accounts/{id}/balance)
-	GetLedgerAccountBalance(w http.ResponseWriter, r *http.Request, id ID)
+	GetLedgerAccountBalance(w http.ResponseWriter, r *http.Request, id ID, params GetLedgerAccountBalanceParams)
 	// PostTransaction Asentar una transacción balanceada
 	// (POST /v1/transactions)
 	PostTransaction(w http.ResponseWriter, r *http.Request, params PostTransactionParams)
@@ -501,8 +519,37 @@ func (siw *ServerInterfaceWrapper) GetLedgerAccountBalance(w http.ResponseWriter
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetLedgerAccountBalanceParams
+
+	// ------------- Optional query parameter "as_of_value_date" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "as_of_value_date", r.URL.Query(), &params.AsOfValueDate, runtime.BindQueryParameterOptions{Type: "string", Format: "date"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "as_of_value_date"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "as_of_value_date", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "as_known_at" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "as_known_at", r.URL.Query(), &params.AsKnownAt, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "as_known_at"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "as_known_at", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetLedgerAccountBalance(w, r, id)
+		siw.Handler.GetLedgerAccountBalance(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1179,7 +1226,8 @@ func (response GetLedgerAccountdefaultApplicationProblemPlusJSONResponse) VisitG
 }
 
 type GetLedgerAccountBalanceRequestObject struct {
-	Id ID `json:"id"`
+	Id     ID `json:"id"`
+	Params GetLedgerAccountBalanceParams
 }
 
 type GetLedgerAccountBalanceResponseObject interface {
@@ -1445,7 +1493,7 @@ type StrictServerInterface interface {
 	// GetLedgerAccount Leer una cuenta del ledger
 	// (GET /v1/ledger-accounts/{id})
 	GetLedgerAccount(ctx context.Context, request GetLedgerAccountRequestObject) (GetLedgerAccountResponseObject, error)
-	// GetLedgerAccountBalance Leer el saldo materializado de una cuenta
+	// GetLedgerAccountBalance Leer el saldo de una cuenta
 	// (GET /v1/ledger-accounts/{id}/balance)
 	GetLedgerAccountBalance(ctx context.Context, request GetLedgerAccountBalanceRequestObject) (GetLedgerAccountBalanceResponseObject, error)
 	// PostTransaction Asentar una transacción balanceada
@@ -1647,10 +1695,11 @@ func (sh *strictHandler) GetLedgerAccount(w http.ResponseWriter, r *http.Request
 }
 
 // GetLedgerAccountBalance operation middleware
-func (sh *strictHandler) GetLedgerAccountBalance(w http.ResponseWriter, r *http.Request, id ID) {
+func (sh *strictHandler) GetLedgerAccountBalance(w http.ResponseWriter, r *http.Request, id ID, params GetLedgerAccountBalanceParams) {
 	var request GetLedgerAccountBalanceRequestObject
 
 	request.Id = id
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.GetLedgerAccountBalance(ctx, request.(GetLedgerAccountBalanceRequestObject))

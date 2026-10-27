@@ -49,10 +49,27 @@ paths:
   /v1/ledger-accounts/{id}/balance:
     get:
       operationId: getLedgerAccountBalance
-      summary: Leer el saldo materializado de una cuenta
+      summary: Leer el saldo de una cuenta
+      description: >-
+        Sin parámetros, el saldo materializado, con los pendientes de los holds. Con `as_of_value_date`
+        o `as_known_at`, el saldo bitemporal (FR-8): la suma de los entries con fecha valor hasta
+        `as_of_value_date` y asentados hasta `as_known_at`, sin pendientes; el corte que falta no filtra.
+        En una cuenta async el materializado puede ir atrasado y el bitemporal no.
       x-aluna-permission: ledger.balances.read
       parameters:
         - $ref: "#/components/parameters/ID"
+        - name: as_of_value_date
+          in: query
+          description: Fecha valor de corte (inclusive). Vacío (o 0001-01-01) cuenta como ausente.
+          schema: {type: string, format: date}
+        - name: as_known_at
+          in: query
+          description: >-
+            Saldo como se conocía en este instante RFC 3339 (posted_at hasta él, inclusive; se aplica en
+            UTC y en microsegundos, y así se devuelve). posted_at es la hora de inserción y no la del
+            commit, así que el corte es definitivo solo para instantes anteriores a la transacción en
+            curso más larga. Vacío (o el instante cero) cuenta como ausente.
+          schema: {type: string, format: date-time}
       responses:
         "200":
           description: Saldo
@@ -254,9 +271,17 @@ components:
         lower_limit: {type: integer, format: int64}
     Balance:
       type: object
-      required: [account_id, posted, natural, pending_debits, pending_credits, version]
+      required: [account_id, posted, natural]
       properties:
         account_id: {type: string, format: uuid}
+        as_of_value_date:
+          type: string
+          format: date
+          description: Corte de fecha valor del saldo bitemporal; no viene en el materializado.
+        as_known_at:
+          type: string
+          format: date-time
+          description: Corte de conocimiento del saldo bitemporal; no viene en el materializado.
         posted:
           $ref: "#/components/schemas/Money"
           description: Saldo con signo (débito positivo, crédito negativo).
@@ -265,11 +290,14 @@ components:
           description: Saldo en la naturaleza de la cuenta (un depósito de cliente es positivo).
         pending_debits:
           $ref: "#/components/schemas/Money"
-          description: Holds de débito pendientes (importe no negativo).
+          description: Holds de débito pendientes (importe no negativo). Solo en el materializado.
         pending_credits:
           $ref: "#/components/schemas/Money"
-          description: Holds de crédito pendientes (importe no negativo).
-        version: {type: integer, format: int64}
+          description: Holds de crédito pendientes (importe no negativo). Solo en el materializado.
+        version:
+          type: integer
+          format: int64
+          description: Versión del saldo materializado. Solo en el materializado.
     Entry:
       type: object
       required: [account_id, amount]

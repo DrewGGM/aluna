@@ -44,6 +44,8 @@ type (
 	Transaction = app.Transaction
 	// Balance es el saldo materializado de una cuenta, con signo.
 	Balance = app.Balance
+	// BalanceAsOf es el corte del saldo bitemporal: fecha valor y momento en que se sabía.
+	BalanceAsOf = app.BalanceAsOf
 )
 
 // Clases contables y modos de saldo.
@@ -189,6 +191,14 @@ func (s *Service) Account(ctx context.Context, q postgres.Querier, entity, id id
 // Tx.
 func (s *Service) Transaction(ctx context.Context, q postgres.Querier, entity, id ids.ID) (Transaction, error) {
 	return pg.NewStore(q).TransactionOf(ctx, entity, id)
+}
+
+// PostedAsOf suma los entries de una cuenta con fecha valor hasta at.ValueDate y asentados hasta
+// at.KnownAt (FR-8): el saldo con signo como se conocía en ese momento. No verifica la cuenta ni su
+// entidad: una que no existe suma cero, así que quien llama la lee antes con Account, como el handler.
+// q puede ser el pool o una Tx.
+func (s *Service) PostedAsOf(ctx context.Context, q postgres.Querier, accountID ids.ID, at BalanceAsOf) (int64, error) {
+	return pg.NewStore(q).PostedAsOf(ctx, accountID, at)
 }
 
 // Balance lee el saldo materializado de una cuenta, sin bloquearlo. q puede ser el pool o una Tx.

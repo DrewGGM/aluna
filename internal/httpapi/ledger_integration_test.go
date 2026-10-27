@@ -9,9 +9,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -73,6 +75,9 @@ func createAccount(t *testing.T, ts *httptest.Server, kind string) string {
 	return account.Id.String()
 }
 
+// postingValueDate es la fecha valor de los postings de postingBody.
+const postingValueDate = "2026-10-26"
+
 // postingBody arma el cuerpo de un posting en COP: debitUnits al débito y creditUnits (positivo) al
 // crédito. ref repite la referencia externa si no es vacía.
 func postingBody(t *testing.T, debit, credit string, debitUnits, creditUnits int64, ref string) string {
@@ -81,7 +86,7 @@ func postingBody(t *testing.T, debit, credit string, debitUnits, creditUnits int
 		ref = ids.New().String()
 	}
 	b, err := json.Marshal(map[string]any{
-		"code": "deposito", "value_date": "2026-10-26", "business_date": "2026-10-26", "source": "test",
+		"code": "deposito", "value_date": postingValueDate, "business_date": postingValueDate, "source": "test",
 		"external_ref": ref,
 		"entries": []map[string]any{
 			{"account_id": debit, "amount": map[string]any{"amount": debitUnits, "currency": "COP"}},
@@ -197,4 +202,74 @@ func TestBigBodyWithoutLengthIs413(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil || resp.StatusCode != http.StatusRequestEntityTooLarge || p.Code != "body_too_large" {
 		t.Fatalf("= %d %+v (%v), se esperaba 413 body_too_large", resp.StatusCode, p, err)
 	}
+}
+
+// TestTheBitemporalBalanceOverHTTP (FR-8): con cortes, el saldo se suma de los entries y trae los
+// cortes con que se calculó, sin pendientes; el posting no está a la fecha valor del día anterior ni como
+// se sabía hace una hora.
+func TestTheBitemporalBalanceOverHTTP(t *testing.T) {
+	ts := apiServer(t, ids.New())
+	cash, deposit := createAccount(t, ts, "asset"), createAccount(t, ts, "liability")
+	if status := call(t, ts, http.MethodPost, "/v1/transactions", postingBody(t, cash, deposit, 500, 500, ""), nil); status != http.StatusCreated {
+		t.Fatalf("asentar = %d", status)
+	}
+	anHourAgo := url.QueryEscape(time.Now().Add(-time.Hour).UTC().Format(time.RFC3339))
+	cases := map[string]struct {
+		query   string
+		natural int64
+	}{
+		"a su fecha valor":       {"as_of_value_date=" + postingValueDate, 500},
+		"el día anterior":        {"as_of_value_date=" + dayBefore(t, postingValueDate), 0},
+		"como se sabía hace 1 h": {"as_known_at=" + anHourAgo, 0},
+	}
+	for name, tc := range cases {
+		b := balanceAt(t, ts, deposit, "?"+tc.query)
+		if b.Natural.Amount != tc.natural || echoedCut(b) != tc.query || b.PendingDebits != nil || b.PendingCredits != nil || b.Version != nil {
+			t.Errorf("%s = %+v, se esperaba natural %d con su corte y sin pendientes", name, b, tc.natural)
+		}
+	}
+}
+
+// TestWithoutCutsTheBalanceIsTheMaterialized: sin cortes, o con los parámetros vacíos como los deja una
+// plantilla de URL, el saldo es el materializado, con su versión.
+func TestWithoutCutsTheBalanceIsTheMaterialized(t *testing.T) {
+	ts := apiServer(t, ids.New())
+	cash, deposit := createAccount(t, ts, "asset"), createAccount(t, ts, "liability")
+	if status := call(t, ts, http.MethodPost, "/v1/transactions", postingBody(t, cash, deposit, 500, 500, ""), nil); status != http.StatusCreated {
+		t.Fatalf("asentar = %d", status)
+	}
+	for _, query := range []string{"", "?as_of_value_date=&as_known_at="} {
+		if b := balanceAt(t, ts, deposit, query); b.Natural.Amount != 500 || b.Version == nil || b.AsKnownAt != nil || b.AsOfValueDate != nil {
+			t.Errorf("saldo%s = %+v, se esperaba el materializado con su versión", query, b)
+		}
+	}
+}
+
+func dayBefore(t *testing.T, date string) string {
+	t.Helper()
+	d, err := time.Parse(time.DateOnly, date)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d.AddDate(0, 0, -1).Format(time.DateOnly)
+}
+
+// echoedCut es el corte que devolvió el saldo bitemporal, escrito como el parámetro que lo pidió.
+func echoedCut(b gen.Balance) string {
+	switch {
+	case b.AsOfValueDate != nil && b.AsKnownAt == nil:
+		return "as_of_value_date=" + b.AsOfValueDate.String()
+	case b.AsKnownAt != nil && b.AsOfValueDate == nil:
+		return "as_known_at=" + url.QueryEscape(b.AsKnownAt.UTC().Format(time.RFC3339))
+	}
+	return ""
+}
+
+func balanceAt(t *testing.T, ts *httptest.Server, account, query string) gen.Balance {
+	t.Helper()
+	var b gen.Balance
+	if status := call(t, ts, http.MethodGet, "/v1/ledger-accounts/"+account+"/balance"+query, "", &b); status != http.StatusOK {
+		t.Fatalf("saldo%s = %d", query, status)
+	}
+	return b
 }

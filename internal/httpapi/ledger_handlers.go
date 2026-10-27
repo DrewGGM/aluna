@@ -77,11 +77,15 @@ func (h *LedgerHandlers) GetLedgerAccount(ctx context.Context, req gen.GetLedger
 	return gen.GetLedgerAccount200JSONResponse(toAccountJSON(account)), nil
 }
 
-// GetLedgerAccountBalance lee el saldo materializado, con signo y en la naturaleza de la cuenta.
+// GetLedgerAccountBalance lee el saldo de una cuenta de la entidad del despliegue: el materializado o,
+// con un corte de fecha valor o de conocimiento, el bitemporal.
 func (h *LedgerHandlers) GetLedgerAccountBalance(ctx context.Context, req gen.GetLedgerAccountBalanceRequestObject) (gen.GetLedgerAccountBalanceResponseObject, error) {
 	account, err := h.ledger.Account(ctx, h.reader, h.entity, ids.ID(req.Id))
 	if err != nil {
 		return nil, err
+	}
+	if at, ok := balanceCut(req.Params); ok {
+		return h.balanceAsOf(ctx, account, at)
 	}
 	b, err := h.ledger.Balance(ctx, h.reader, account.ID)
 	if err != nil {
@@ -89,13 +93,48 @@ func (h *LedgerHandlers) GetLedgerAccountBalance(ctx context.Context, req gen.Ge
 	}
 	cur := account.Currency.Code()
 	return gen.GetLedgerAccountBalance200JSONResponse{
-		AccountId:      req.Id,
+		AccountId:      [16]byte(account.ID),
 		Posted:         gen.Money{Amount: b.Posted, Currency: cur},
 		Natural:        gen.Money{Amount: ledger.NaturalBalance(account.Kind, b.Posted), Currency: cur},
-		PendingDebits:  gen.Money{Amount: b.PendingDebits, Currency: cur},
-		PendingCredits: gen.Money{Amount: b.PendingCredits, Currency: cur},
-		Version:        b.Version,
+		PendingDebits:  &gen.Money{Amount: b.PendingDebits, Currency: cur},
+		PendingCredits: &gen.Money{Amount: b.PendingCredits, Currency: cur},
+		Version:        &b.Version,
 	}, nil
+}
+
+// balanceCut lee los cortes del saldo bitemporal. Un parámetro vacío (?as_known_at=) llega como fecha
+// cero y cuenta como ausente: con los dos ausentes se pide el materializado. El corte de conocimiento
+// queda en UTC y en microsegundos, la precisión de posted_at.
+func balanceCut(p gen.GetLedgerAccountBalanceParams) (ledger.BalanceAsOf, bool) {
+	var at ledger.BalanceAsOf
+	if p.AsOfValueDate != nil && !p.AsOfValueDate.IsZero() {
+		at.ValueDate = &p.AsOfValueDate.Time
+	}
+	if p.AsKnownAt != nil && !p.AsKnownAt.IsZero() {
+		known := p.AsKnownAt.UTC().Truncate(time.Microsecond)
+		at.KnownAt = &known
+	}
+	return at, at.ValueDate != nil || at.KnownAt != nil
+}
+
+// balanceAsOf es el saldo bitemporal (FR-8): devuelve los cortes con que se calculó y no lleva
+// pendientes, que solo existen en el presente.
+func (h *LedgerHandlers) balanceAsOf(ctx context.Context, account ledger.Account, at ledger.BalanceAsOf) (gen.GetLedgerAccountBalanceResponseObject, error) {
+	posted, err := h.ledger.PostedAsOf(ctx, h.reader, account.ID, at)
+	if err != nil {
+		return nil, err
+	}
+	cur := account.Currency.Code()
+	b := gen.GetLedgerAccountBalance200JSONResponse{
+		AccountId: [16]byte(account.ID),
+		Posted:    gen.Money{Amount: posted, Currency: cur},
+		Natural:   gen.Money{Amount: ledger.NaturalBalance(account.Kind, posted), Currency: cur},
+		AsKnownAt: at.KnownAt,
+	}
+	if at.ValueDate != nil {
+		b.AsOfValueDate = &openapi_types.Date{Time: *at.ValueDate}
+	}
+	return b, nil
 }
 
 // PostTransaction asienta una transacción manual de la entidad del despliegue, una sola vez por

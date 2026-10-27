@@ -42,6 +42,16 @@ WHERE account_id = @account_id;
 -- name: Balance :one
 SELECT posted, pending_debits, pending_credits, version FROM ledger.balances WHERE account_id = $1;
 
+-- Saldo bitemporal (FR-8): entries con fecha valor hasta as_of_value_date y asentados hasta as_known_at;
+-- un parámetro nulo no filtra ese eje. Recorre por índice los entries de la cuenta y lee cada uno del
+-- heap (amount no está en el índice): cuesta lo que la historia de la cuenta.
+-- name: PostedAsOf :one
+SELECT coalesce(sum(amount), 0)::bigint AS posted
+FROM ledger.entries
+WHERE account_id = @account_id
+  AND value_date <= coalesce(sqlc.narg(as_of_value_date)::date, 'infinity'::date)
+  AND posted_at <= coalesce(sqlc.narg(as_known_at)::timestamptz, 'infinity'::timestamptz);
+
 -- Las lecturas por ID filtran por entidad: lo ajeno se ve igual que lo que no existe.
 -- name: AccountOfEntity :one
 SELECT sqlc.embed(a) FROM ledger.accounts a WHERE a.id = @id AND a.legal_entity_id = @legal_entity_id;

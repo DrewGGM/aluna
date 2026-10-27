@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const accountOfEntity = `-- name: AccountOfEntity :one
@@ -551,6 +552,30 @@ type MoveAsyncCursorParams struct {
 func (q *Queries) MoveAsyncCursor(ctx context.Context, arg MoveAsyncCursorParams) error {
 	_, err := q.db.Exec(ctx, moveAsyncCursor, arg.PostedXact, arg.EntryID)
 	return err
+}
+
+const postedAsOf = `-- name: PostedAsOf :one
+SELECT coalesce(sum(amount), 0)::bigint AS posted
+FROM ledger.entries
+WHERE account_id = $1
+  AND value_date <= coalesce($2::date, 'infinity'::date)
+  AND posted_at <= coalesce($3::timestamptz, 'infinity'::timestamptz)
+`
+
+type PostedAsOfParams struct {
+	AccountID     ids.ID
+	AsOfValueDate pgtype.Date
+	AsKnownAt     pgtype.Timestamptz
+}
+
+// Saldo bitemporal (FR-8): entries con fecha valor hasta as_of_value_date y asentados hasta as_known_at;
+// un parámetro nulo no filtra ese eje. Recorre por índice los entries de la cuenta y lee cada uno del
+// heap (amount no está en el índice): cuesta lo que la historia de la cuenta.
+func (q *Queries) PostedAsOf(ctx context.Context, arg PostedAsOfParams) (int64, error) {
+	row := q.db.QueryRow(ctx, postedAsOf, arg.AccountID, arg.AsOfValueDate, arg.AsKnownAt)
+	var posted int64
+	err := row.Scan(&posted)
+	return posted, err
 }
 
 const transactionIDByRef = `-- name: TransactionIDByRef :one

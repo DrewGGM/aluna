@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger/internal/adapters/postgres/sqlcgen"
@@ -238,6 +239,22 @@ func (s *Store) Balance(ctx context.Context, accountID ids.ID) (app.Balance, err
 		return app.Balance{}, fmt.Errorf("leer el saldo: %w", err)
 	}
 	return app.Balance{Posted: r.Posted, PendingDebits: r.PendingDebits, PendingCredits: r.PendingCredits, Version: r.Version}, nil
+}
+
+// PostedAsOf suma los entries de la cuenta dentro del corte bitemporal at.
+func (s *Store) PostedAsOf(ctx context.Context, accountID ids.ID, at app.BalanceAsOf) (int64, error) {
+	arg := sqlcgen.PostedAsOfParams{AccountID: accountID}
+	if at.ValueDate != nil {
+		arg.AsOfValueDate = pgtype.Date{Time: *at.ValueDate, Valid: true}
+	}
+	if at.KnownAt != nil {
+		arg.AsKnownAt = pgtype.Timestamptz{Time: *at.KnownAt, Valid: true}
+	}
+	posted, err := s.q.PostedAsOf(ctx, arg)
+	if err != nil {
+		return 0, fmt.Errorf("sumar el saldo bitemporal: %w", err)
+	}
+	return posted, nil
 }
 
 func isUniqueViolation(err error, constraint string) bool {

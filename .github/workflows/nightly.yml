@@ -1,0 +1,38 @@
+name: nightly
+
+# Las pruebas de carrera del ledger (FF-3) corren una vez en cada PR dentro de ci.yml; aquí se repiten
+# 200 veces, para atrapar lo que solo falla de vez en cuando (como un orden de locks equivocado).
+on:
+  schedule:
+    - cron: "0 7 * * *" # 02:00 en Colombia
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aluna
+          POSTGRES_PASSWORD: aluna
+          POSTGRES_DB: aluna_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aluna"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ALUNA_TEST_DATABASE_URL: postgres://aluna:aluna@localhost:5432/aluna_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test -race -count=200 -tags=integration -run '^TestRace' ./internal/ledger/...

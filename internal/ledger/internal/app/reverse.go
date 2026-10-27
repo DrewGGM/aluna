@@ -53,12 +53,12 @@ func Reverse(ctx context.Context, store ReversalStore, in ReverseInput) (Transac
 	}
 	// La referencia externa es la transacción revertida: la unicidad de (source, external_ref) deja a lo
 	// sumo una reversa por transacción, también entre dos reversas concurrentes.
-	reversal, err := Post(ctx, store, PostInput{
+	reversal, err := post(ctx, store, PostInput{
 		LegalEntityID: in.LegalEntityID, Code: reversalCode, ValueDate: original.ValueDate, BusinessDate: in.BusinessDate,
 		Source: reversalSource, ExternalRef: original.ID.String(), Actor: in.Actor, Channel: reversalChannel,
 		RuleVersion: domain.ReversalRuleVersion, ReversesID: original.ID, Metadata: map[string]string{"reason": in.Reason},
 		Entries: entries,
-	})
+	}, pendingRelease{})
 	if !errors.Is(err, ErrDuplicateExternalRef) {
 		return reversal, err
 	}

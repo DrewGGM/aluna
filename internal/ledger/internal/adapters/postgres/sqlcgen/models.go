@@ -42,6 +42,20 @@ type LedgerEntry struct {
 	PostedAt      time.Time
 }
 
+type LedgerHold struct {
+	ID               ids.ID
+	LegalEntityID    ids.ID
+	AccountID        ids.ID
+	CounterAccountID ids.ID
+	Currency         string
+	Amount           int64
+	CapturedAmount   int64
+	Status           string
+	ExpiresAt        time.Time
+	CaptureTxID      *ids.ID
+	CreatedAt        time.Time
+}
+
 type LedgerTransaction struct {
 	ID            ids.ID
 	LegalEntityID ids.ID

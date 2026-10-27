@@ -386,7 +386,8 @@ func TestPostedRowsAreImmutable(t *testing.T) {
 		"UPDATE transaction":    {`UPDATE ledger.transactions SET code = 'otro' WHERE id = $1`, byID},
 		"DELETE transaction":    {`DELETE FROM ledger.transactions WHERE id = $1`, byID},
 		"TRUNCATE entries":      {`TRUNCATE ledger.entries`, nil},
-		"TRUNCATE transactions": {`TRUNCATE ledger.transactions, ledger.entries`, nil},
+		"TRUNCATE transactions": {`TRUNCATE ledger.transactions, ledger.entries, ledger.holds`, nil}, // las tablas que la referencian
+		"TRUNCATE holds":        {`TRUNCATE ledger.holds`, nil},
 	}
 	for name, attempt := range attempts {
 		t.Run(name+" como aluna_app", func(t *testing.T) {

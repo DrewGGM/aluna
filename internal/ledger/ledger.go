@@ -28,6 +28,16 @@ type (
 	PostInput = app.PostInput
 	// ReverseInput pide revertir una transacción.
 	ReverseInput = app.ReverseInput
+	// Hold es una reserva de fondos de dos fases sobre una cuenta, con su contrapartida.
+	Hold = app.Hold
+	// HoldStatus es el estado de un hold.
+	HoldStatus = domain.HoldStatus
+	// PlaceHoldInput pide retener fondos.
+	PlaceHoldInput = app.PlaceHoldInput
+	// CaptureInput pide asentar parte o todo un hold.
+	CaptureInput = app.CaptureInput
+	// ReleaseInput pide liberar un hold.
+	ReleaseInput = app.ReleaseInput
 	// Transaction es una transacción asentada: cabecera, posted_at de la base y entries.
 	Transaction = app.Transaction
 	// Balance es el saldo materializado de una cuenta, con signo.
@@ -43,6 +53,10 @@ const (
 	KindExpense      = domain.KindExpense
 	BalanceModeSync  = domain.BalanceModeSync
 	BalanceModeAsync = domain.BalanceModeAsync
+	HoldPending      = domain.HoldPending
+	HoldCaptured     = domain.HoldCaptured
+	HoldReleased     = domain.HoldReleased
+	HoldExpired      = domain.HoldExpired
 )
 
 // Errores que devuelve el ledger.
@@ -58,6 +72,11 @@ var (
 	ErrTransactionNotFound  = app.ErrTransactionNotFound
 	ErrDuplicateExternalRef = app.ErrDuplicateExternalRef
 	ErrAlreadyReversed      = app.ErrAlreadyReversed
+	ErrHoldNotFound         = app.ErrHoldNotFound
+	ErrInvalidHold          = domain.ErrInvalidHold
+	ErrHoldNotPending       = domain.ErrHoldNotPending
+	ErrAmountExceedsHold    = domain.ErrAmountExceedsHold
+	ErrHoldExpired          = domain.ErrHoldExpired
 )
 
 // NaturalBalance convierte un saldo con signo al de la naturaleza de la cuenta: un depósito de cliente
@@ -88,6 +107,23 @@ func (s *Service) Post(ctx context.Context, tx postgres.Tx, in PostInput) (Trans
 // ErrAlreadyReversed y no escribe nada.
 func (s *Service) Reverse(ctx context.Context, tx postgres.Tx, in ReverseInput) (Transaction, error) {
 	return app.Reverse(ctx, pg.NewStore(tx), in)
+}
+
+// PlaceHold retiene fondos de una cuenta sync dentro de tx: valida el disponible y suma el hold a su
+// pendiente.
+func (s *Service) PlaceHold(ctx context.Context, tx postgres.Tx, in PlaceHoldInput) (Hold, error) {
+	return app.PlaceHold(ctx, pg.NewStore(tx), in)
+}
+
+// CaptureHold asienta dentro de tx parte o todo un hold pending y libera el resto; devuelve el hold y
+// la transacción real.
+func (s *Service) CaptureHold(ctx context.Context, tx postgres.Tx, in CaptureInput) (Hold, Transaction, error) {
+	return app.CaptureHold(ctx, pg.NewStore(tx), in)
+}
+
+// ReleaseHold libera dentro de tx un hold pending.
+func (s *Service) ReleaseHold(ctx context.Context, tx postgres.Tx, in ReleaseInput) (Hold, error) {
+	return app.ReleaseHold(ctx, pg.NewStore(tx), in)
 }
 
 // Account lee una cuenta de la entidad: la de otra entidad no existe para ella. q puede ser el pool o

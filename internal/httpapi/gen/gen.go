@@ -62,6 +62,30 @@ func (e BalanceMode) Valid() bool {
 	}
 }
 
+// Defines values for HoldStatus.
+const (
+	Captured HoldStatus = "captured"
+	Expired  HoldStatus = "expired"
+	Pending  HoldStatus = "pending"
+	Released HoldStatus = "released"
+)
+
+// Valid indicates whether the value is a known member of the HoldStatus enum.
+func (e HoldStatus) Valid() bool {
+	switch e {
+	case Captured:
+		return true
+	case Expired:
+		return true
+	case Pending:
+		return true
+	case Released:
+		return true
+	default:
+		return false
+	}
+}
+
 // AccountKind defines model for AccountKind.
 type AccountKind string
 
@@ -86,6 +110,12 @@ type Balance struct {
 // BalanceMode defines model for BalanceMode.
 type BalanceMode string
 
+// CaptureHold defines model for CaptureHold.
+type CaptureHold struct {
+	Amount       Money              `json:"amount"`
+	BusinessDate openapi_types.Date `json:"business_date"`
+}
+
 // CreateLedgerAccount defines model for CreateLedgerAccount.
 type CreateLedgerAccount struct {
 	BalanceMode BalanceMode `json:"balance_mode"`
@@ -105,6 +135,26 @@ type Entry struct {
 	Amount Money `json:"amount"`
 }
 
+// Hold defines model for Hold.
+type Hold struct {
+	AccountId        openapi_types.UUID `json:"account_id"`
+	Amount           Money              `json:"amount"`
+	Captured         Money              `json:"captured"`
+	CounterAccountId openapi_types.UUID `json:"counter_account_id"`
+	ExpiresAt        time.Time          `json:"expires_at"`
+	Id               openapi_types.UUID `json:"id"`
+	Status           HoldStatus         `json:"status"`
+}
+
+// HoldCapture defines model for HoldCapture.
+type HoldCapture struct {
+	Hold        Hold        `json:"hold"`
+	Transaction Transaction `json:"transaction"`
+}
+
+// HoldStatus defines model for HoldStatus.
+type HoldStatus string
+
 // LedgerAccount defines model for LedgerAccount.
 type LedgerAccount struct {
 	BalanceMode BalanceMode        `json:"balance_mode"`
@@ -120,6 +170,17 @@ type Money struct {
 	// Amount Unidades menores de la moneda (COP 100.000 = 10000000).
 	Amount   int64  `json:"amount"`
 	Currency string `json:"currency"`
+}
+
+// PlaceHold defines model for PlaceHold.
+type PlaceHold struct {
+	// AccountId Cuenta cuyos fondos se retienen
+	AccountId openapi_types.UUID `json:"account_id"`
+	Amount    Money              `json:"amount"`
+
+	// CounterAccountId Cuenta que recibe lo capturado
+	CounterAccountId openapi_types.UUID `json:"counter_account_id"`
+	ExpiresAt        time.Time          `json:"expires_at"`
 }
 
 // PostTransaction defines model for PostTransaction.
@@ -160,10 +221,34 @@ type Transaction struct {
 // ID defines model for ID.
 type ID = openapi_types.UUID
 
+// IdempotencyKey defines model for IdempotencyKey.
+type IdempotencyKey = string
+
+// PlaceHoldParams defines parameters for PlaceHold.
+type PlaceHoldParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// CaptureHoldParams defines parameters for CaptureHold.
+type CaptureHoldParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ReleaseHoldParams defines parameters for ReleaseHold.
+type ReleaseHoldParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // PostTransactionParams defines parameters for PostTransaction.
 type PostTransactionParams struct {
-	IdempotencyKey string `json:"Idempotency-Key"`
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
+
+// PlaceHoldJSONRequestBody defines body for PlaceHold for application/json ContentType.
+type PlaceHoldJSONRequestBody = PlaceHold
+
+// CaptureHoldJSONRequestBody defines body for CaptureHold for application/json ContentType.
+type CaptureHoldJSONRequestBody = CaptureHold
 
 // CreateLedgerAccountJSONRequestBody defines body for CreateLedgerAccount for application/json ContentType.
 type CreateLedgerAccountJSONRequestBody = CreateLedgerAccount
@@ -173,6 +258,15 @@ type PostTransactionJSONRequestBody = PostTransaction
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// PlaceHold Retener fondos de una cuenta
+	// (POST /v1/holds)
+	PlaceHold(w http.ResponseWriter, r *http.Request, params PlaceHoldParams)
+	// CaptureHold Asentar un hold, total o parcialmente
+	// (POST /v1/holds/{id}/capture)
+	CaptureHold(w http.ResponseWriter, r *http.Request, id ID, params CaptureHoldParams)
+	// ReleaseHold Liberar un hold
+	// (POST /v1/holds/{id}/release)
+	ReleaseHold(w http.ResponseWriter, r *http.Request, id ID, params ReleaseHoldParams)
 	// CreateLedgerAccount Crear una cuenta del ledger
 	// (POST /v1/ledger-accounts)
 	CreateLedgerAccount(w http.ResponseWriter, r *http.Request)
@@ -198,6 +292,159 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// PlaceHold operation middleware
+func (siw *ServerInterfaceWrapper) PlaceHold(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PlaceHoldParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PlaceHold(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CaptureHold operation middleware
+func (siw *ServerInterfaceWrapper) CaptureHold(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CaptureHoldParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CaptureHold(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ReleaseHold operation middleware
+func (siw *ServerInterfaceWrapper) ReleaseHold(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ReleaseHoldParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReleaseHold(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // CreateLedgerAccount operation middleware
 func (siw *ServerInterfaceWrapper) CreateLedgerAccount(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +525,7 @@ func (siw *ServerInterfaceWrapper) PostTransaction(w http.ResponseWriter, r *htt
 
 	// ------------- Required header parameter "Idempotency-Key" -------------
 	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
-		var IdempotencyKey string
+		var IdempotencyKey IdempotencyKey
 		n := len(valueList)
 		if n != 1 {
 			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
@@ -461,11 +708,323 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/ledger-accounts/{id}/balance", wrapper.GetLedgerAccountBalance)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transactions", wrapper.PostTransaction)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/transactions/{id}", wrapper.GetTransaction)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/holds", wrapper.PlaceHold)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/holds/{id}/capture", wrapper.CaptureHold)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/holds/{id}/release", wrapper.ReleaseHold)
 
 	return m
 }
 
 type ProblemApplicationProblemPlusJSONResponse Problem
+
+type PlaceHoldRequestObject struct {
+	Params PlaceHoldParams
+	Body   *PlaceHoldJSONRequestBody
+}
+
+type PlaceHoldResponseObject interface {
+	VisitPlaceHoldResponse(w http.ResponseWriter) error
+}
+
+type PlaceHold201JSONResponse Hold
+
+func (response PlaceHold201JSONResponse) VisitPlaceHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PlaceHold400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response PlaceHold400ApplicationProblemPlusJSONResponse) VisitPlaceHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PlaceHold404ApplicationProblemPlusJSONResponse Problem
+
+func (response PlaceHold404ApplicationProblemPlusJSONResponse) VisitPlaceHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PlaceHold409ApplicationProblemPlusJSONResponse Problem
+
+func (response PlaceHold409ApplicationProblemPlusJSONResponse) VisitPlaceHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PlaceHold413ApplicationProblemPlusJSONResponse Problem
+
+func (response PlaceHold413ApplicationProblemPlusJSONResponse) VisitPlaceHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PlaceHold422ApplicationProblemPlusJSONResponse Problem
+
+func (response PlaceHold422ApplicationProblemPlusJSONResponse) VisitPlaceHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PlaceHolddefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response PlaceHolddefaultApplicationProblemPlusJSONResponse) VisitPlaceHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CaptureHoldRequestObject struct {
+	Id     ID `json:"id"`
+	Params CaptureHoldParams
+	Body   *CaptureHoldJSONRequestBody
+}
+
+type CaptureHoldResponseObject interface {
+	VisitCaptureHoldResponse(w http.ResponseWriter) error
+}
+
+type CaptureHold200JSONResponse HoldCapture
+
+func (response CaptureHold200JSONResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CaptureHold400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CaptureHold400ApplicationProblemPlusJSONResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CaptureHold404ApplicationProblemPlusJSONResponse Problem
+
+func (response CaptureHold404ApplicationProblemPlusJSONResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CaptureHold409ApplicationProblemPlusJSONResponse Problem
+
+func (response CaptureHold409ApplicationProblemPlusJSONResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CaptureHold413ApplicationProblemPlusJSONResponse Problem
+
+func (response CaptureHold413ApplicationProblemPlusJSONResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CaptureHold422ApplicationProblemPlusJSONResponse Problem
+
+func (response CaptureHold422ApplicationProblemPlusJSONResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CaptureHolddefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CaptureHolddefaultApplicationProblemPlusJSONResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseHoldRequestObject struct {
+	Id     ID `json:"id"`
+	Params ReleaseHoldParams
+}
+
+type ReleaseHoldResponseObject interface {
+	VisitReleaseHoldResponse(w http.ResponseWriter) error
+}
+
+type ReleaseHold200JSONResponse Hold
+
+func (response ReleaseHold200JSONResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseHold400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ReleaseHold400ApplicationProblemPlusJSONResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseHold404ApplicationProblemPlusJSONResponse Problem
+
+func (response ReleaseHold404ApplicationProblemPlusJSONResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseHold409ApplicationProblemPlusJSONResponse Problem
+
+func (response ReleaseHold409ApplicationProblemPlusJSONResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReleaseHolddefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ReleaseHolddefaultApplicationProblemPlusJSONResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type CreateLedgerAccountRequestObject struct {
 	Body *CreateLedgerAccountJSONRequestBody
@@ -871,6 +1430,15 @@ func (response GetTransactiondefaultApplicationProblemPlusJSONResponse) VisitGet
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// PlaceHold Retener fondos de una cuenta
+	// (POST /v1/holds)
+	PlaceHold(ctx context.Context, request PlaceHoldRequestObject) (PlaceHoldResponseObject, error)
+	// CaptureHold Asentar un hold, total o parcialmente
+	// (POST /v1/holds/{id}/capture)
+	CaptureHold(ctx context.Context, request CaptureHoldRequestObject) (CaptureHoldResponseObject, error)
+	// ReleaseHold Liberar un hold
+	// (POST /v1/holds/{id}/release)
+	ReleaseHold(ctx context.Context, request ReleaseHoldRequestObject) (ReleaseHoldResponseObject, error)
 	// CreateLedgerAccount Crear una cuenta del ledger
 	// (POST /v1/ledger-accounts)
 	CreateLedgerAccount(ctx context.Context, request CreateLedgerAccountRequestObject) (CreateLedgerAccountResponseObject, error)
@@ -925,6 +1493,100 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// PlaceHold operation middleware
+func (sh *strictHandler) PlaceHold(w http.ResponseWriter, r *http.Request, params PlaceHoldParams) {
+	var request PlaceHoldRequestObject
+
+	request.Params = params
+
+	var body PlaceHoldJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PlaceHold(ctx, request.(PlaceHoldRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PlaceHold")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PlaceHoldResponseObject); ok {
+		if err := validResponse.VisitPlaceHoldResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CaptureHold operation middleware
+func (sh *strictHandler) CaptureHold(w http.ResponseWriter, r *http.Request, id ID, params CaptureHoldParams) {
+	var request CaptureHoldRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body CaptureHoldJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CaptureHold(ctx, request.(CaptureHoldRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CaptureHold")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CaptureHoldResponseObject); ok {
+		if err := validResponse.VisitCaptureHoldResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ReleaseHold operation middleware
+func (sh *strictHandler) ReleaseHold(w http.ResponseWriter, r *http.Request, id ID, params ReleaseHoldParams) {
+	var request ReleaseHoldRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReleaseHold(ctx, request.(ReleaseHoldRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReleaseHold")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReleaseHoldResponseObject); ok {
+		if err := validResponse.VisitReleaseHoldResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // CreateLedgerAccount operation middleware

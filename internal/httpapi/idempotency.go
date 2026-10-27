@@ -25,7 +25,17 @@ type idempotentOperation struct {
 	success      int
 }
 
-var postTransaction = idempotentOperation{method: http.MethodPost, path: "/v1/transactions", success: http.StatusCreated}
+var (
+	postTransaction = idempotentOperation{method: http.MethodPost, path: "/v1/transactions", success: http.StatusCreated}
+	placeHold       = idempotentOperation{method: http.MethodPost, path: "/v1/holds", success: http.StatusCreated}
+)
+
+// holdOperation es una operación sobre un hold. La ruta lleva el id del hold: la huella y el scope de
+// la clave son por hold, así que la misma clave con el mismo cuerpo sobre otro hold no se toma por un
+// reintento.
+func holdOperation(id ids.ID, action string) idempotentOperation {
+	return idempotentOperation{method: http.MethodPost, path: "/v1/holds/" + id.String() + "/" + action, success: http.StatusOK}
+}
 
 // idempotentCommands corre los comandos que mueven dinero una sola vez por Idempotency-Key
 // (architecture §9): la clave se reclama y se completa en la misma transacción del efecto. Las claves
@@ -43,10 +53,21 @@ type storedResponse struct {
 	body   []byte
 }
 
-// VisitPostTransactionResponse escribe la respuesta guardada de POST /v1/transactions. El Store no
-// guarda el Content-Type: lo da el status, porque underSavepoint solo produce el JSON del recurso
-// (2xx) o un problem (4xx).
-func (r storedResponse) VisitPostTransactionResponse(w http.ResponseWriter) error {
+// VisitPostTransactionResponse escribe la respuesta guardada de POST /v1/transactions.
+func (r storedResponse) VisitPostTransactionResponse(w http.ResponseWriter) error { return r.write(w) }
+
+// VisitPlaceHoldResponse escribe la respuesta guardada de POST /v1/holds.
+func (r storedResponse) VisitPlaceHoldResponse(w http.ResponseWriter) error { return r.write(w) }
+
+// VisitCaptureHoldResponse escribe la respuesta guardada de POST /v1/holds/{id}/capture.
+func (r storedResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error { return r.write(w) }
+
+// VisitReleaseHoldResponse escribe la respuesta guardada de POST /v1/holds/{id}/release.
+func (r storedResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error { return r.write(w) }
+
+// write escribe la respuesta tal como se guardó. El Store no guarda el Content-Type: lo da el status,
+// porque underSavepoint solo produce el JSON del recurso (2xx) o un problem (4xx).
+func (r storedResponse) write(w http.ResponseWriter) error {
 	contentType := "application/json"
 	if r.status >= http.StatusBadRequest {
 		contentType = "application/problem+json"

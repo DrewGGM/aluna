@@ -27,10 +27,10 @@ type response struct {
 	body        []byte
 }
 
-// send hace POST /v1/transactions con body y la cabecera Idempotency-Key (omitida si key es nil). No
-// llama t.Fatal: se puede usar desde otras goroutines.
-func send(ctx context.Context, ts *httptest.Server, key *string, body string) (response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/v1/transactions", strings.NewReader(body))
+// send hace POST path con body y la cabecera Idempotency-Key (omitida si key es nil). No llama
+// t.Fatal: se puede usar desde otras goroutines.
+func send(ctx context.Context, ts *httptest.Server, path string, key *string, body string) (response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+path, strings.NewReader(body))
 	if err != nil {
 		return response{}, err
 	}
@@ -47,22 +47,28 @@ func send(ctx context.Context, ts *httptest.Server, key *string, body string) (r
 	return response{status: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), body: b}, err
 }
 
+// postWithKey hace POST /v1/transactions con la Idempotency-Key key.
 func postWithKey(t *testing.T, ts *httptest.Server, key, body string) response {
 	t.Helper()
-	r, err := send(t.Context(), ts, &key, body)
+	return postTo(t, ts, "/v1/transactions", key, body)
+}
+
+func postTo(t *testing.T, ts *httptest.Server, path, key, body string) response {
+	t.Helper()
+	r, err := send(t.Context(), ts, path, &key, body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
 }
 
-// concurrently hace n veces el mismo POST a la vez y devuelve las respuestas.
+// concurrently hace n veces el mismo POST /v1/transactions a la vez y devuelve las respuestas.
 func concurrently(t *testing.T, n int, ts *httptest.Server, key, body string) []response {
 	t.Helper()
 	responses, errs := make([]response, n), make([]error, n)
 	var wg sync.WaitGroup
 	for i := range n {
-		wg.Go(func() { responses[i], errs[i] = send(t.Context(), ts, &key, body) })
+		wg.Go(func() { responses[i], errs[i] = send(t.Context(), ts, "/v1/transactions", &key, body) })
 	}
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
@@ -120,7 +126,7 @@ func TestPostTransactionRequiresAValidIdempotencyKey(t *testing.T) {
 		"que no es UTF-8":   {&notUTF8, "invalid_request"},
 	}
 	for name, tc := range cases {
-		r, err := send(t.Context(), ts, tc.key, body)
+		r, err := send(t.Context(), ts, "/v1/transactions", tc.key, body)
 		if err != nil || r.status != http.StatusBadRequest || problemCode(t, r) != tc.code {
 			t.Errorf("clave %s = %d %s (%v), se esperaba 400 %s", name, r.status, r.body, err, tc.code)
 		}

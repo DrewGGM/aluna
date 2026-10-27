@@ -91,8 +91,8 @@ func (s *fakeStore) InsertTransaction(_ context.Context, rec TransactionRecord, 
 	return time.Unix(1_800_000_000, 0), nil
 }
 
-func (s *fakeStore) AddToBalance(_ context.Context, accountID ids.ID, delta int64) error {
-	s.added[accountID] += delta
+func (s *fakeStore) AddToBalance(_ context.Context, accountID ids.ID, d BalanceDelta) error {
+	s.added[accountID] += d.Posted
 	return nil
 }
 

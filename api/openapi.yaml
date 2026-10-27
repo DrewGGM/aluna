@@ -73,10 +73,7 @@ paths:
         5xx no se guarda: se puede reintentar con la misma clave.
       x-aluna-permission: ledger.transactions.post
       parameters:
-        - name: Idempotency-Key
-          in: header
-          required: true
-          schema: {type: string, minLength: 1, maxLength: 255}
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -110,6 +107,80 @@ paths:
         "400": {$ref: "#/components/responses/Problem"}
         "404": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/holds:
+    post:
+      operationId: placeHold
+      summary: Retener fondos de una cuenta
+      description: >-
+        Crea un hold pending sobre una cuenta sync: el importe deja de estar disponible hasta que se
+        captura, se libera o vence. Idempotente por `Idempotency-Key`, como `POST /v1/transactions`.
+      x-aluna-permission: ledger.holds.place
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaceHold"}
+      responses:
+        "201":
+          description: Hold creado
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Hold"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/holds/{id}/capture:
+    post:
+      operationId: captureHold
+      summary: Asentar un hold, total o parcialmente
+      description: >-
+        Asienta el importe pedido de la cuenta del hold a su contrapartida y libera el resto. Un hold
+        que ya no está pending responde 409 `hold_not_pending`; uno vencido, 409 `hold_expired`; un
+        importe mayor que el retenido, 422 `amount_exceeds_hold`.
+      x-aluna-permission: ledger.holds.capture
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CaptureHold"}
+      responses:
+        "200":
+          description: Hold capturado y su transacción
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/HoldCapture"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/holds/{id}/release:
+    post:
+      operationId: releaseHold
+      summary: Liberar un hold
+      x-aluna-permission: ledger.holds.release
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Hold liberado
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Hold"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
 components:
   parameters:
     ID:
@@ -117,6 +188,11 @@ components:
       in: path
       required: true
       schema: {type: string, format: uuid}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 255}
   responses:
     Problem:
       description: Error RFC 9457
@@ -229,3 +305,37 @@ components:
         entries:
           type: array
           items: {$ref: "#/components/schemas/Entry"}
+    PlaceHold:
+      type: object
+      required: [account_id, counter_account_id, amount, expires_at]
+      properties:
+        account_id: {type: string, format: uuid, description: Cuenta cuyos fondos se retienen}
+        counter_account_id: {type: string, format: uuid, description: Cuenta que recibe lo capturado}
+        amount: {$ref: "#/components/schemas/Money"}
+        expires_at: {type: string, format: date-time}
+    CaptureHold:
+      type: object
+      required: [amount, business_date]
+      properties:
+        amount: {$ref: "#/components/schemas/Money"}
+        business_date: {type: string, format: date}
+    HoldStatus:
+      type: string
+      enum: [pending, captured, released, expired]
+    Hold:
+      type: object
+      required: [id, account_id, counter_account_id, amount, captured, status, expires_at]
+      properties:
+        id: {type: string, format: uuid}
+        account_id: {type: string, format: uuid}
+        counter_account_id: {type: string, format: uuid}
+        amount: {$ref: "#/components/schemas/Money"}
+        captured: {$ref: "#/components/schemas/Money"}
+        status: {$ref: "#/components/schemas/HoldStatus"}
+        expires_at: {type: string, format: date-time}
+    HoldCapture:
+      type: object
+      required: [hold, transaction]
+      properties:
+        hold: {$ref: "#/components/schemas/Hold"}
+        transaction: {$ref: "#/components/schemas/Transaction"}

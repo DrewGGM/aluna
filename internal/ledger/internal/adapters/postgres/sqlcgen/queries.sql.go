@@ -82,16 +82,26 @@ func (q *Queries) AccountsByID(ctx context.Context, argIds []ids.ID) ([]Accounts
 }
 
 const addToBalance = `-- name: AddToBalance :exec
-UPDATE ledger.balances SET posted = posted + $1, version = version + 1 WHERE account_id = $2
+UPDATE ledger.balances
+SET posted = posted + $1, pending_debits = pending_debits + $2,
+    pending_credits = pending_credits + $3, version = version + 1
+WHERE account_id = $4
 `
 
 type AddToBalanceParams struct {
-	Delta     int64
-	AccountID ids.ID
+	Posted         int64
+	PendingDebits  int64
+	PendingCredits int64
+	AccountID      ids.ID
 }
 
 func (q *Queries) AddToBalance(ctx context.Context, arg AddToBalanceParams) error {
-	_, err := q.db.Exec(ctx, addToBalance, arg.Delta, arg.AccountID)
+	_, err := q.db.Exec(ctx, addToBalance,
+		arg.Posted,
+		arg.PendingDebits,
+		arg.PendingCredits,
+		arg.AccountID,
+	)
 	return err
 }
 
@@ -116,6 +126,39 @@ func (q *Queries) Balance(ctx context.Context, accountID ids.ID) (BalanceRow, er
 		&i.Version,
 	)
 	return i, err
+}
+
+const closeHold = `-- name: CloseHold :exec
+UPDATE ledger.holds SET status = $1, captured_amount = $2, capture_tx_id = $3
+WHERE id = $4
+`
+
+type CloseHoldParams struct {
+	Status         string
+	CapturedAmount int64
+	CaptureTxID    *ids.ID
+	ID             ids.ID
+}
+
+func (q *Queries) CloseHold(ctx context.Context, arg CloseHoldParams) error {
+	_, err := q.db.Exec(ctx, closeHold,
+		arg.Status,
+		arg.CapturedAmount,
+		arg.CaptureTxID,
+		arg.ID,
+	)
+	return err
+}
+
+const databaseNow = `-- name: DatabaseNow :one
+SELECT clock_timestamp()::timestamptz AS now
+`
+
+func (q *Queries) DatabaseNow(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRow(ctx, databaseNow)
+	var now time.Time
+	err := row.Scan(&now)
+	return now, err
 }
 
 const entriesOf = `-- name: EntriesOf :many
@@ -208,6 +251,34 @@ func (q *Queries) InsertEntries(ctx context.Context, arg InsertEntriesParams) er
 	return err
 }
 
+const insertHold = `-- name: InsertHold :exec
+INSERT INTO ledger.holds (id, legal_entity_id, account_id, counter_account_id, currency, amount, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertHoldParams struct {
+	ID               ids.ID
+	LegalEntityID    ids.ID
+	AccountID        ids.ID
+	CounterAccountID ids.ID
+	Currency         string
+	Amount           int64
+	ExpiresAt        time.Time
+}
+
+func (q *Queries) InsertHold(ctx context.Context, arg InsertHoldParams) error {
+	_, err := q.db.Exec(ctx, insertHold,
+		arg.ID,
+		arg.LegalEntityID,
+		arg.AccountID,
+		arg.CounterAccountID,
+		arg.Currency,
+		arg.Amount,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
 const insertTransaction = `-- name: InsertTransaction :one
 INSERT INTO ledger.transactions
     (id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version,
@@ -292,6 +363,46 @@ func (q *Queries) LockBalances(ctx context.Context, accountIds []ids.ID) ([]Lock
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockHold = `-- name: LockHold :one
+SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at
+FROM ledger.holds
+WHERE id = $1 AND legal_entity_id = $2
+FOR UPDATE
+`
+
+type LockHoldParams struct {
+	ID            ids.ID
+	LegalEntityID ids.ID
+}
+
+type LockHoldRow struct {
+	ID               ids.ID
+	AccountID        ids.ID
+	CounterAccountID ids.ID
+	Currency         string
+	Amount           int64
+	CapturedAmount   int64
+	Status           string
+	ExpiresAt        time.Time
+}
+
+// Bloquea el hold antes que los saldos (ADR-0004). Lo de otra entidad se ve igual que lo inexistente.
+func (q *Queries) LockHold(ctx context.Context, arg LockHoldParams) (LockHoldRow, error) {
+	row := q.db.QueryRow(ctx, lockHold, arg.ID, arg.LegalEntityID)
+	var i LockHoldRow
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.CounterAccountID,
+		&i.Currency,
+		&i.Amount,
+		&i.CapturedAmount,
+		&i.Status,
+		&i.ExpiresAt,
+	)
+	return i, err
 }
 
 const transactionIDByRef = `-- name: TransactionIDByRef :one

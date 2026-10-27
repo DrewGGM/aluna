@@ -103,11 +103,11 @@ func (h *LedgerHandlers) GetLedgerAccountBalance(ctx context.Context, req gen.Ge
 func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransactionRequestObject) (gen.PostTransactionResponseObject, error) {
 	entries := make([]ledger.EntryInput, len(req.Body.Entries))
 	for i, e := range req.Body.Entries {
-		cur, err := money.CurrencyOf(e.Amount.Currency)
+		amount, err := amountOf(e.Amount)
 		if err != nil {
-			return nil, fmt.Errorf("moneda del entry %d: %w", i, err)
+			return nil, fmt.Errorf("entry %d: %w", i, err)
 		}
-		entries[i] = ledger.EntryInput{AccountID: ids.ID(e.AccountId), Amount: money.New(e.Amount.Amount, cur)}
+		entries[i] = ledger.EntryInput{AccountID: ids.ID(e.AccountId), Amount: amount}
 	}
 	in := ledger.PostInput{
 		LegalEntityID: h.entity, Code: req.Body.Code, ValueDate: req.Body.ValueDate.Time,
@@ -146,10 +146,7 @@ func toAccountJSON(a ledger.Account) gen.LedgerAccount {
 func toTransactionJSON(tx ledger.Transaction) gen.Transaction {
 	entries := make([]gen.Entry, len(tx.Entries))
 	for i, e := range tx.Entries {
-		entries[i] = gen.Entry{
-			AccountId: [16]byte(e.AccountID),
-			Amount:    gen.Money{Amount: e.Amount.Units(), Currency: e.Amount.Currency().Code()},
-		}
+		entries[i] = gen.Entry{AccountId: [16]byte(e.AccountID), Amount: moneyJSON(e.Amount)}
 	}
 	return gen.Transaction{
 		Id: [16]byte(tx.ID), Code: tx.Code, ValueDate: dateOf(tx.ValueDate), BusinessDate: dateOf(tx.BusinessDate),
@@ -158,3 +155,90 @@ func toTransactionJSON(tx ledger.Transaction) gen.Transaction {
 }
 
 func dateOf(t time.Time) openapi_types.Date { return openapi_types.Date{Time: t} }
+
+// amountOf convierte un importe del contrato; una moneda desconocida es ErrUnknownCurrency.
+func amountOf(m gen.Money) (money.Amount, error) {
+	cur, err := money.CurrencyOf(m.Currency)
+	if err != nil {
+		return money.Amount{}, fmt.Errorf("moneda: %w", err)
+	}
+	return money.New(m.Amount, cur), nil
+}
+
+func moneyJSON(a money.Amount) gen.Money {
+	return gen.Money{Amount: a.Units(), Currency: a.Currency().Code()}
+}
+
+// PlaceHold retiene fondos de una cuenta de la entidad del despliegue, una sola vez por
+// Idempotency-Key.
+func (h *LedgerHandlers) PlaceHold(ctx context.Context, req gen.PlaceHoldRequestObject) (gen.PlaceHoldResponseObject, error) {
+	amount, err := amountOf(req.Body.Amount)
+	if err != nil {
+		return nil, fmt.Errorf("hold: %w", err)
+	}
+	in := ledger.PlaceHoldInput{
+		LegalEntityID: h.entity, AccountID: ids.ID(req.Body.AccountId), CounterAccountID: ids.ID(req.Body.CounterAccountId),
+		Amount: amount, ExpiresAt: req.Body.ExpiresAt,
+	}
+	resp, err := h.commands.run(ctx, placeHold, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		placed, err := h.ledger.PlaceHold(ctx, tx, in)
+		if err != nil {
+			return nil, err
+		}
+		return toHoldJSON(placed), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// CaptureHold asienta parte o todo un hold de la entidad del despliegue, una sola vez por
+// Idempotency-Key.
+func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldRequestObject) (gen.CaptureHoldResponseObject, error) {
+	amount, err := amountOf(req.Body.Amount)
+	if err != nil {
+		return nil, fmt.Errorf("capture: %w", err)
+	}
+	in := ledger.CaptureInput{
+		LegalEntityID: h.entity, HoldID: ids.ID(req.Id), Amount: amount,
+		BusinessDate: req.Body.BusinessDate.Time, Actor: manualActor, Channel: manualChannel,
+	}
+	op := holdOperation(ids.ID(req.Id), "capture")
+	resp, err := h.commands.run(ctx, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		captured, posted, err := h.ledger.CaptureHold(ctx, tx, in)
+		if err != nil {
+			return nil, err
+		}
+		return gen.HoldCapture{Hold: toHoldJSON(captured), Transaction: toTransactionJSON(posted)}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// ReleaseHold libera un hold de la entidad del despliegue, una sola vez por Idempotency-Key.
+func (h *LedgerHandlers) ReleaseHold(ctx context.Context, req gen.ReleaseHoldRequestObject) (gen.ReleaseHoldResponseObject, error) {
+	in := ledger.ReleaseInput{LegalEntityID: h.entity, HoldID: ids.ID(req.Id)}
+	op := holdOperation(ids.ID(req.Id), "release")
+	resp, err := h.commands.run(ctx, op, req.Params.IdempotencyKey, nil, func(tx postgres.Tx) (any, error) {
+		released, err := h.ledger.ReleaseHold(ctx, tx, in)
+		if err != nil {
+			return nil, err
+		}
+		return toHoldJSON(released), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func toHoldJSON(hold ledger.Hold) gen.Hold {
+	return gen.Hold{
+		Id: [16]byte(hold.ID()), AccountId: [16]byte(hold.AccountID()), CounterAccountId: [16]byte(hold.CounterAccountID()),
+		Amount: moneyJSON(hold.Amount()), Captured: moneyJSON(hold.Captured()), Status: gen.HoldStatus(hold.Status()),
+		ExpiresAt: hold.ExpiresAt().UTC(),
+	}
+}

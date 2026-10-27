@@ -96,6 +96,10 @@ func unprocessable(code, title string) Problem {
 	return Problem{Status: http.StatusUnprocessableEntity, Code: code, Title: title}
 }
 
+func conflict(code, title string) Problem {
+	return Problem{Status: http.StatusConflict, Code: code, Title: title}
+}
+
 // problems traduce los errores de dominio a la API, agrupados por módulo. Se recorre en orden porque un
 // error puede envolver dos sentinelas; gana el primero de la lista. Detail nunca lleva el texto
 // interno del error.
@@ -110,20 +114,25 @@ var problems = []struct {
 	}},
 	// idempotency
 	{idempotency.ErrKeyReused, unprocessable("idempotency_key_reused", "La Idempotency-Key ya se usó con otro payload")},
-	{idempotency.ErrInProgress, Problem{Status: http.StatusConflict, Code: "request_in_progress", Title: "Hay una solicitud con la misma Idempotency-Key en curso"}},
+	{idempotency.ErrInProgress, conflict("request_in_progress", "Hay una solicitud con la misma Idempotency-Key en curso")},
 	// money
 	{money.ErrUnknownCurrency, unprocessable("unknown_currency", "Moneda no soportada")},
 	{money.ErrOverflow, unprocessable("amount_overflow", "El importe no cabe en el rango permitido")},
 	// ledger
-	{ledger.ErrDuplicateExternalRef, Problem{Status: http.StatusConflict, Code: "duplicate_external_ref", Title: "La referencia externa ya se asentó"}},
+	{ledger.ErrDuplicateExternalRef, conflict("duplicate_external_ref", "La referencia externa ya se asentó")},
 	{ledger.ErrUnbalanced, unprocessable("unbalanced_transaction", "La transacción no suma cero en cada moneda")},
 	{ledger.ErrTooFewEntries, unprocessable("too_few_entries", "Una transacción necesita al menos dos entries")},
 	{ledger.ErrZeroAmount, unprocessable("zero_amount", "Un entry no puede tener importe cero")},
 	{ledger.ErrInsufficientFunds, unprocessable("insufficient_funds", "Fondos insuficientes")},
-	{ledger.ErrCurrencyMismatch, unprocessable("currency_mismatch", "El entry no está en la moneda de su cuenta")},
+	{ledger.ErrCurrencyMismatch, unprocessable("currency_mismatch", "El importe no está en la moneda de su cuenta o de su hold")},
 	{ledger.ErrInvalidAccount, unprocessable("invalid_account", "Datos de cuenta inválidos")},
 	{ledger.ErrInvalidPosting, unprocessable("invalid_posting", "Cabecera del posting incompleta")},
 	{ledger.ErrAccountNotFound, notFound},
+	{ledger.ErrHoldNotFound, notFound},
+	{ledger.ErrHoldNotPending, conflict("hold_not_pending", "El hold ya no está pendiente")},
+	{ledger.ErrHoldExpired, conflict("hold_expired", "El hold venció")},
+	{ledger.ErrAmountExceedsHold, unprocessable("amount_exceeds_hold", "El importe supera lo retenido")},
+	{ledger.ErrInvalidHold, unprocessable("invalid_hold", "Datos del hold inválidos")},
 	{ledger.ErrTransactionNotFound, notFound},
 }
 

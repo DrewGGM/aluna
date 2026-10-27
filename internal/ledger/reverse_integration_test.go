@@ -100,7 +100,7 @@ func TestATransactionIsReversedOnlyOnce(t *testing.T) {
 // reversas concurrentes de una transacción chocan solo en la base; una pasa y las demás reciben
 // ErrAlreadyReversed, nunca un 23505.
 func TestConcurrentReversalsOfAsyncAccountsReverseOnce(t *testing.T) {
-	a, b := accountOfMode(t, ledger.KindAsset, ledger.BalanceModeAsync), accountOfMode(t, ledger.KindLiability, ledger.BalanceModeAsync)
+	a, b := asyncAccount(t, ledger.KindAsset), asyncAccount(t, ledger.KindLiability)
 	original, _ := mustPostRef(t, transfer(t, a.ID, b.ID, ids.New().String()))
 
 	errs := concurrently(t, 8, func(int) error { _, err := reverse(t, original.ID); return err })
@@ -119,10 +119,10 @@ func TestConcurrentReversalsOfAsyncAccountsReverseOnce(t *testing.T) {
 	}
 }
 
-func accountOfMode(t *testing.T, kind ledger.Kind, mode ledger.BalanceMode) ledger.Account {
+func asyncAccount(t *testing.T, kind ledger.Kind) ledger.Account {
 	t.Helper()
 	a, err := tryCreateAccount(t, ledger.CreateAccountInput{
-		LegalEntityID: entity, Code: "cta-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: mode,
+		LegalEntityID: entity, Code: "cta-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: ledger.BalanceModeAsync,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -77,7 +78,30 @@ type PostingStore interface {
 	// InsertTransaction inserta cabecera y entries, y devuelve el posted_at que fijó la base. Si la
 	// entidad ya tiene (source, external_ref), no inserta nada y devuelve ErrDuplicateExternalRef.
 	InsertTransaction(ctx context.Context, rec TransactionRecord, entries []domain.EntryInput) (time.Time, error)
-	AddToBalance(ctx context.Context, accountID ids.ID, delta int64) error
+	// AddToBalance suma d al saldo de la cuenta en una sola sentencia.
+	AddToBalance(ctx context.Context, accountID ids.ID, d BalanceDelta) error
+}
+
+// BalanceDelta es lo que cambia el saldo de una cuenta: lo asentado (con signo) y los pendientes
+// (positivos al retener, negativos al liberar).
+type BalanceDelta struct {
+	Posted, PendingDebits, PendingCredits int64
+}
+
+// pendingRelease es el pendiente que un posting libera en la misma transacción, el del hold que se
+// captura: cuenta como liberado al revisar los fondos y se escribe junto con el posting.
+type pendingRelease struct {
+	account         ids.ID
+	debits, credits int64
+}
+
+// from descuenta lo liberado del saldo bloqueado de la cuenta id.
+func (r pendingRelease) from(id ids.ID, b LockedBalance) LockedBalance {
+	if id == r.account {
+		b.PendingDebits -= r.debits
+		b.PendingCredits -= r.credits
+	}
+	return b
 }
 
 // Post valida la cabecera y la partida doble, bloquea los saldos de las cuentas sync, revisa que el
@@ -87,6 +111,21 @@ type PostingStore interface {
 // que la referencia se busca antes de validar, otra vez si los fondos no alcanzan (ver available) y al
 // insertar, si otro productor la asentó sobre otras cuentas mientras tanto.
 func Post(ctx context.Context, store PostingStore, in PostInput) (Transaction, error) {
+	if strings.HasPrefix(in.Source, reservedSourcePrefix) || in.ReversesID != (ids.ID{}) {
+		return Transaction{}, fmt.Errorf("%w: las fuentes %s* y las reversas son del ledger", ErrInvalidPosting, reservedSourcePrefix)
+	}
+	return post(ctx, store, in, pendingRelease{})
+}
+
+// reservedSourcePrefix marca las fuentes de las transacciones que arma el propio ledger (reversas,
+// captures de holds): con su referencia externa reservan su lugar, así que nadie más puede usarlas, o
+// un posting cualquiera ocuparía el lugar de la reversa o del capture de otra transacción y Reverse o
+// CaptureHold la darían por hecha.
+const reservedSourcePrefix = "ledger."
+
+// post es Post para los casos de uso del ledger, que asientan con una fuente ledger.* y pueden liberar
+// en la misma escritura el pendiente de un hold.
+func post(ctx context.Context, store PostingStore, in PostInput, release pendingRelease) (Transaction, error) {
 	rec, err := recordOf(in)
 	if err != nil {
 		return Transaction{}, err
@@ -107,10 +146,10 @@ func Post(ctx context.Context, store PostingStore, in PostInput) (Transaction, e
 		return Transaction{}, err
 	}
 	syncIDs := syncAccounts(accounts)
-	if original, err := available(ctx, store, rec, accounts, syncIDs, deltas); err != nil {
+	if original, err := available(ctx, store, rec, accounts, syncIDs, deltas, release); err != nil {
 		return original, err
 	}
-	return write(ctx, store, rec, tx.Entries(), syncIDs, deltas)
+	return write(ctx, store, rec, tx.Entries(), syncIDs, deltas, release)
 }
 
 // available bloquea los saldos y revisa que el neto quepa. Si no cabe, busca otra vez la referencia:
@@ -118,9 +157,9 @@ func Post(ctx context.Context, store PostingStore, in PostInput) (Transaction, e
 // commit el saldo ya no alcanza para repetirla; entonces el posting es la original, no un sobregiro.
 // Cualquier otro error (un deadlock que aborta la transacción y UnitOfWork reintenta) sube tal cual.
 func available(ctx context.Context, store PostingStore, rec TransactionRecord, accounts map[ids.ID]domain.Account,
-	syncIDs []ids.ID, deltas map[ids.ID]money.Amount,
+	syncIDs []ids.ID, deltas map[ids.ID]money.Amount, release pendingRelease,
 ) (Transaction, error) {
-	err := checkAvailable(ctx, store, accounts, syncIDs, deltas)
+	err := checkAvailable(ctx, store, accounts, syncIDs, deltas, release)
 	if !errors.Is(err, domain.ErrInsufficientFunds) {
 		return Transaction{}, err
 	}
@@ -130,9 +169,10 @@ func available(ctx context.Context, store PostingStore, rec TransactionRecord, a
 	return Transaction{}, err
 }
 
-// write asienta la transacción ya validada y suma su neto a los saldos sync.
+// write asienta la transacción ya validada y suma su neto a los saldos sync, junto con el pendiente
+// que libera.
 func write(ctx context.Context, store PostingStore, rec TransactionRecord, entries []domain.EntryInput, syncIDs []ids.ID,
-	deltas map[ids.ID]money.Amount,
+	deltas map[ids.ID]money.Amount, release pendingRelease,
 ) (Transaction, error) {
 	postedAt, err := store.InsertTransaction(ctx, rec, entries)
 	if errors.Is(err, ErrDuplicateExternalRef) {
@@ -146,7 +186,11 @@ func write(ctx context.Context, store PostingStore, rec TransactionRecord, entri
 		return Transaction{}, err
 	}
 	for _, id := range syncIDs {
-		if err := store.AddToBalance(ctx, id, deltas[id].Units()); err != nil {
+		d := BalanceDelta{Posted: deltas[id].Units()}
+		if id == release.account {
+			d.PendingDebits, d.PendingCredits = -release.debits, -release.credits
+		}
+		if err := store.AddToBalance(ctx, id, d); err != nil {
 			return Transaction{}, err
 		}
 	}
@@ -181,27 +225,12 @@ func recordOf(in PostInput) (TransactionRecord, error) {
 	if in.ValueDate.IsZero() || in.BusinessDate.IsZero() {
 		return TransactionRecord{}, fmt.Errorf("%w: faltan las fechas", ErrInvalidPosting)
 	}
-	if err := checkReversalHeader(in); err != nil {
-		return TransactionRecord{}, err
-	}
 	return TransactionRecord{
 		ID: ids.New(), LegalEntityID: in.LegalEntityID, Code: in.Code,
 		ValueDate: civilDate(in.ValueDate), BusinessDate: civilDate(in.BusinessDate),
 		Source: in.Source, ExternalRef: in.ExternalRef, Actor: in.Actor, Channel: in.Channel, RuleVersion: in.RuleVersion,
 		ReversesID: in.ReversesID, Metadata: in.Metadata,
 	}, nil
-}
-
-// checkReversalHeader reserva la cabecera de las reversas: la fuente ledger.reversal va con ReversesID y
-// con la transacción revertida como referencia externa, y nada más la usa. Si no, un posting cualquiera
-// (también uno manual por la API) ocuparía el lugar de la reversa de otra transacción, y Reverse la daría
-// por revertida.
-func checkReversalHeader(in PostInput) error {
-	isReversal := in.ReversesID != (ids.ID{})
-	if isReversal != (in.Source == reversalSource) || (isReversal && in.ExternalRef != in.ReversesID.String()) {
-		return fmt.Errorf("%w: la fuente %s es solo de las reversas, con la transacción revertida como referencia", ErrInvalidPosting, reversalSource)
-	}
-	return nil
 }
 
 // civilDate conserva el día calendario de t como medianoche UTC: así la Transaction que devuelve Post
@@ -264,7 +293,9 @@ func syncAccounts(accounts map[ids.ID]domain.Account) []ids.ID {
 	return syncIDs
 }
 
-func checkAvailable(ctx context.Context, store PostingStore, accounts map[ids.ID]domain.Account, syncIDs []ids.ID, deltas map[ids.ID]money.Amount) error {
+func checkAvailable(ctx context.Context, store PostingStore, accounts map[ids.ID]domain.Account, syncIDs []ids.ID,
+	deltas map[ids.ID]money.Amount, release pendingRelease,
+) error {
 	balances, err := store.LockBalances(ctx, syncIDs)
 	if err != nil {
 		return err
@@ -274,6 +305,7 @@ func checkAvailable(ctx context.Context, store PostingStore, accounts map[ids.ID
 		if !ok { // CreateAccount la crea siempre; si faltara, se falla en vez de validar contra cero
 			return fmt.Errorf("cuenta %s sin saldo materializado", id)
 		}
+		b = release.from(id, b)
 		if err := accounts[id].CheckAvailable(b.Posted, b.PendingDebits, b.PendingCredits, deltas[id].Units()); err != nil {
 			return err
 		}

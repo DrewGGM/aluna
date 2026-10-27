@@ -34,7 +34,10 @@ INSERT INTO ledger.entries (transaction_id, account_id, currency, amount)
 SELECT @transaction_id::uuid, unnest(@account_ids::uuid[]), unnest(@currencies::text[]), unnest(@amounts::bigint[]);
 
 -- name: AddToBalance :exec
-UPDATE ledger.balances SET posted = posted + @delta, version = version + 1 WHERE account_id = @account_id;
+UPDATE ledger.balances
+SET posted = posted + @posted, pending_debits = pending_debits + @pending_debits,
+    pending_credits = pending_credits + @pending_credits, version = version + 1
+WHERE account_id = @account_id;
 
 -- name: Balance :one
 SELECT posted, pending_debits, pending_credits, version FROM ledger.balances WHERE account_id = $1;
@@ -51,3 +54,21 @@ WHERE id = @id AND legal_entity_id = @legal_entity_id;
 
 -- name: EntriesOf :many
 SELECT account_id, currency, amount FROM ledger.entries WHERE transaction_id = $1 ORDER BY id;
+
+-- name: DatabaseNow :one
+SELECT clock_timestamp()::timestamptz AS now;
+
+-- name: InsertHold :exec
+INSERT INTO ledger.holds (id, legal_entity_id, account_id, counter_account_id, currency, amount, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- Bloquea el hold antes que los saldos (ADR-0004). Lo de otra entidad se ve igual que lo inexistente.
+-- name: LockHold :one
+SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at
+FROM ledger.holds
+WHERE id = @id AND legal_entity_id = @legal_entity_id
+FOR UPDATE;
+
+-- name: CloseHold :exec
+UPDATE ledger.holds SET status = @status, captured_amount = @captured_amount, capture_tx_id = @capture_tx_id
+WHERE id = @id;

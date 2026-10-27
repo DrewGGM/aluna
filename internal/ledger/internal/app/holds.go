@@ -138,7 +138,7 @@ func PlaceHold(ctx context.Context, store HoldStore, in PlaceHoldInput) (Hold, e
 // primero que bloquea el hold. Lo capturado se asienta del origen a la contrapartida y el pendiente
 // completo se libera en la misma escritura del posting, después de todas sus validaciones: un capture
 // rechazado no deja nada escrito.
-func CaptureHold(ctx context.Context, store HoldStore, in CaptureInput) (Hold, Transaction, error) {
+func CaptureHold(ctx context.Context, store HoldStore, guard PeriodGuard, in CaptureInput) (Hold, Transaction, error) {
 	h, err := store.LockHold(ctx, in.LegalEntityID, in.HoldID)
 	if err != nil {
 		return Hold{}, Transaction{}, err
@@ -161,7 +161,7 @@ func CaptureHold(ctx context.Context, store HoldStore, in CaptureInput) (Hold, T
 	origin := accounts[h.AccountID()]
 	debits, credits := pendingOf(outgoingOf(origin, h.Amount()))
 	release := pendingRelease{account: origin.ID, debits: debits, credits: credits}
-	posted, err := post(ctx, store, captureInput(in, h, outgoingOf(origin, result.Captured)), release)
+	posted, err := post(ctx, store, guard, captureInput(in, h, outgoingOf(origin, result.Captured)), release)
 	if err != nil {
 		return Hold{}, Transaction{}, err
 	}

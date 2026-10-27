@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
 	pg "github.com/DrewGGM/aluna/internal/ledger/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/ledger/internal/app"
@@ -81,6 +82,8 @@ var (
 	ErrHoldNotPending       = domain.ErrHoldNotPending
 	ErrAmountExceedsHold    = domain.ErrAmountExceedsHold
 	ErrHoldExpired          = domain.ErrHoldExpired
+	ErrPeriodClosed         = calendar.ErrPeriodClosed
+	ErrLegalEntityNotFound  = calendar.ErrLegalEntityNotFound
 )
 
 // NaturalBalance convierte un saldo con signo al de la naturaleza de la cuenta: un depósito de cliente
@@ -88,10 +91,26 @@ var (
 func NaturalBalance(k Kind, posted int64) int64 { return domain.NaturalBalance(k, posted) }
 
 // Service es la entrada al ledger para los demás módulos y los adaptadores de entrada.
-type Service struct{}
+type Service struct {
+	cal Calendar
+}
 
-// New crea el servicio del ledger.
-func New() *Service { return &Service{} }
+// Calendar es lo que el ledger necesita del calendario: la fecha de negocio de cada entidad y la guarda
+// de periodos. Lo implementa calendar.Service; se conecta en cmd/aluna.
+type Calendar interface {
+	PeriodGuard
+	// BusinessDate es la fecha de negocio de la entidad, o calendar.ErrLegalEntityNotFound.
+	BusinessDate(ctx context.Context, q postgres.Querier, legalEntity ids.ID) (calendar.Date, error)
+}
+
+// PeriodGuard rechaza asentar con una fecha de negocio dentro de un periodo cerrado (FR-15).
+type PeriodGuard interface {
+	// EnsureOpen es calendar.ErrPeriodClosed si d cae en un periodo cerrado de la entidad.
+	EnsureOpen(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d calendar.Date) error
+}
+
+// New crea el servicio del ledger sobre el calendario de las entidades.
+func New(cal Calendar) *Service { return &Service{cal: cal} }
 
 // CreateAccount crea una cuenta dentro de tx.
 func (s *Service) CreateAccount(ctx context.Context, tx postgres.Tx, in CreateAccountInput) (Account, error) {
@@ -103,14 +122,22 @@ func (s *Service) CreateAccount(ctx context.Context, tx postgres.Tx, in CreateAc
 // (source, external_ref), devuelve esa transacción original con ErrDuplicateExternalRef y no escribe
 // nada: un productor interno que reintenta la toma como hecha.
 func (s *Service) Post(ctx context.Context, tx postgres.Tx, in PostInput) (Transaction, error) {
-	return app.Post(ctx, pg.NewStore(tx), in)
+	var err error
+	if in.BusinessDate, err = s.businessDay(ctx, tx, in.LegalEntityID, in.BusinessDate); err != nil {
+		return Transaction{}, err
+	}
+	return app.Post(ctx, pg.NewStore(tx), s.guard(tx), in)
 }
 
 // Reverse asienta dentro de tx la reversa de una transacción de la entidad: sus entries con el signo
 // contrario, sujetos a los mismos límites que un posting. Si ya tiene reversa, la devuelve con
 // ErrAlreadyReversed y no escribe nada.
 func (s *Service) Reverse(ctx context.Context, tx postgres.Tx, in ReverseInput) (Transaction, error) {
-	return app.Reverse(ctx, pg.NewStore(tx), in)
+	var err error
+	if in.BusinessDate, err = s.businessDay(ctx, tx, in.LegalEntityID, in.BusinessDate); err != nil {
+		return Transaction{}, err
+	}
+	return app.Reverse(ctx, pg.NewStore(tx), s.guard(tx), in)
 }
 
 // PlaceHold retiene fondos de una cuenta sync dentro de tx: valida el disponible y suma el hold a su
@@ -122,7 +149,37 @@ func (s *Service) PlaceHold(ctx context.Context, tx postgres.Tx, in PlaceHoldInp
 // CaptureHold asienta dentro de tx parte o todo un hold pending y libera el resto; devuelve el hold y
 // la transacción real.
 func (s *Service) CaptureHold(ctx context.Context, tx postgres.Tx, in CaptureInput) (Hold, Transaction, error) {
-	return app.CaptureHold(ctx, pg.NewStore(tx), in)
+	var err error
+	if in.BusinessDate, err = s.businessDay(ctx, tx, in.LegalEntityID, in.BusinessDate); err != nil {
+		return Hold{}, Transaction{}, err
+	}
+	return app.CaptureHold(ctx, pg.NewStore(tx), s.guard(tx), in)
+}
+
+// businessDay es la fecha de negocio con que se asienta: given, o la de la entidad en el calendario si
+// given es cero (se lee al empezar, en la misma tx, sin bloquear el rollover).
+func (s *Service) businessDay(ctx context.Context, tx postgres.Tx, entity ids.ID, given time.Time) (time.Time, error) {
+	if !given.IsZero() {
+		return given, nil
+	}
+	d, err := s.cal.BusinessDate(ctx, tx, entity)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC), nil
+}
+
+// guard es la guarda de periodos del calendario dentro de tx.
+func (s *Service) guard(tx postgres.Tx) periodGuard { return periodGuard{s.cal, tx} }
+
+type periodGuard struct {
+	cal PeriodGuard
+	q   postgres.Querier
+}
+
+// EnsureOpen es calendar.ErrPeriodClosed si el día calendario de businessDate cae en un periodo cerrado.
+func (g periodGuard) EnsureOpen(ctx context.Context, entity ids.ID, businessDate time.Time) error {
+	return g.cal.EnsureOpen(ctx, g.q, entity, calendar.Date{Year: businessDate.Year(), Month: businessDate.Month(), Day: businessDate.Day()})
 }
 
 // ReleaseHold libera dentro de tx un hold pending.

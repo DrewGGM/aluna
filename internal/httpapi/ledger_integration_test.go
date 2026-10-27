@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -33,7 +35,7 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 func apiServer(t *testing.T, entity ids.ID) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool, entity)}
+	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(calendar.New()), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool, entity)}
 	ts := httptest.NewServer(NewServer(ServerConfig{}, Routes(api, log), log).Handler)
 	t.Cleanup(ts.Close)
 	return ts
@@ -272,4 +274,48 @@ func balanceAt(t *testing.T, ts *httptest.Server, account, query string) gen.Bal
 		t.Fatalf("saldo%s = %d", query, status)
 	}
 	return b
+}
+
+// TestAClosedPeriodIsAConflict (FR-15): asentar con una fecha de negocio en un periodo cerrado es 409
+// period_closed.
+func TestAClosedPeriodIsAConflict(t *testing.T) {
+	entity := ids.New()
+	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(t.Context(), "SET LOCAL ROLE NONE"); err != nil { // las entidades y los cierres no son de la aplicación
+			return err
+		}
+		if _, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
+			VALUES ($1, 'Entidad', '2025-07-07', 'COP')`, entity); err != nil {
+			return err
+		}
+		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.periods (legal_entity_id, period, status, closed_at, closed_by)
+			VALUES ($1, '2025-06', 'closed', clock_timestamp(), 'contador')`, entity)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := apiServer(t, entity)
+	cash, deposit := createAccount(t, ts, "asset"), createAccount(t, ts, "liability")
+	body := strings.Replace(postingBody(t, cash, deposit, 100, 100, ""), `"business_date":"`+postingValueDate, `"business_date":"2025-06-30`, 1)
+
+	r := postWithKey(t, ts, ids.New().String(), body)
+
+	if r.status != http.StatusConflict || problemCode(t, r) != "period_closed" {
+		t.Fatalf("posting en junio = %d %s, se esperaba 409 period_closed", r.status, r.body)
+	}
+}
+
+// TestTheZeroBusinessDateIsInvalid: por la API la fecha de negocio es de quien llama; 0001-01-01 no se
+// toma como ausente (el ledger pondría la de la entidad) sino como inválida.
+func TestTheZeroBusinessDateIsInvalid(t *testing.T) {
+	ts := apiServer(t, ids.New())
+	cash, deposit := createAccount(t, ts, "asset"), createAccount(t, ts, "liability")
+	body := strings.Replace(postingBody(t, cash, deposit, 100, 100, ""), `"business_date":"`+postingValueDate, `"business_date":"0001-01-01`, 1)
+
+	r := postWithKey(t, ts, ids.New().String(), body)
+
+	if r.status != http.StatusUnprocessableEntity || problemCode(t, r) != "invalid_posting" {
+		t.Fatalf("posting con fecha de negocio cero = %d %s, se esperaba 422 invalid_posting", r.status, r.body)
+	}
 }

@@ -15,10 +15,21 @@ import (
 // Date es un día calendario, sin hora ni zona.
 type Date = domain.Date
 
+// PeriodStatus es el estado de un periodo contable.
+type PeriodStatus = app.PeriodStatus
+
+// Estados de un periodo contable.
+const (
+	PeriodOpen    = app.PeriodOpen
+	PeriodClosing = app.PeriodClosing
+	PeriodClosed  = app.PeriodClosed
+)
+
 // Errores del calendario.
 var (
 	ErrLegalEntityNotFound = app.ErrLegalEntityNotFound
 	ErrStaleBusinessDate   = app.ErrStaleBusinessDate
+	ErrPeriodClosed        = app.ErrPeriodClosed
 )
 
 // Service es la fachada del calendario. No guarda estado: cada operación recibe la conexión o la
@@ -40,4 +51,16 @@ func (s *Service) BusinessDate(ctx context.Context, q postgres.Querier, legalEnt
 // no cambia nada.
 func (s *Service) Rollover(ctx context.Context, tx postgres.Tx, legalEntity ids.ID, expected Date) (Date, error) {
 	return app.Rollover(ctx, pg.NewStore(tx), legalEntity, expected)
+}
+
+// PeriodStatus es el estado del periodo contable de d para la entidad (FR-15). Un mes que el cierre no
+// tocó está abierto. q puede ser el pool o una Tx.
+func (s *Service) PeriodStatus(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d Date) (PeriodStatus, error) {
+	return app.PeriodStatusOf(ctx, pg.NewStore(q), legalEntity, d)
+}
+
+// EnsureOpen es ErrPeriodClosed si d cae en un periodo cerrado de la entidad: el ledger lo pide antes de
+// asentar. Lee sin bloquear, como BusinessDate.
+func (s *Service) EnsureOpen(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d Date) error {
+	return app.EnsureOpen(ctx, pg.NewStore(q), legalEntity, d)
 }

@@ -134,6 +134,7 @@ var problems = []struct {
 	{ledger.ErrAmountExceedsHold, unprocessable("amount_exceeds_hold", "El importe supera lo retenido")},
 	{ledger.ErrInvalidHold, unprocessable("invalid_hold", "Datos del hold inválidos")},
 	{ledger.ErrTransactionNotFound, notFound},
+	{ledger.ErrPeriodClosed, conflict("period_closed", "El periodo contable de la fecha de negocio está cerrado")},
 }
 
 func problemFor(err error) (Problem, bool) {

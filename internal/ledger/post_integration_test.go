@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
@@ -23,7 +24,7 @@ var testPool *pgxpool.Pool
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
 var (
-	svc    = ledger.New()
+	svc    = ledger.New(calendar.New())
 	entity = ids.New()
 )
 

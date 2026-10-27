@@ -170,7 +170,7 @@ func TestAPostingKeepsTheDateItRead(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	stored, err := ledger.New().Transaction(t.Context(), testPool, entity, posted)
+	stored, err := ledger.New(cal).Transaction(t.Context(), testPool, entity, posted)
 	if err != nil || !stored.BusinessDate.Equal(dateOf(monday)) {
 		t.Fatalf("el posting quedó con %v (%v), se esperaba el lunes que leyó", stored.BusinessDate, err)
 	}
@@ -180,8 +180,10 @@ func TestAPostingKeepsTheDateItRead(t *testing.T) {
 }
 
 // TestRolloverDuringPostings (QS-2): 50 transacciones leen la fecha de negocio y asientan con ella mientras
-// la fecha rueda, y ninguna falla. 10 leen el lunes y asientan después de que el rollover confirma, 20
-// corren a la vez que el rollover y 20 empiezan después; cada transacción queda con la fecha que leyó.
+// la fecha rueda, y ninguna falla. Unas leen el lunes y asientan después de que el rollover confirma (tantas
+// como conexiones del pool menos una: cada una retiene la suya y el rollover necesita otra), el resto hasta
+// la mitad corre a la vez que el rollover y la otra mitad empieza después; cada transacción queda con la
+// fecha que leyó.
 // Asientan con el ledger, el que lee la fecha en producción: la prueba es del contrato entre los dos
 // módulos.
 func TestRolloverDuringPostings(t *testing.T) {
@@ -195,12 +197,13 @@ func TestRolloverDuringPostings(t *testing.T) {
 	start := func(i int, wait <-chan struct{}, read *sync.WaitGroup) {
 		wg.Go(func() { posted[i], errs[i] = postAfter(t, entity, cash, deposit, wait, read) })
 	}
-	for i := range 10 {
+	holders := min(10, int(testPool.Config().MaxConns)-1)
+	for i := range holders {
 		held.Add(1)
 		start(i, rolled, &held)
 	}
-	held.Wait() // las 10 ya leyeron el lunes y esperan
-	for i := 10; i < 30; i++ {
+	held.Wait() // ya leyeron el lunes y esperan
+	for i := holders; i < 30; i++ {
 		start(i, now, nil)
 	}
 	if _, err := rollover(t, entity, monday); err != nil {
@@ -214,7 +217,7 @@ func TestRolloverDuringPostings(t *testing.T) {
 	if err := errors.Join(errs...); err != nil {
 		t.Fatalf("postings que fallaron: %v", err)
 	}
-	checkPostedOnTheDateRead(t, entity, posted, map[calendar.Date]int{monday: 10, tuesday: 20})
+	checkPostedOnTheDateRead(t, entity, posted, map[calendar.Date]int{monday: holders, tuesday: 20})
 }
 
 type postedOn struct {
@@ -249,7 +252,7 @@ func checkPostedOnTheDateRead(t *testing.T, entity ids.ID, posted []postedOn, at
 	t.Helper()
 	seen := map[calendar.Date]int{}
 	for _, p := range posted {
-		stored, err := ledger.New().Transaction(t.Context(), testPool, entity, p.tx)
+		stored, err := ledger.New(cal).Transaction(t.Context(), testPool, entity, p.tx)
 		if err != nil || !stored.BusinessDate.Equal(dateOf(p.read)) {
 			t.Fatalf("transacción %s: fecha de negocio %v, había leído %v (%v)", p.tx, stored.BusinessDate, p.read, err)
 		}
@@ -269,7 +272,7 @@ func postOn(t *testing.T, tx postgres.Tx, entity, cash, deposit ids.ID, day cale
 	if err != nil {
 		return ids.ID{}, err
 	}
-	posting, err := ledger.New().Post(t.Context(), tx, ledger.PostInput{
+	posting, err := ledger.New(cal).Post(t.Context(), tx, ledger.PostInput{
 		LegalEntityID: entity, Code: "deposito", ValueDate: dateOf(day), BusinessDate: dateOf(day),
 		Source: "test", ExternalRef: ids.New().String(), Actor: "tester", Channel: "test", RuleVersion: "v1",
 		Entries: []ledger.EntryInput{{AccountID: cash, Amount: money.New(100, cop)}, {AccountID: deposit, Amount: money.New(-100, cop)}},
@@ -288,7 +291,7 @@ func ledgerAccounts(t *testing.T, entity ids.ID) (cash, deposit ids.ID) {
 			id   *ids.ID
 			kind ledger.Kind
 		}{{&cash, ledger.KindAsset}, {&deposit, ledger.KindLiability}} {
-			created, err := ledger.New().CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
+			created, err := ledger.New(cal).CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
 				LegalEntityID: entity, Code: "cta-" + ids.New().String(), Kind: a.kind, Currency: cop, Mode: ledger.BalanceModeSync,
 			})
 			if err != nil {

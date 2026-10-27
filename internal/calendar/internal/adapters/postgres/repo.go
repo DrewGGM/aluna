@@ -15,7 +15,10 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 )
 
-var _ app.Store = (*Store)(nil)
+var (
+	_ app.Store       = (*Store)(nil)
+	_ app.PeriodStore = (*Store)(nil)
+)
 
 // Store implementa la persistencia del calendario sobre una conexión o una transacción.
 type Store struct {
@@ -44,6 +47,18 @@ func (s *Store) AdvanceBusinessDate(ctx context.Context, entity ids.ID, expected
 		return false, fmt.Errorf("avanzar la fecha de negocio: %w", err)
 	}
 	return n == 1, nil
+}
+
+// PeriodStatus lee el estado del periodo yyyy-mm de la entidad; found es false si no tiene fila.
+func (s *Store) PeriodStatus(ctx context.Context, entity ids.ID, period string) (app.PeriodStatus, bool, error) {
+	status, err := s.q.PeriodStatus(ctx, sqlcgen.PeriodStatusParams{LegalEntityID: entity, Period: period})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("leer el periodo %s: %w", period, err)
+	}
+	return app.PeriodStatus(status), true, nil
 }
 
 func dateOf(d domain.Date) time.Time { return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC) }

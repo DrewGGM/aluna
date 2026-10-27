@@ -140,6 +140,9 @@ func (h *LedgerHandlers) balanceAsOf(ctx context.Context, account ledger.Account
 // PostTransaction asienta una transacción manual de la entidad del despliegue, una sola vez por
 // Idempotency-Key.
 func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransactionRequestObject) (gen.PostTransactionResponseObject, error) {
+	if err := requireBusinessDate(req.Body.BusinessDate); err != nil {
+		return nil, err
+	}
 	entries := make([]ledger.EntryInput, len(req.Body.Entries))
 	for i, e := range req.Body.Entries {
 		amount, err := amountOf(e.Amount)
@@ -195,6 +198,15 @@ func toTransactionJSON(tx ledger.Transaction) gen.Transaction {
 
 func dateOf(t time.Time) openapi_types.Date { return openapi_types.Date{Time: t} }
 
+// requireBusinessDate rechaza la fecha cero (0001-01-01): el ledger la tomaría como ausente y pondría la
+// de la entidad, y por la API la fecha de negocio la manda quien llama.
+func requireBusinessDate(d openapi_types.Date) error {
+	if d.IsZero() {
+		return fmt.Errorf("%w: falta la fecha de negocio", ledger.ErrInvalidPosting)
+	}
+	return nil
+}
+
 // amountOf convierte un importe del contrato; una moneda desconocida es ErrUnknownCurrency.
 func amountOf(m gen.Money) (money.Amount, error) {
 	cur, err := money.CurrencyOf(m.Currency)
@@ -235,6 +247,9 @@ func (h *LedgerHandlers) PlaceHold(ctx context.Context, req gen.PlaceHoldRequest
 // CaptureHold asienta parte o todo un hold de la entidad del despliegue, una sola vez por
 // Idempotency-Key.
 func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldRequestObject) (gen.CaptureHoldResponseObject, error) {
+	if err := requireBusinessDate(req.Body.BusinessDate); err != nil {
+		return nil, err
+	}
 	amount, err := amountOf(req.Body.Amount)
 	if err != nil {
 		return nil, fmt.Errorf("capture: %w", err)

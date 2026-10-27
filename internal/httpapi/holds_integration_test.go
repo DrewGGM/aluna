@@ -140,3 +140,15 @@ func placeHoldOver(t *testing.T, ts *httptest.Server, account, counter string, u
 	}
 	return hold
 }
+
+// TestACaptureNeedsItsBusinessDate: como en el posting, la fecha de negocio 0001-01-01 es inválida y no se
+// reemplaza por la de la entidad.
+func TestACaptureNeedsItsBusinessDate(t *testing.T) {
+	ts, _, hold := depositWithHold(t)
+
+	r := postTo(t, ts, "/v1/holds/"+hold.Id.String()+"/capture", ids.New().String(), `{"amount":{"amount":100,"currency":"COP"},"business_date":"0001-01-01"}`)
+
+	if r.status != http.StatusUnprocessableEntity || problemCode(t, r) != "invalid_posting" {
+		t.Fatalf("capture con fecha de negocio cero = %d %s, se esperaba 422 invalid_posting", r.status, r.body)
+	}
+}

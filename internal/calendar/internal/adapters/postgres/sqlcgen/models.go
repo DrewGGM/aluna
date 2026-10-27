@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type CalendarLegalEntity struct {
@@ -17,4 +18,12 @@ type CalendarLegalEntity struct {
 	BusinessDate       time.Time
 	FunctionalCurrency string
 	CreatedAt          time.Time
+}
+
+type CalendarPeriod struct {
+	LegalEntityID ids.ID
+	Period        string
+	Status        string
+	ClosedAt      pgtype.Timestamptz
+	ClosedBy      pgtype.Text
 }

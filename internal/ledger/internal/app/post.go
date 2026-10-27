@@ -110,11 +110,16 @@ func (r pendingRelease) from(id ids.ID, b LockedBalance) LockedBalance {
 // nada (FR-11). El reintento de algo que ya pasó no debe fallar por un saldo que cambió después, así
 // que la referencia se busca antes de validar, otra vez si los fondos no alcanzan (ver available) y al
 // insertar, si otro productor la asentó sobre otras cuentas mientras tanto.
-func Post(ctx context.Context, store PostingStore, in PostInput) (Transaction, error) {
+func Post(ctx context.Context, store PostingStore, guard PeriodGuard, in PostInput) (Transaction, error) {
 	if strings.HasPrefix(in.Source, reservedSourcePrefix) || in.ReversesID != (ids.ID{}) {
 		return Transaction{}, fmt.Errorf("%w: las fuentes %s* y las reversas son del ledger", ErrInvalidPosting, reservedSourcePrefix)
 	}
-	return post(ctx, store, in, pendingRelease{})
+	return post(ctx, store, guard, in, pendingRelease{})
+}
+
+// PeriodGuard rechaza asentar con una fecha de negocio dentro de un periodo cerrado (FR-15).
+type PeriodGuard interface {
+	EnsureOpen(ctx context.Context, entity ids.ID, businessDate time.Time) error
 }
 
 // reservedSourcePrefix marca las fuentes de las transacciones que arma el propio ledger (reversas,
@@ -125,13 +130,17 @@ const reservedSourcePrefix = "ledger."
 
 // post es Post para los casos de uso del ledger, que asientan con una fuente ledger.* y pueden liberar
 // en la misma escritura el pendiente de un hold.
-func post(ctx context.Context, store PostingStore, in PostInput, release pendingRelease) (Transaction, error) {
+func post(ctx context.Context, store PostingStore, guard PeriodGuard, in PostInput, release pendingRelease) (Transaction, error) {
 	rec, err := recordOf(in)
 	if err != nil {
 		return Transaction{}, err
 	}
 	if original, found, err := originalOf(ctx, store, rec); found || err != nil {
 		return original, err
+	}
+	// después de buscar la referencia: el reintento de algo asentado antes del cierre devuelve la original
+	if err := guard.EnsureOpen(ctx, rec.LegalEntityID, rec.BusinessDate); err != nil {
+		return Transaction{}, err
 	}
 	tx, err := domain.NewTransaction(domain.NewTransactionInput{ID: rec.ID, Entries: in.Entries})
 	if err != nil {

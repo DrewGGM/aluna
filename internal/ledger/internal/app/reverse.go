@@ -39,7 +39,7 @@ type ReversalStore interface {
 // fecha valor de la original y la fecha de negocio de in. Pasa por Post, así que respeta los límites:
 // revertir un depósito ya gastado es ErrInsufficientFunds. Si la transacción ya tiene reversa, la
 // devuelve con ErrAlreadyReversed y no escribe nada.
-func Reverse(ctx context.Context, store ReversalStore, in ReverseInput) (Transaction, error) {
+func Reverse(ctx context.Context, store ReversalStore, guard PeriodGuard, in ReverseInput) (Transaction, error) {
 	if in.Reason == "" {
 		return Transaction{}, fmt.Errorf("%w: falta el motivo de la reversa", ErrInvalidPosting)
 	}
@@ -53,7 +53,7 @@ func Reverse(ctx context.Context, store ReversalStore, in ReverseInput) (Transac
 	}
 	// La referencia externa es la transacción revertida: la unicidad de (source, external_ref) deja a lo
 	// sumo una reversa por transacción, también entre dos reversas concurrentes.
-	reversal, err := post(ctx, store, PostInput{
+	reversal, err := post(ctx, store, guard, PostInput{
 		LegalEntityID: in.LegalEntityID, Code: reversalCode, ValueDate: original.ValueDate, BusinessDate: in.BusinessDate,
 		Source: reversalSource, ExternalRef: original.ID.String(), Actor: in.Actor, Channel: reversalChannel,
 		RuleVersion: domain.ReversalRuleVersion, ReversesID: original.ID, Metadata: map[string]string{"reason": in.Reason},

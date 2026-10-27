@@ -42,3 +42,19 @@ func (q *Queries) BusinessDate(ctx context.Context, id ids.ID) (time.Time, error
 	err := row.Scan(&business_date)
 	return business_date, err
 }
+
+const periodStatus = `-- name: PeriodStatus :one
+SELECT status FROM calendar.periods WHERE legal_entity_id = $1 AND period = $2
+`
+
+type PeriodStatusParams struct {
+	LegalEntityID ids.ID
+	Period        string
+}
+
+func (q *Queries) PeriodStatus(ctx context.Context, arg PeriodStatusParams) (string, error) {
+	row := q.db.QueryRow(ctx, periodStatus, arg.LegalEntityID, arg.Period)
+	var status string
+	err := row.Scan(&status)
+	return status, err
+}

@@ -25,8 +25,8 @@ var (
 	_ Querier = (*pgxpool.Pool)(nil)
 )
 
-// Tx es la transacción que comparten los módulos dentro de UnitOfWork.Do. Solo deja consultar: el
-// commit y el rollback son de Do, así que ningún módulo puede cerrar la transacción de los demás.
+// Tx es la transacción que comparten los módulos dentro de UnitOfWork.Do. Deja consultar, pero no cerrar:
+// el commit y el rollback son de Do, así que ningún módulo puede cerrar la transacción de los demás.
 type Tx struct{ tx pgx.Tx }
 
 // Exec ejecuta una sentencia dentro de la transacción.
@@ -43,6 +43,19 @@ func (t Tx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error
 func (t Tx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row { //nolint:ireturn // mismo contrato que pgx.Tx
 	return t.tx.QueryRow(ctx, sql, args...)
 }
+
+// ErrSharedTx indica un Commit o Rollback sobre Tx.Pgx(): la transacción solo la cierra UnitOfWork.Do.
+var ErrSharedTx = errors.New("la transacción la cierra UnitOfWork.Do")
+
+// Pgx es la transacción como pgx.Tx, para las librerías que escriben en ella con su propio cliente: River
+// inserta en la misma transacción el job que publica un evento del outbox. Commit y Rollback devuelven
+// ErrSharedTx; los savepoints (Begin) sí se pueden cerrar.
+func (t Tx) Pgx() pgx.Tx { return sharedTx{t.tx} } //nolint:ireturn // pgx.Tx es la interfaz que piden esas librerías
+
+type sharedTx struct{ pgx.Tx }
+
+func (sharedTx) Commit(context.Context) error   { return ErrSharedTx }
+func (sharedTx) Rollback(context.Context) error { return ErrSharedTx }
 
 const (
 	maxAttempts     = 3 // ADR-0004

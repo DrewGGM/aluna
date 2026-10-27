@@ -28,6 +28,7 @@ func middleware(log *slog.Logger, h http.Handler) http.Handler {
 		withAccessLog(log),
 		withRecovery(log),
 		withBodyLimit,
+		withProblemForUnrouted,
 	}
 	for _, mw := range slices.Backward(chain) {
 		h = mw(h)
@@ -158,8 +159,8 @@ func recoverPanic(log *slog.Logger, rec *statusRecorder, r *http.Request) {
 }
 
 // withBodyLimit rechaza con 413 un cuerpo declarado de más de maxBodyBytes. Un cuerpo sin
-// Content-Length se corta en ese mismo límite y el handler recibe *http.MaxBytesError: convertirlo en
-// 413 es tarea del handler (el código generado lo hará en T-012).
+// Content-Length se corta en ese mismo límite y el handler recibe *http.MaxBytesError, que
+// requestError convierte en 413.
 func withBodyLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength > maxBodyBytes {
@@ -172,4 +173,47 @@ func withBodyLimit(next http.Handler) http.Handler {
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// withProblemForUnrouted convierte en problem+json los 404 y 405 en texto plano que responde
+// http.ServeMux cuando la ruta o el método no existen. Los handlers propios ya responden problem+json,
+// así que no se tocan.
+func withProblemForUnrouted(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(&unroutedWriter{ResponseWriter: w, r: r}, r)
+	})
+}
+
+type unroutedWriter struct {
+	http.ResponseWriter
+	r        *http.Request
+	replaced bool
+}
+
+func (u *unroutedWriter) WriteHeader(code int) {
+	plain := strings.HasPrefix(u.Header().Get("Content-Type"), "text/plain")
+	if !plain || (code != http.StatusNotFound && code != http.StatusMethodNotAllowed) {
+		u.ResponseWriter.WriteHeader(code)
+		return
+	}
+	u.replaced = true
+	p := Problem{Title: "Ruta no encontrada", Code: "not_found", Status: code}
+	if code == http.StatusMethodNotAllowed {
+		p.Title, p.Code = "Método no permitido", "method_not_allowed"
+	}
+	WriteProblem(u.ResponseWriter, u.r, p)
+}
+
+func (u *unroutedWriter) Write(b []byte) (int, error) {
+	if u.replaced { // el cuerpo de texto de ServeMux se descarta: ya se escribió el problem
+		return len(b), nil
+	}
+	return u.ResponseWriter.Write(b)
+}
+
+func (u *unroutedWriter) Unwrap() http.ResponseWriter { return u.ResponseWriter }
+
+// Flush mantiene http.Flusher para los handlers que escriben por partes.
+func (u *unroutedWriter) Flush() {
+	http.NewResponseController(u.ResponseWriter).Flush() //nolint:errcheck,gosec // Flusher no tiene cómo devolver el error; el siguiente Write lo verá
 }

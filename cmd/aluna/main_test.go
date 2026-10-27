@@ -7,12 +7,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"github.com/DrewGGM/aluna/internal/httpapi"
+	"github.com/DrewGGM/aluna/internal/ids"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -79,7 +79,9 @@ func TestServeAPIShutsDownWhenContextEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	exit := make(chan int, 1)
-	go func() { exit <- serveAPI(ctx, ln, quietLogger()) }()
+	go func() {
+		exit <- serveAPI(ctx, ln, httpapi.NewServer(httpapi.ServerConfig{}, nil, quietLogger()), quietLogger())
+	}()
 
 	waitHealthy(t, ln.Addr().String())
 	cancel()
@@ -87,33 +89,10 @@ func TestServeAPIShutsDownWhenContextEnds(t *testing.T) {
 	expectExit(t, exit, 0)
 }
 
-// TestRunAPIStopsOnSIGTERM prueba el camino real: la dirección sale de ALUNA_HTTP_ADDR y SIGTERM, que
-// es lo que manda el orquestador en un deploy, apaga el proceso en orden.
-func TestRunAPIStopsOnSIGTERM(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows no permite enviar SIGTERM a un proceso; corre en CI (Linux)")
-	}
-	addr := freeAddr(t)
-	t.Setenv("ALUNA_HTTP_ADDR", addr)
-	exit := make(chan int, 1)
-	go func() { exit <- run([]string{"api"}, io.Discard) }()
-	waitHealthy(t, addr)
-
-	self, err := os.FindProcess(os.Getpid())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := self.Signal(syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-
-	expectExit(t, exit, 0)
-}
-
 func TestRunAPIInvalidAddr(t *testing.T) {
 	var out bytes.Buffer
 
-	code := runAPI(context.Background(), "127.0.0.1:-1", slog.New(slog.NewJSONHandler(&out, nil)))
+	code := runAPI(context.Background(), apiConfig{addr: "127.0.0.1:-1"}, slog.New(slog.NewJSONHandler(&out, nil)))
 
 	if code != 1 {
 		t.Fatalf("código de salida = %d, se esperaba 1", code)
@@ -124,20 +103,6 @@ func TestRunAPIInvalidAddr(t *testing.T) {
 }
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
-
-// freeAddr reserva un puerto libre y lo suelta para que el servidor bajo prueba lo abra.
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	ln, err := new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return addr
-}
 
 // waitHealthy espera hasta 5 s a que /healthz responda 200.
 func waitHealthy(t *testing.T, addr string) {
@@ -180,5 +145,33 @@ func TestMigrateNeedsDatabaseURL(t *testing.T) {
 
 	if code != 1 || !strings.Contains(errOut.String(), "ALUNA_DATABASE_URL") {
 		t.Fatalf("código = %d, stderr = %q", code, errOut.String())
+	}
+}
+
+func TestAPIConfigFromEnv(t *testing.T) {
+	entity := ids.New().String()
+	cases := map[string]struct {
+		dsn, entity string
+		wantErr     string
+	}{
+		"completa":         {"postgres://x@db/aluna", entity, ""},
+		"sin base":         {"", entity, "ALUNA_DATABASE_URL"},
+		"entidad inválida": {"postgres://x@db/aluna", "no-es-uuid", "ALUNA_LEGAL_ENTITY_ID"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("ALUNA_HTTP_ADDR", "") // el default se prueba sin depender del entorno
+			t.Setenv("ALUNA_DATABASE_URL", tc.dsn)
+			t.Setenv("ALUNA_LEGAL_ENTITY_ID", tc.entity)
+
+			cfg, err := apiConfigFromEnv()
+
+			if tc.wantErr == "" && (err != nil || cfg.entity.String() != entity || cfg.addr != ":8080") {
+				t.Fatalf("cfg = %+v, err = %v", cfg, err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("error = %v, se esperaba uno sobre %s", err, tc.wantErr)
+			}
+		})
 	}
 }

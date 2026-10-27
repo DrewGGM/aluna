@@ -286,3 +286,29 @@ func TestHandlerAbortPassesThrough(t *testing.T) {
 		t.Fatalf("se esperaba un error de conexión, llegó status %d", resp.StatusCode)
 	}
 }
+
+func TestUnroutedRequestsGetProblems(t *testing.T) {
+	srv, _ := newTestServer(t, ServerConfig{}, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /v1/cosas", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	})
+	cases := map[string]struct {
+		method, path string
+		status       int
+		code         string
+	}{
+		"ruta inexistente":    {http.MethodGet, "/v1/nada", http.StatusNotFound, "not_found"},
+		"método no permitido": {http.MethodDelete, "/v1/cosas", http.StatusMethodNotAllowed, "method_not_allowed"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := serve(srv, httptest.NewRequest(tc.method, tc.path, nil))
+
+			if rec.Code != tc.status || decodeProblem(t, rec)["code"] != tc.code {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if tc.status == http.StatusMethodNotAllowed && rec.Header().Get("Allow") == "" {
+				t.Fatal("el 405 debe conservar el encabezado Allow")
+			}
+		})
+	}
+}

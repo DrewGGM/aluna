@@ -6,9 +6,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7);
 INSERT INTO ledger.balances (account_id) VALUES ($1);
 
 -- name: AccountsByID :many
-SELECT id, legal_entity_id, code, kind, currency, balance_mode, lower_limit
-FROM ledger.accounts
-WHERE id = ANY(@ids::uuid[]);
+SELECT sqlc.embed(a) FROM ledger.accounts a WHERE a.id = ANY(@ids::uuid[]);
 
 -- Bloquea los saldos en orden de account_id (ADR-0004): dos postings sobre las mismas cuentas toman
 -- los locks en el mismo orden y no se bloquean en ciclo.
@@ -35,3 +33,15 @@ UPDATE ledger.balances SET posted = posted + @delta, version = version + 1 WHERE
 
 -- name: Balance :one
 SELECT posted, pending_debits, pending_credits, version FROM ledger.balances WHERE account_id = $1;
+
+-- Las lecturas por ID filtran por entidad: lo ajeno se ve igual que lo que no existe.
+-- name: AccountOfEntity :one
+SELECT sqlc.embed(a) FROM ledger.accounts a WHERE a.id = @id AND a.legal_entity_id = @legal_entity_id;
+
+-- name: TransactionOfEntity :one
+SELECT id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version, posted_at
+FROM ledger.transactions
+WHERE id = @id AND legal_entity_id = @legal_entity_id;
+
+-- name: EntriesOf :many
+SELECT account_id, currency, amount FROM ledger.entries WHERE transaction_id = $1 ORDER BY id;

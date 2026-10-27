@@ -45,15 +45,21 @@ const (
 
 // Errores que devuelve el ledger.
 var (
-	ErrInsufficientFunds = domain.ErrInsufficientFunds
-	ErrUnbalanced        = domain.ErrUnbalanced
-	ErrTooFewEntries     = domain.ErrTooFewEntries
-	ErrZeroAmount        = domain.ErrZeroAmount
-	ErrAccountNotFound   = app.ErrAccountNotFound
-	ErrInvalidPosting    = app.ErrInvalidPosting
-	ErrCurrencyMismatch  = app.ErrCurrencyMismatch
-	ErrInvalidAccount    = app.ErrInvalidAccount
+	ErrInsufficientFunds    = domain.ErrInsufficientFunds
+	ErrUnbalanced           = domain.ErrUnbalanced
+	ErrTooFewEntries        = domain.ErrTooFewEntries
+	ErrZeroAmount           = domain.ErrZeroAmount
+	ErrAccountNotFound      = app.ErrAccountNotFound
+	ErrInvalidPosting       = app.ErrInvalidPosting
+	ErrCurrencyMismatch     = app.ErrCurrencyMismatch
+	ErrInvalidAccount       = app.ErrInvalidAccount
+	ErrTransactionNotFound  = pg.ErrTransactionNotFound
+	ErrDuplicateExternalRef = pg.ErrDuplicateExternalRef
 )
+
+// NaturalBalance convierte un saldo con signo al de la naturaleza de la cuenta: un depósito de cliente
+// (pasivo) se ve positivo.
+func NaturalBalance(k Kind, posted int64) int64 { return domain.NaturalBalance(k, posted) }
 
 // Service es la entrada al ledger para los demás módulos y los adaptadores de entrada.
 type Service struct{}
@@ -70,6 +76,18 @@ func (s *Service) CreateAccount(ctx context.Context, tx postgres.Tx, in CreateAc
 // los límites y actualiza los saldos en la misma transacción de base.
 func (s *Service) Post(ctx context.Context, tx postgres.Tx, in PostInput) (Transaction, error) {
 	return app.Post(ctx, pg.NewStore(tx), in)
+}
+
+// Account lee una cuenta de la entidad: la de otra entidad no existe para ella. q puede ser el pool o
+// una Tx.
+func (s *Service) Account(ctx context.Context, q postgres.Querier, entity, id ids.ID) (Account, error) {
+	return pg.NewStore(q).AccountOf(ctx, entity, id)
+}
+
+// Transaction lee una transacción asentada de la entidad, con sus entries. q puede ser el pool o una
+// Tx.
+func (s *Service) Transaction(ctx context.Context, q postgres.Querier, entity, id ids.ID) (Transaction, error) {
+	return pg.NewStore(q).TransactionOf(ctx, entity, id)
 }
 
 // Balance lee el saldo materializado de una cuenta, sin bloquearlo. q puede ser el pool o una Tx.

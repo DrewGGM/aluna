@@ -103,6 +103,15 @@ linters:
     interfacebloat:
       max: 5
 
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        # La interfaz strict que genera oapi-codegen obliga a devolver sus ResponseObject.
+        - github.com/DrewGGM/aluna/internal/httpapi/gen\..*ResponseObject
+
     nolintlint:
       require-specific: true
       require-explanation: true

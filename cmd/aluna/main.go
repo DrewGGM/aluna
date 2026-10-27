@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/httpapi"
+	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
@@ -28,7 +30,8 @@ var stderr io.Writer = os.Stderr
 const usage = `uso: aluna <comando>
 
 comandos:
-  api                        sirve la API HTTP en ALUNA_HTTP_ADDR (por defecto :8080)
+  api                        sirve la API HTTP en ALUNA_HTTP_ADDR (por defecto :8080); necesita
+                             ALUNA_DATABASE_URL y ALUNA_LEGAL_ENTITY_ID
   migrate up|down|status     aplica, revierte la última o lista las migraciones en ALUNA_DATABASE_URL
   version                    imprime la versión
 `
@@ -51,9 +54,7 @@ func run(args []string, stdout io.Writer) int {
 		if len(rest) != 0 {
 			return printUsage()
 		}
-		return untilSignal(func(ctx context.Context) int {
-			return runAPI(ctx, envOr("ALUNA_HTTP_ADDR", ":8080"), slog.New(slog.NewJSONHandler(stdout, nil)))
-		})
+		return untilSignal(func(ctx context.Context) int { return apiCommand(ctx, stdout) })
 	case "migrate":
 		if len(rest) != 1 || !postgres.ValidDirection(rest[0]) {
 			return printUsage()
@@ -104,20 +105,79 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// runAPI abre addr y sirve la API hasta que ctx se cancela.
-func runAPI(ctx context.Context, addr string, log *slog.Logger) int {
-	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", addr)
+// apiCommand lee la configuración del entorno y corre la api; los logs van en JSON a stdout.
+func apiCommand(ctx context.Context, stdout io.Writer) int {
+	log := slog.New(slog.NewJSONHandler(stdout, nil))
+	cfg, err := apiConfigFromEnv()
 	if err != nil {
-		log.Error("no se pudo abrir el puerto", "addr", addr, "error", err)
+		log.Error("configuración de la api", "error", err)
 		return 1
 	}
-	return serveAPI(ctx, ln, log)
+	return runAPI(ctx, cfg, log)
+}
+
+// apiConfig es la configuración de aluna api. Un despliegue sirve a una sola entidad regulada
+// (ADR-0002): su entidad legal es configuración hasta que llegue del token (T-035).
+type apiConfig struct {
+	addr, dsn string
+	entity    ids.ID
+}
+
+func apiConfigFromEnv() (apiConfig, error) {
+	cfg := apiConfig{addr: envOr("ALUNA_HTTP_ADDR", ":8080"), dsn: os.Getenv("ALUNA_DATABASE_URL")}
+	if cfg.dsn == "" {
+		return apiConfig{}, errNoDatabaseURL
+	}
+	entity, err := ids.Parse(os.Getenv("ALUNA_LEGAL_ENTITY_ID"))
+	if err != nil {
+		return apiConfig{}, fmt.Errorf("ALUNA_LEGAL_ENTITY_ID: %w", err)
+	}
+	cfg.entity = entity
+	return cfg, nil
+}
+
+var errNoDatabaseURL = errors.New("falta ALUNA_DATABASE_URL")
+
+// connectTimeout acota la conexión inicial: si la base no responde, el proceso falla en vez de dejar el
+// puerto abierto sin servir.
+const connectTimeout = 10 * time.Second
+
+// readyTimeout acota el ping de /readyz: un probe no debe colgarse si la base no responde.
+const readyTimeout = 2 * time.Second
+
+// runAPI abre el puerto primero (un puerto ocupado falla sin tocar la base), conecta la base, cablea
+// el ledger a mano y sirve hasta que ctx se cancela.
+func runAPI(ctx context.Context, cfg apiConfig, log *slog.Logger) int {
+	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.addr)
+	if err != nil {
+		log.Error("no se pudo abrir el puerto", "addr", cfg.addr, "error", err)
+		return 1
+	}
+	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	pool, err := postgres.Open(openCtx, cfg.dsn)
+	if err != nil {
+		log.Error("no se pudo conectar a la base", "error", err)
+		if closeErr := ln.Close(); closeErr != nil {
+			log.Error("cerrar el puerto", "error", closeErr)
+		}
+		return 1
+	}
+	defer pool.Close()
+	api := httpapi.API{
+		LedgerHandlers: httpapi.NewLedgerHandlers(ledger.New(), postgres.NewUnitOfWork(pool), pool, cfg.entity),
+	}
+	ready := func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, readyTimeout)
+		defer cancel()
+		return pool.Ping(ctx)
+	}
+	return serveAPI(ctx, ln, httpapi.NewServer(httpapi.ServerConfig{Ready: ready}, httpapi.Routes(api, log), log), log)
 }
 
 // serveAPI sirve en ln hasta que ctx se cancela y luego espera hasta shutdownTimeout a que terminen
 // los requests en curso.
-func serveAPI(ctx context.Context, ln net.Listener, log *slog.Logger) int {
-	srv := httpapi.NewServer(httpapi.ServerConfig{}, nil, log)
+func serveAPI(ctx context.Context, ln net.Listener, srv *http.Server, log *slog.Logger) int {
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	log.Info("api escuchando", "addr", ln.Addr().String())
@@ -145,7 +205,7 @@ func serveAPI(ctx context.Context, ln net.Listener, log *slog.Logger) int {
 // runMigrate aplica direction sobre la base de dsn con la conexión propia de las migraciones.
 func runMigrate(ctx context.Context, dsn, direction string, out io.Writer) error {
 	if dsn == "" {
-		return errors.New("falta ALUNA_DATABASE_URL")
+		return errNoDatabaseURL
 	}
 	db, err := postgres.OpenForMigrations(dsn)
 	if err != nil {

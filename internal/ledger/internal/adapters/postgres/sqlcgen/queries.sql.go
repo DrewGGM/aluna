@@ -12,20 +12,43 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 )
 
+const accountOfEntity = `-- name: AccountOfEntity :one
+SELECT a.id, a.legal_entity_id, a.code, a.kind, a.currency, a.balance_mode, a.lower_limit, a.owner_ref, a.created_at FROM ledger.accounts a WHERE a.id = $1 AND a.legal_entity_id = $2
+`
+
+type AccountOfEntityParams struct {
+	ID            ids.ID
+	LegalEntityID ids.ID
+}
+
+type AccountOfEntityRow struct {
+	LedgerAccount LedgerAccount
+}
+
+// Las lecturas por ID filtran por entidad: lo ajeno se ve igual que lo que no existe.
+func (q *Queries) AccountOfEntity(ctx context.Context, arg AccountOfEntityParams) (AccountOfEntityRow, error) {
+	row := q.db.QueryRow(ctx, accountOfEntity, arg.ID, arg.LegalEntityID)
+	var i AccountOfEntityRow
+	err := row.Scan(
+		&i.LedgerAccount.ID,
+		&i.LedgerAccount.LegalEntityID,
+		&i.LedgerAccount.Code,
+		&i.LedgerAccount.Kind,
+		&i.LedgerAccount.Currency,
+		&i.LedgerAccount.BalanceMode,
+		&i.LedgerAccount.LowerLimit,
+		&i.LedgerAccount.OwnerRef,
+		&i.LedgerAccount.CreatedAt,
+	)
+	return i, err
+}
+
 const accountsByID = `-- name: AccountsByID :many
-SELECT id, legal_entity_id, code, kind, currency, balance_mode, lower_limit
-FROM ledger.accounts
-WHERE id = ANY($1::uuid[])
+SELECT a.id, a.legal_entity_id, a.code, a.kind, a.currency, a.balance_mode, a.lower_limit, a.owner_ref, a.created_at FROM ledger.accounts a WHERE a.id = ANY($1::uuid[])
 `
 
 type AccountsByIDRow struct {
-	ID            ids.ID
-	LegalEntityID ids.ID
-	Code          string
-	Kind          string
-	Currency      string
-	BalanceMode   string
-	LowerLimit    int64
+	LedgerAccount LedgerAccount
 }
 
 func (q *Queries) AccountsByID(ctx context.Context, argIds []ids.ID) ([]AccountsByIDRow, error) {
@@ -38,13 +61,15 @@ func (q *Queries) AccountsByID(ctx context.Context, argIds []ids.ID) ([]Accounts
 	for rows.Next() {
 		var i AccountsByIDRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.LegalEntityID,
-			&i.Code,
-			&i.Kind,
-			&i.Currency,
-			&i.BalanceMode,
-			&i.LowerLimit,
+			&i.LedgerAccount.ID,
+			&i.LedgerAccount.LegalEntityID,
+			&i.LedgerAccount.Code,
+			&i.LedgerAccount.Kind,
+			&i.LedgerAccount.Currency,
+			&i.LedgerAccount.BalanceMode,
+			&i.LedgerAccount.LowerLimit,
+			&i.LedgerAccount.OwnerRef,
+			&i.LedgerAccount.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -91,6 +116,36 @@ func (q *Queries) Balance(ctx context.Context, accountID ids.ID) (BalanceRow, er
 		&i.Version,
 	)
 	return i, err
+}
+
+const entriesOf = `-- name: EntriesOf :many
+SELECT account_id, currency, amount FROM ledger.entries WHERE transaction_id = $1 ORDER BY id
+`
+
+type EntriesOfRow struct {
+	AccountID ids.ID
+	Currency  string
+	Amount    int64
+}
+
+func (q *Queries) EntriesOf(ctx context.Context, transactionID ids.ID) ([]EntriesOfRow, error) {
+	rows, err := q.db.Query(ctx, entriesOf, transactionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EntriesOfRow
+	for rows.Next() {
+		var i EntriesOfRow
+		if err := rows.Scan(&i.AccountID, &i.Currency, &i.Amount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertAccount = `-- name: InsertAccount :exec
@@ -231,4 +286,48 @@ func (q *Queries) LockBalances(ctx context.Context, accountIds []ids.ID) ([]Lock
 		return nil, err
 	}
 	return items, nil
+}
+
+const transactionOfEntity = `-- name: TransactionOfEntity :one
+SELECT id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version, posted_at
+FROM ledger.transactions
+WHERE id = $1 AND legal_entity_id = $2
+`
+
+type TransactionOfEntityParams struct {
+	ID            ids.ID
+	LegalEntityID ids.ID
+}
+
+type TransactionOfEntityRow struct {
+	ID            ids.ID
+	LegalEntityID ids.ID
+	Code          string
+	ValueDate     time.Time
+	BusinessDate  time.Time
+	Source        string
+	ExternalRef   string
+	Actor         string
+	Channel       string
+	RuleVersion   string
+	PostedAt      time.Time
+}
+
+func (q *Queries) TransactionOfEntity(ctx context.Context, arg TransactionOfEntityParams) (TransactionOfEntityRow, error) {
+	row := q.db.QueryRow(ctx, transactionOfEntity, arg.ID, arg.LegalEntityID)
+	var i TransactionOfEntityRow
+	err := row.Scan(
+		&i.ID,
+		&i.LegalEntityID,
+		&i.Code,
+		&i.ValueDate,
+		&i.BusinessDate,
+		&i.Source,
+		&i.ExternalRef,
+		&i.Actor,
+		&i.Channel,
+		&i.RuleVersion,
+		&i.PostedAt,
+	)
+	return i, err
 }

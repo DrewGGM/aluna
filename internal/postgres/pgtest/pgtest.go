@@ -30,24 +30,34 @@ import (
 //	func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 func Run(m *testing.M, pool **pgxpool.Pool) int {
 	ctx := context.Background()
-	serverDSN, stop, err := server(ctx)
+	dsn, cleanup, err := Start(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pgtest:", err)
 		return 1
 	}
-	defer stop()
-	db, err := createDatabase(ctx, serverDSN)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "pgtest:", err)
-		return 1
-	}
-	defer db.drop(ctx)
-	if *pool, err = db.openAsApp(ctx); err != nil {
+	defer cleanup()
+	if *pool, err = openAsApp(ctx, dsn); err != nil {
 		fmt.Fprintln(os.Stderr, "pgtest:", err)
 		return 1
 	}
 	defer (*pool).Close()
 	return m.Run()
+}
+
+// Start crea una base propia ya migrada y devuelve su DSN, con el usuario dueño de las tablas (no
+// aluna_app: quien la use no ejercita los GRANT), y la función que la borra. Es para pruebas que
+// arrancan el binario o necesitan el DSN en vez de un pool.
+func Start(ctx context.Context) (string, func(), error) {
+	serverDSN, stop, err := server(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	db, err := createDatabase(ctx, serverDSN)
+	if err != nil {
+		stop()
+		return "", nil, err
+	}
+	return db.dsn, func() { db.drop(ctx); stop() }, nil
 }
 
 func server(ctx context.Context) (string, func(), error) {
@@ -94,15 +104,24 @@ func createDatabase(ctx context.Context, serverDSN string) (*database, error) {
 	return db, nil
 }
 
-func (db *database) openAsApp(ctx context.Context) (*pgxpool.Pool, error) {
-	u, err := url.Parse(db.dsn)
+func openAsApp(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	appDSN, err := AppDSN(dsn)
 	if err != nil {
-		return nil, errors.New("DSN de la base de prueba inválido")
+		return nil, err
+	}
+	return postgres.Open(ctx, appDSN)
+}
+
+// AppDSN convierte el DSN del dueño en uno que se conecta con el rol aluna_app, como el proceso real.
+func AppDSN(dsn string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", errors.New("DSN de la base de prueba inválido")
 	}
 	query := u.Query()
 	query.Set("options", "-c role=aluna_app")
 	u.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20") // pgx no lee "+" como espacio
-	return postgres.Open(ctx, u.String())
+	return u.String(), nil
 }
 
 // drop borra la base. Un fallo se avisa: con un servidor compartido la base quedaría viva.

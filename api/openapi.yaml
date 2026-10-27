@@ -1,0 +1,218 @@
+openapi: 3.1.0
+info:
+  title: Aluna API
+  version: 0.1.0
+  description: >-
+    Core bancario. Dinero siempre como {"amount": <entero en unidades menores>, "currency": "<ISO 4217>"},
+    nunca decimales. Errores RFC 9457 (application/problem+json) con un `code` estable. Cada operación
+    declara el permiso que exige en `x-aluna-permission`. Los montos son enteros de 64 bits: un
+    cliente JavaScript debe leerlos como BigInt, porque pasan de 2^53.
+servers:
+  - url: /
+paths:
+  /v1/ledger-accounts:
+    post:
+      operationId: createLedgerAccount
+      summary: Crear una cuenta del ledger
+      x-aluna-permission: ledger.accounts.create
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateLedgerAccount"}
+      responses:
+        "201":
+          description: Cuenta creada
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LedgerAccount"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/ledger-accounts/{id}:
+    get:
+      operationId: getLedgerAccount
+      summary: Leer una cuenta del ledger
+      x-aluna-permission: ledger.accounts.read
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Cuenta
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LedgerAccount"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/ledger-accounts/{id}/balance:
+    get:
+      operationId: getLedgerAccountBalance
+      summary: Leer el saldo materializado de una cuenta
+      x-aluna-permission: ledger.balances.read
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Saldo
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Balance"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/transactions:
+    post:
+      operationId: postTransaction
+      summary: Asentar una transacción balanceada
+      x-aluna-permission: ledger.transactions.post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PostTransaction"}
+      responses:
+        "201":
+          description: Transacción asentada
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Transaction"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/transactions/{id}:
+    get:
+      operationId: getTransaction
+      summary: Leer una transacción
+      x-aluna-permission: ledger.transactions.read
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Transacción
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Transaction"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+components:
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  responses:
+    Problem:
+      description: Error RFC 9457
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+  schemas:
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: integer
+          format: int64
+          description: Unidades menores de la moneda (COP 100.000 = 10000000).
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+    Problem:
+      type: object
+      required: [type, title, status, code, instance]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        code: {type: string}
+        instance: {type: string}
+    AccountKind:
+      type: string
+      enum: [asset, liability, equity, income, expense]
+    BalanceMode:
+      type: string
+      enum: [sync, async]
+    CreateLedgerAccount:
+      type: object
+      required: [code, kind, currency, balance_mode]
+      properties:
+        code: {type: string, minLength: 1}
+        kind: {$ref: "#/components/schemas/AccountKind"}
+        currency: {type: string, pattern: "^[A-Z]{3}$"}
+        balance_mode: {$ref: "#/components/schemas/BalanceMode"}
+        lower_limit:
+          type: integer
+          format: int64
+          description: Límite inferior del saldo natural, en unidades menores (0 por defecto).
+    LedgerAccount:
+      type: object
+      required: [id, code, kind, currency, balance_mode, lower_limit]
+      properties:
+        id: {type: string, format: uuid}
+        code: {type: string}
+        kind: {$ref: "#/components/schemas/AccountKind"}
+        currency: {type: string}
+        balance_mode: {$ref: "#/components/schemas/BalanceMode"}
+        lower_limit: {type: integer, format: int64}
+    Balance:
+      type: object
+      required: [account_id, posted, natural, pending_debits, pending_credits, version]
+      properties:
+        account_id: {type: string, format: uuid}
+        posted:
+          $ref: "#/components/schemas/Money"
+          description: Saldo con signo (débito positivo, crédito negativo).
+        natural:
+          $ref: "#/components/schemas/Money"
+          description: Saldo en la naturaleza de la cuenta (un depósito de cliente es positivo).
+        pending_debits:
+          $ref: "#/components/schemas/Money"
+          description: Holds de débito pendientes (importe no negativo).
+        pending_credits:
+          $ref: "#/components/schemas/Money"
+          description: Holds de crédito pendientes (importe no negativo).
+        version: {type: integer, format: int64}
+    Entry:
+      type: object
+      required: [account_id, amount]
+      properties:
+        account_id: {type: string, format: uuid}
+        amount:
+          $ref: "#/components/schemas/Money"
+          description: Con signo, débito positivo y crédito negativo.
+    PostTransaction:
+      type: object
+      required: [code, value_date, business_date, source, external_ref, entries]
+      properties:
+        code: {type: string, minLength: 1}
+        value_date: {type: string, format: date}
+        business_date: {type: string, format: date}
+        source: {type: string, minLength: 1}
+        external_ref: {type: string, minLength: 1}
+        entries:
+          type: array
+          minItems: 2
+          items: {$ref: "#/components/schemas/Entry"}
+    Transaction:
+      type: object
+      required: [id, code, value_date, business_date, posted_at, source, external_ref, entries]
+      properties:
+        id: {type: string, format: uuid}
+        code: {type: string}
+        value_date: {type: string, format: date}
+        business_date: {type: string, format: date}
+        posted_at: {type: string, format: date-time}
+        source: {type: string}
+        external_ref: {type: string}
+        entries:
+          type: array
+          items: {$ref: "#/components/schemas/Entry"}

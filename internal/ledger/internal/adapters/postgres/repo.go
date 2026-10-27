@@ -58,16 +58,74 @@ func (s *Store) Accounts(ctx context.Context, accountIDs []ids.ID) (map[ids.ID]d
 	}
 	accounts := make(map[ids.ID]domain.Account, len(rows))
 	for _, r := range rows {
-		cur, err := money.CurrencyOf(r.Currency)
+		a, err := toAccount(r.LedgerAccount)
 		if err != nil {
-			return nil, fmt.Errorf("cuenta %s: %w", r.Code, err)
+			return nil, err
 		}
-		accounts[r.ID] = domain.Account{
-			ID: r.ID, LegalEntityID: r.LegalEntityID, Code: r.Code, Kind: domain.Kind(r.Kind),
-			Currency: cur, Mode: domain.BalanceMode(r.BalanceMode), LowerLimit: r.LowerLimit,
-		}
+		accounts[a.ID] = a
 	}
 	return accounts, nil
+}
+
+// AccountOf lee una cuenta de la entidad; una cuenta de otra entidad es ErrAccountNotFound.
+func (s *Store) AccountOf(ctx context.Context, entity, id ids.ID) (domain.Account, error) {
+	r, err := s.q.AccountOfEntity(ctx, sqlcgen.AccountOfEntityParams{ID: id, LegalEntityID: entity})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Account{}, fmt.Errorf("%w: %s", app.ErrAccountNotFound, id)
+	}
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("leer la cuenta: %w", err)
+	}
+	return toAccount(r.LedgerAccount)
+}
+
+func toAccount(r sqlcgen.LedgerAccount) (domain.Account, error) {
+	cur, err := money.CurrencyOf(r.Currency)
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("cuenta %s: %w", r.Code, err)
+	}
+	return domain.Account{
+		ID: r.ID, LegalEntityID: r.LegalEntityID, Code: r.Code, Kind: domain.Kind(r.Kind),
+		Currency: cur, Mode: domain.BalanceMode(r.BalanceMode), LowerLimit: r.LowerLimit,
+	}, nil
+}
+
+var (
+	// ErrTransactionNotFound indica una transacción que no existe o que es de otra entidad legal.
+	ErrTransactionNotFound = errors.New("transacción no encontrada")
+	// ErrDuplicateExternalRef indica que la fuente ya asentó una transacción con esa referencia.
+	ErrDuplicateExternalRef = errors.New("la referencia externa ya se asentó")
+)
+
+// TransactionOf lee una transacción de la entidad con sus entries, en el orden en que se asentaron.
+func (s *Store) TransactionOf(ctx context.Context, entity, id ids.ID) (app.Transaction, error) {
+	r, err := s.q.TransactionOfEntity(ctx, sqlcgen.TransactionOfEntityParams{ID: id, LegalEntityID: entity})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.Transaction{}, fmt.Errorf("%w: %s", ErrTransactionNotFound, id)
+	}
+	if err != nil {
+		return app.Transaction{}, fmt.Errorf("leer la transacción: %w", err)
+	}
+	rows, err := s.q.EntriesOf(ctx, id)
+	if err != nil {
+		return app.Transaction{}, fmt.Errorf("leer los entries: %w", err)
+	}
+	entries := make([]domain.EntryInput, len(rows))
+	for i, e := range rows {
+		cur, err := money.CurrencyOf(e.Currency)
+		if err != nil {
+			return app.Transaction{}, fmt.Errorf("entry de %s: %w", id, err)
+		}
+		entries[i] = domain.EntryInput{AccountID: e.AccountID, Amount: money.New(e.Amount, cur)}
+	}
+	return app.Transaction{
+		TransactionRecord: app.TransactionRecord{
+			ID: r.ID, LegalEntityID: r.LegalEntityID, Code: r.Code, ValueDate: r.ValueDate, BusinessDate: r.BusinessDate,
+			Source: r.Source, ExternalRef: r.ExternalRef, Actor: r.Actor, Channel: r.Channel, RuleVersion: r.RuleVersion,
+		},
+		PostedAt: r.PostedAt,
+		Entries:  entries,
+	}, nil
 }
 
 // LockBalances bloquea (FOR UPDATE, en orden de account_id) y devuelve los saldos de accountIDs.
@@ -90,6 +148,9 @@ func (s *Store) InsertTransaction(ctx context.Context, rec app.TransactionRecord
 		BusinessDate: rec.BusinessDate, Source: rec.Source, ExternalRef: rec.ExternalRef, Actor: rec.Actor,
 		Channel: rec.Channel, RuleVersion: rec.RuleVersion,
 	})
+	if isUniqueViolation(err, "transactions_idempotent_ref") {
+		return time.Time{}, fmt.Errorf("%w: %s/%s", ErrDuplicateExternalRef, rec.Source, rec.ExternalRef)
+	}
 	if err != nil {
 		return time.Time{}, fmt.Errorf("insertar la transacción: %w", err)
 	}

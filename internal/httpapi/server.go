@@ -2,12 +2,36 @@
 // handlers que traducen la API a las fachadas de los módulos.
 package httpapi
 
+//go:generate go tool oapi-codegen -config ../../api/oapi-codegen.yaml ../../api/openapi.yaml
+
 import (
 	"context"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 )
+
+// API reúne los handlers de todos los módulos: el contrato genera una sola interfaz con todas sus
+// operaciones y cada módulo aporta las suyas por embedding.
+type API struct {
+	*LedgerHandlers
+}
+
+var _ gen.StrictServerInterface = API{}
+
+// Routes registra todas las operaciones del contrato en mux, una sola vez, con los errores en
+// problem+json.
+func Routes(api gen.StrictServerInterface, log *slog.Logger) func(*http.ServeMux) {
+	return func(mux *http.ServeMux) {
+		strict := gen.NewStrictHandlerWithOptions(api, nil, gen.StrictHTTPServerOptions{
+			RequestErrorHandlerFunc:  requestError,
+			ResponseErrorHandlerFunc: responseError(log),
+		})
+		gen.HandlerWithOptions(strict, gen.StdHTTPServerOptions{BaseRouter: mux, ErrorHandlerFunc: requestError})
+	}
+}
 
 // ServerConfig configura el servidor HTTP.
 type ServerConfig struct {

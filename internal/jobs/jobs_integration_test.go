@@ -15,6 +15,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
+	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -36,7 +37,12 @@ func newDeps(t *testing.T) jobs.Deps {
 	if err != nil {
 		t.Fatal(err)
 	}
+	records, err := audit.WithFileAnchor(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return jobs.Deps{
+		Audit:      records,
 		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledger.New(calendar.New(), events), Idempotency: idempotency.NewStore(testPool), Outbox: events,
 	}
 }
@@ -149,18 +155,32 @@ func TestAHoldThatExpiredWhileTheWorkerWasDownExpiresOnStart(t *testing.T) {
 	}
 }
 
-// TestTheWorkerRunsEveryJob: al arrancar corren bien todos los periódicos, como aluna_app, y el worker
-// publica lo que emite el outbox.
+// TestTheWorkerRunsEveryJob: al arrancar corren bien todos los periódicos, como aluna_app: el worker
+// publica lo que emite el outbox y sella lo que hay en el registro de auditoría.
 func TestTheWorkerRunsEveryJob(t *testing.T) {
 	deps := newDeps(t)
+	correlation := ids.New().String()
 	inTx(t, func(tx postgres.Tx) error {
+		if err := audit.New().Record(t.Context(), tx, audit.Record{
+			Actor: "api", Role: "api", Channel: "api", CorrelationID: correlation, Command: "POST /v1/transactions", Result: "ok",
+		}); err != nil {
+			return err
+		}
 		return deps.Outbox.Emit(t.Context(), tx, outbox.Event{
 			Type: "aluna.test.worker.started.v1", Subject: "worker", LegalEntityID: ids.New(), SchemaVersion: 1, Data: map[string]any{},
 		})
 	})
 
 	waitFor(t, startWorker(t, deps),
-		"ledger.holds.expire", "ledger.balances.aggregate", "idempotency.purge", "outbox.purge", "outbox.publish")
+		"ledger.holds.expire", "ledger.balances.aggregate", "idempotency.purge", "outbox.purge", "outbox.publish", "audit.seal")
+
+	var block *int64
+	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil || block == nil {
+		t.Fatalf("el registro de auditoría quedó sin sellar (%v)", err)
+	}
+	if err := deps.Audit.Verify(t.Context(), testPool, *block, *block); err != nil {
+		t.Fatalf("el bloque que selló el worker no verifica: %v", err)
+	}
 }
 
 // TestThePurgesHonorTheirRetention: la purga de idempotencia borra las claves de más de 7 días y la del

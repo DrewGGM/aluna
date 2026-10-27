@@ -26,6 +26,7 @@ func TestRunWorkerStopsOnSIGTERM(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ALUNA_DATABASE_URL", appDSN)
+	t.Setenv("ALUNA_AUDIT_ANCHOR_DIR", t.TempDir())
 	exit := make(chan int, 1)
 	go func() { exit <- run([]string{"worker"}, io.Discard) }()
 	waitLeaders(t, 1)

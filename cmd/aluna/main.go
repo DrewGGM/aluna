@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -44,8 +45,12 @@ comandos:
   api                        sirve la API HTTP en ALUNA_HTTP_ADDR (por defecto :8080); necesita
                              ALUNA_DATABASE_URL y ALUNA_LEGAL_ENTITY_ID; con
                              OTEL_EXPORTER_OTLP_ENDPOINT exporta trazas y métricas por OTLP
-  worker                     corre los jobs (outbox, holds, saldos async, purgas) sobre
-                             ALUNA_DATABASE_URL; varios workers eligen un líder para los periódicos
+  worker                     corre los jobs (outbox, holds, saldos async, purgas, sellado de la
+                             auditoría) sobre ALUNA_DATABASE_URL, con el ancla de los bloques en
+                             ALUNA_AUDIT_ANCHOR_DIR; varios workers eligen un líder para los periódicos
+  audit verify --from N --to M
+                             recalcula la cadena de auditoría de los bloques N a M y la compara con
+                             sus anclas en ALUNA_AUDIT_ANCHOR_DIR
   migrate up|down|status     aplica, revierte la última o lista las migraciones en ALUNA_DATABASE_URL
   version                    imprime la versión
 `
@@ -63,8 +68,11 @@ func run(args []string, stdout io.Writer) int {
 		return printUsage()
 	}
 	command, rest := args[0], args[1:]
-	if command == "migrate" {
+	switch command {
+	case "migrate":
 		return migrateCommand(rest, stdout)
+	case "audit":
+		return auditCommand(rest, stdout)
 	}
 	if len(rest) != 0 { // los demás comandos no llevan argumentos
 		return printUsage()
@@ -262,12 +270,29 @@ func workerCommand(ctx context.Context, stdout io.Writer) int {
 		log.Error("configuración del worker", "error", errNoDatabaseURL)
 		return 1
 	}
-	return runWorker(ctx, dsn, log)
+	records, err := auditFromEnv()
+	if err != nil {
+		log.Error("configuración del worker", "error", err)
+		return 1
+	}
+	return runWorker(ctx, dsn, records, log)
+}
+
+var errNoAnchorDir = errors.New("falta ALUNA_AUDIT_ANCHOR_DIR")
+
+// auditFromEnv es el servicio de auditoría que sella y verifica, con el ancla de los bloques en
+// ALUNA_AUDIT_ANCHOR_DIR.
+func auditFromEnv() (*audit.Service, error) {
+	dir := os.Getenv("ALUNA_AUDIT_ANCHOR_DIR")
+	if dir == "" {
+		return nil, errNoAnchorDir
+	}
+	return audit.WithFileAnchor(dir)
 }
 
 // runWorker conecta la base, cablea los jobs a mano y corre River hasta que ctx se cancela. Entonces deja
 // de tomar jobs y espera hasta shutdownTimeout a los que están corriendo antes de cancelarlos.
-func runWorker(ctx context.Context, dsn string, log *slog.Logger) int {
+func runWorker(ctx context.Context, dsn string, records *audit.Service, log *slog.Logger) int {
 	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	pool, err := postgres.Open(openCtx, dsn)
@@ -276,7 +301,7 @@ func runWorker(ctx context.Context, dsn string, log *slog.Logger) int {
 		return 1
 	}
 	defer pool.Close()
-	client, err := newWorker(pool, log)
+	client, err := newWorker(pool, records, log)
 	if err != nil {
 		log.Error("configurar el worker", "error", err)
 		return 1
@@ -292,13 +317,14 @@ func runWorker(ctx context.Context, dsn string, log *slog.Logger) int {
 }
 
 // newWorker arma el cliente River del worker con la configuración de jobs, cableada a mano.
-func newWorker(pool *pgxpool.Pool, log *slog.Logger) (*river.Client[pgx.Tx], error) {
+func newWorker(pool *pgxpool.Pool, records *audit.Service, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	events, err := outbox.New(pool)
 	if err != nil {
 		return nil, err
 	}
 	cfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledger.New(calendar.New(), events), Idempotency: idempotency.NewStore(pool), Outbox: events,
+		Audit: records,
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)
@@ -306,6 +332,45 @@ func newWorker(pool *pgxpool.Pool, log *slog.Logger) (*river.Client[pgx.Tx], err
 		return nil, fmt.Errorf("cliente River: %w", err)
 	}
 	return client, nil
+}
+
+// auditCommand corre audit verify --from N --to M.
+func auditCommand(args []string, stdout io.Writer) int {
+	if len(args) == 0 || args[0] != "verify" {
+		return printUsage()
+	}
+	flags := flag.NewFlagSet("audit verify", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	from, to := flags.Int64("from", 0, ""), flags.Int64("to", 0, "")
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *from < 1 || *to < *from {
+		return printUsage()
+	}
+	return untilSignal(func(ctx context.Context) int {
+		return exitCode(runVerify(ctx, os.Getenv("ALUNA_DATABASE_URL"), *from, *to, stdout))
+	})
+}
+
+// runVerify recalcula la cadena de auditoría de los bloques from a to contra sus anclas.
+func runVerify(ctx context.Context, dsn string, from, to int64, out io.Writer) error {
+	if dsn == "" {
+		return errNoDatabaseURL
+	}
+	records, err := auditFromEnv()
+	if err != nil {
+		return err
+	}
+	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	pool, err := postgres.Open(openCtx, dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	if err := records.Verify(ctx, pool, from, to); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "cadena de auditoría íntegra: bloques %d a %d (o hasta el último sellado)\n", from, to)
+	return err
 }
 
 // runMigrate aplica direction sobre la base de dsn con la conexión propia de las migraciones.

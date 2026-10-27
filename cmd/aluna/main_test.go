@@ -50,6 +50,11 @@ func TestRunSinComandoValidoImprimeUso(t *testing.T) {
 		"migrate con argumentos de más": {"migrate", "up", "extra"},
 		"api con argumentos":            {"api", "extra"},
 		"worker con argumentos":         {"worker", "extra"},
+		"audit sin subcomando":          {"audit"},
+		"audit desconocido":             {"audit", "check"},
+		"verify sin bloques":            {"audit", "verify"},
+		"verify al revés":               {"audit", "verify", "--from", "3", "--to", "2"},
+		"verify con argumentos de más":  {"audit", "verify", "--from", "1", "--to", "2", "extra"},
 	}
 	for nombre, args := range casos {
 		t.Run(nombre, func(t *testing.T) {

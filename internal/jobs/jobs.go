@@ -9,6 +9,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/outbox"
@@ -22,7 +23,16 @@ const QueueLedger = "ledger"
 const (
 	holdsBatch     = 500
 	aggregateBatch = 1000
+)
 
+// El sellado (ADR-0012) cierra bloques de a lo más auditBlockSize registros, sealRounds por corrida para
+// terminar antes del límite de tiempo del job; lo que quede lo toma la corrida siguiente.
+const (
+	auditBlockSize = 10_000
+	sealRounds     = 5
+)
+
+const (
 	idempotencyRetention = 7 * 24 * time.Hour  // architecture §9
 	outboxRetention      = 30 * 24 * time.Hour // la Events API retiene 30 días (FR-46)
 )
@@ -33,6 +43,7 @@ type Deps struct {
 	Ledger      *ledger.Service
 	Idempotency *idempotency.Store
 	Outbox      *outbox.Outbox
+	Audit       *audit.Service
 }
 
 // Config es la configuración de River del worker: las colas, los workers de Register, los periódicos y el
@@ -66,6 +77,15 @@ func Register(w *river.Workers, deps Deps) {
 		_, err := deps.Outbox.Purge(ctx, time.Now().Add(-outboxRetention))
 		return err
 	}})
+	river.AddWorker(w, &task[sealAudit]{run: func(ctx context.Context) error {
+		for range sealRounds {
+			id, err := deps.Audit.Seal(ctx, deps.UnitOfWork, auditBlockSize)
+			if err != nil || id == 0 {
+				return err
+			}
+		}
+		return nil
+	}})
 	deps.Outbox.AddWorkers(w)
 }
 
@@ -77,6 +97,7 @@ func Periodic() []*river.PeriodicJob {
 		every(10*time.Second, aggregateAsync{}),
 		every(time.Hour, purgeIdempotency{}),
 		every(24*time.Hour, purgeOutbox{}),
+		every(time.Minute, sealAudit{}),
 	}
 }
 
@@ -117,3 +138,8 @@ type purgeOutbox struct{}
 
 func (purgeOutbox) Kind() string                 { return "outbox.purge" }
 func (purgeOutbox) InsertOpts() river.InsertOpts { return insertOpts(river.QueueDefault) }
+
+type sealAudit struct{}
+
+func (sealAudit) Kind() string                 { return "audit.seal" }
+func (sealAudit) InsertOpts() river.InsertOpts { return insertOpts(river.QueueDefault) }

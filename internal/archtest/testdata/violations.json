@@ -1,0 +1,9 @@
+{"ImportPath": "github.com/DrewGGM/aluna/internal/ledger", "Imports": ["fmt", "github.com/DrewGGM/aluna/internal/money", "github.com/DrewGGM/aluna/internal/calendar", "github.com/DrewGGM/aluna/internal/deposits", "github.com/DrewGGM/aluna/internal/loans"]}
+{"ImportPath": "github.com/DrewGGM/aluna/internal/deposits/internal/app", "Imports": ["github.com/DrewGGM/aluna/internal/ledger", "github.com/DrewGGM/aluna/internal/deposits/internal/domain", "github.com/DrewGGM/aluna/internal/httpapi"]}
+{"ImportPath": "github.com/DrewGGM/aluna/internal/money", "Imports": ["github.com/DrewGGM/aluna/internal/ids", "github.com/DrewGGM/aluna/internal/ledger"]}
+{"ImportPath": "github.com/DrewGGM/aluna/internal/httpapi", "Imports": ["github.com/DrewGGM/aluna/internal/payments", "github.com/DrewGGM/aluna/internal/postgres"]}
+{"ImportPath": "github.com/DrewGGM/aluna/internal/jobs", "Imports": ["github.com/DrewGGM/aluna/internal/deposits", "github.com/DrewGGM/aluna/internal/httpapi"]}
+{"ImportPath": "github.com/DrewGGM/aluna/internal/loans", "Imports": ["fmt"]}
+{"ImportPath": "github.com/DrewGGM/aluna/internal/ledger/internal/domain", "Imports": ["errors", "github.com/DrewGGM/aluna/internal/money", "github.com/DrewGGM/aluna/internal/clock", "github.com/DrewGGM/aluna/internal/calendar", "github.com/jackc/pgx/v5", "github.com/DrewGGM/aluna/internal/postgres"]}
+{"ImportPath": "github.com/DrewGGM/aluna/internal/deposits/internal/domain/postingrules", "Imports": ["github.com/DrewGGM/aluna/internal/deposits/internal/domain", "github.com/DrewGGM/aluna/internal/ledger", "github.com/DrewGGM/aluna/internal/ids"]}
+{"ImportPath": "fmt", "Imports": ["errors", "io"]}

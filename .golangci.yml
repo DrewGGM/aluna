@@ -1,0 +1,132 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - contextcheck
+    - depguard
+    - errcheck
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - forcetypeassert
+    - funlen
+    - gocritic
+    - gocyclo
+    - godox
+    - gosec
+    - govet
+    - interfacebloat
+    - ireturn
+    - nilerr
+    - nilnil
+    - nolintlint
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unparam
+    - unused
+
+  settings:
+    depguard:
+      rules:
+        # AS-7: fakes escritos a mano, nunca mocks generados ni testify.
+        everywhere:
+          files:
+            - $all
+          deny:
+            - pkg: github.com/golang/mock
+              desc: "AS-7: usa un fake escrito a mano contra el puerto"
+            - pkg: go.uber.org/mock
+              desc: "AS-7: usa un fake escrito a mano contra el puerto"
+            - pkg: github.com/vektra/mockery
+              desc: "AS-7: usa un fake escrito a mano contra el puerto"
+            - pkg: github.com/stretchr/testify
+              desc: "AS-7: usa testing + go-cmp"
+        # AS-6. Qué más puede importar el dominio lo verifica internal/archtest (enmienda de ADR-0001):
+        # depguard no sabe expresar "las fachadas que el DAG le permite a su módulo".
+        domain:
+          files:
+            - "**/internal/domain/**"
+            - "!$test"
+          deny:
+            - pkg: reflect
+              desc: "AS-6: sin reflexión en el dominio"
+            - pkg: unsafe
+              desc: "AS-6: sin unsafe en el dominio"
+        # ADR-0009: los casos de uso hablan con la base solo por sus puertos. AS-6.
+        app:
+          files:
+            - "**/internal/app/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/jackc/pgx
+              desc: "ADR-0009: pgx solo en adapters"
+            - pkg: reflect
+              desc: "AS-6: sin reflexión en los casos de uso"
+            - pkg: unsafe
+              desc: "AS-6: sin unsafe en los casos de uso"
+
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^panic$
+          msg: "AS-11: devuelve un error; panic solo en main y en pruebas"
+        - pattern: ^float(32|64)$
+          msg: "ADR-0005: montos en money.Amount (int64 de unidades menores)"
+        - pattern: ^time\.Now$
+          msg: "ADR-0006: el dominio recibe clock.Clock"
+
+    funlen:
+      lines: 50
+      statements: -1
+      ignore-comments: true
+
+    gocyclo:
+      min-complexity: 10
+
+    godox:
+      keywords:
+        - TODO
+        - FIXME
+        - HACK
+        - XXX
+
+    interfacebloat:
+      max: 5
+
+    nolintlint:
+      require-specific: true
+      require-explanation: true
+      allow-unused: false
+
+  exclusions:
+    rules:
+      # AS-11: main y las pruebas sí pueden hacer panic.
+      - linters: [forbidigo]
+        text: "AS-11"
+        path: (^|/)cmd/|_test\.go$
+      # ADR-0005: los float se prohíben solo donde hay dinero.
+      - linters: [forbidigo]
+        text: "ADR-0005"
+        path-except: (^|/)internal/(money|ledger|deposits|pricing)/
+      # ADR-0006: time.Now se prohíbe solo en el dominio.
+      - linters: [forbidigo]
+        text: "ADR-0006"
+        path-except: (^|/)internal/domain/
+      # AS-15: un TODO solo existe con su tarea, TODO(T-0NN).
+      - linters: [godox]
+        text: ': "TODO\(T-\d{3}\)'
+
+# Todo hallazgo se muestra: con la deduplicación por línea un float64 quedaba oculto detrás de otro
+# linter que marcaba la misma línea.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false
+
+formatters:
+  enable:
+    - gofumpt

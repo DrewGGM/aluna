@@ -101,8 +101,9 @@ type HoldStore interface {
 // PlaceHold retiene fondos de la cuenta origen (FR-6): valida el disponible como si el importe saliera
 // ya, crea el hold pending y lo suma al pendiente del lado por el que la cuenta pierde saldo
 // (pending_debits en un pasivo, pending_credits en un activo). El vencimiento se guarda en UTC y con
-// microsegundos, la precisión de la base, para que el hold creado sea igual al que se lee.
-func PlaceHold(ctx context.Context, store HoldStore, in PlaceHoldInput) (Hold, error) {
+// microsegundos, la precisión de la base, para que el hold creado sea igual al que se lee. Emite
+// hold.placed.
+func PlaceHold(ctx context.Context, store HoldStore, events Events, in PlaceHoldInput) (Hold, error) {
 	origin, err := holdOrigin(ctx, store, in)
 	if err != nil {
 		return Hold{}, err
@@ -130,6 +131,9 @@ func PlaceHold(ctx context.Context, store HoldStore, in PlaceHoldInput) (Hold, e
 	if err := store.AddToBalance(ctx, origin.ID, BalanceDelta{PendingDebits: debits, PendingCredits: credits}); err != nil {
 		return Hold{}, err
 	}
+	if err := events.Emit(ctx, holdEvent(typeHoldPlaced, in.LegalEntityID, h, ids.ID{})); err != nil {
+		return Hold{}, err
+	}
 	return h, nil
 }
 
@@ -137,8 +141,8 @@ func PlaceHold(ctx context.Context, store HoldStore, in PlaceHoldInput) (Hold, e
 // hora del capture es la de la base tras el lock, así que entre un capture y la expiración gana el
 // primero que bloquea el hold. Lo capturado se asienta del origen a la contrapartida y el pendiente
 // completo se libera en la misma escritura del posting, después de todas sus validaciones: un capture
-// rechazado no deja nada escrito.
-func CaptureHold(ctx context.Context, store HoldStore, guard PeriodGuard, in CaptureInput) (Hold, Transaction, error) {
+// rechazado no deja nada escrito. Emite hold.captured.
+func CaptureHold(ctx context.Context, store HoldStore, guard PeriodGuard, events Events, in CaptureInput) (Hold, Transaction, error) {
 	h, err := store.LockHold(ctx, in.LegalEntityID, in.HoldID)
 	if err != nil {
 		return Hold{}, Transaction{}, err
@@ -169,6 +173,10 @@ func CaptureHold(ctx context.Context, store HoldStore, guard PeriodGuard, in Cap
 	if err := store.CloseHold(ctx, captured, posted.ID); err != nil {
 		return Hold{}, Transaction{}, err
 	}
+	// su evento es hold.captured, con la transacción: el posting del capture no emite transaction.posted
+	if err := events.Emit(ctx, holdEvent(typeHoldCaptured, in.LegalEntityID, captured, posted.ID)); err != nil {
+		return Hold{}, Transaction{}, err
+	}
 	return captured, posted, nil
 }
 
@@ -182,8 +190,9 @@ func captureInput(in CaptureInput, h Hold, outgoing money.Amount) PostInput {
 	}
 }
 
-// ReleaseHold libera un hold pending: su importe sale del pendiente y el disponible vuelve.
-func ReleaseHold(ctx context.Context, store HoldStore, in ReleaseInput) (Hold, error) {
+// ReleaseHold libera un hold pending: su importe sale del pendiente y el disponible vuelve. Emite
+// hold.released.
+func ReleaseHold(ctx context.Context, store HoldStore, events Events, in ReleaseInput) (Hold, error) {
 	h, err := store.LockHold(ctx, in.LegalEntityID, in.HoldID)
 	if err != nil {
 		return Hold{}, err
@@ -202,6 +211,9 @@ func ReleaseHold(ctx context.Context, store HoldStore, in ReleaseInput) (Hold, e
 	}
 	released := h.with(next)
 	if err := store.CloseHold(ctx, released, ids.ID{}); err != nil {
+		return Hold{}, err
+	}
+	if err := events.Emit(ctx, holdEvent(typeHoldReleased, in.LegalEntityID, released, ids.ID{})); err != nil {
 		return Hold{}, err
 	}
 	return released, nil

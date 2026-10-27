@@ -12,6 +12,7 @@ import (
 	pg "github.com/DrewGGM/aluna/internal/ledger/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/ledger/internal/app"
 	"github.com/DrewGGM/aluna/internal/ledger/internal/domain"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
@@ -92,7 +93,14 @@ func NaturalBalance(k Kind, posted int64) int64 { return domain.NaturalBalance(k
 
 // Service es la entrada al ledger para los demás módulos y los adaptadores de entrada.
 type Service struct {
-	cal Calendar
+	cal    Calendar
+	events Events
+}
+
+// Events publica un evento en la transacción del comando (ADR-0007). Lo implementa outbox.Outbox; se
+// conecta en cmd/aluna.
+type Events interface {
+	Emit(ctx context.Context, tx postgres.Tx, e outbox.Event) error
 }
 
 // Calendar es lo que el ledger necesita del calendario: la fecha de negocio de cada entidad y la guarda
@@ -109,8 +117,8 @@ type PeriodGuard interface {
 	EnsureOpen(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d calendar.Date) error
 }
 
-// New crea el servicio del ledger sobre el calendario de las entidades.
-func New(cal Calendar) *Service { return &Service{cal: cal} }
+// New crea el servicio del ledger sobre el calendario de las entidades; publica sus eventos en events.
+func New(cal Calendar, events Events) *Service { return &Service{cal: cal, events: events} }
 
 // CreateAccount crea una cuenta dentro de tx.
 func (s *Service) CreateAccount(ctx context.Context, tx postgres.Tx, in CreateAccountInput) (Account, error) {
@@ -126,7 +134,7 @@ func (s *Service) Post(ctx context.Context, tx postgres.Tx, in PostInput) (Trans
 	if in.BusinessDate, err = s.businessDay(ctx, tx, in.LegalEntityID, in.BusinessDate); err != nil {
 		return Transaction{}, err
 	}
-	return app.Post(ctx, pg.NewStore(tx), s.guard(tx), in)
+	return app.Post(ctx, pg.NewStore(tx), s.guard(tx), s.emitter(tx), in)
 }
 
 // Reverse asienta dentro de tx la reversa de una transacción de la entidad: sus entries con el signo
@@ -137,13 +145,13 @@ func (s *Service) Reverse(ctx context.Context, tx postgres.Tx, in ReverseInput) 
 	if in.BusinessDate, err = s.businessDay(ctx, tx, in.LegalEntityID, in.BusinessDate); err != nil {
 		return Transaction{}, err
 	}
-	return app.Reverse(ctx, pg.NewStore(tx), s.guard(tx), in)
+	return app.Reverse(ctx, pg.NewStore(tx), s.guard(tx), s.emitter(tx), in)
 }
 
 // PlaceHold retiene fondos de una cuenta sync dentro de tx: valida el disponible y suma el hold a su
 // pendiente.
 func (s *Service) PlaceHold(ctx context.Context, tx postgres.Tx, in PlaceHoldInput) (Hold, error) {
-	return app.PlaceHold(ctx, pg.NewStore(tx), in)
+	return app.PlaceHold(ctx, pg.NewStore(tx), s.emitter(tx), in)
 }
 
 // CaptureHold asienta dentro de tx parte o todo un hold pending y libera el resto; devuelve el hold y
@@ -153,7 +161,7 @@ func (s *Service) CaptureHold(ctx context.Context, tx postgres.Tx, in CaptureInp
 	if in.BusinessDate, err = s.businessDay(ctx, tx, in.LegalEntityID, in.BusinessDate); err != nil {
 		return Hold{}, Transaction{}, err
 	}
-	return app.CaptureHold(ctx, pg.NewStore(tx), s.guard(tx), in)
+	return app.CaptureHold(ctx, pg.NewStore(tx), s.guard(tx), s.emitter(tx), in)
 }
 
 // businessDay es la fecha de negocio con que se asienta: given, o la de la entidad en el calendario si
@@ -184,7 +192,7 @@ func (g periodGuard) EnsureOpen(ctx context.Context, entity ids.ID, businessDate
 
 // ReleaseHold libera dentro de tx un hold pending.
 func (s *Service) ReleaseHold(ctx context.Context, tx postgres.Tx, in ReleaseInput) (Hold, error) {
-	return app.ReleaseHold(ctx, pg.NewStore(tx), in)
+	return app.ReleaseHold(ctx, pg.NewStore(tx), s.emitter(tx), in)
 }
 
 // ExpireDueHolds expira los holds pending vencidos a now, de todas las entidades, en lotes de batch:
@@ -200,7 +208,7 @@ func (s *Service) ExpireDueHolds(ctx context.Context, uow *postgres.UnitOfWork, 
 		var n int
 		err := uow.Do(ctx, func(tx postgres.Tx) error {
 			var err error
-			n, err = app.ExpireDueHolds(ctx, pg.NewStore(tx), now, batch)
+			n, err = app.ExpireDueHolds(ctx, pg.NewStore(tx), s.emitter(tx), now, batch)
 			return err
 		})
 		if err != nil {
@@ -261,4 +269,19 @@ func (s *Service) PostedAsOf(ctx context.Context, q postgres.Querier, accountID 
 // Balance lee el saldo materializado de una cuenta, sin bloquearlo. q puede ser el pool o una Tx.
 func (s *Service) Balance(ctx context.Context, q postgres.Querier, accountID ids.ID) (Balance, error) {
 	return pg.NewStore(q).Balance(ctx, accountID)
+}
+
+// emitter son los eventos del ledger dentro de tx.
+func (s *Service) emitter(tx postgres.Tx) emitter { return emitter{s.events, tx} }
+
+type emitter struct {
+	events Events
+	tx     postgres.Tx
+}
+
+// Emit publica e en la transacción del comando.
+func (e emitter) Emit(ctx context.Context, ev app.Event) error {
+	return e.events.Emit(ctx, e.tx, outbox.Event{
+		Type: ev.Type, Subject: ev.Subject, LegalEntityID: ev.LegalEntityID, SchemaVersion: ev.SchemaVersion, Data: ev.Data,
+	})
 }

@@ -38,8 +38,8 @@ type ReversalStore interface {
 // Reverse asienta la reversa de una transacción (FR-3): sus entries con el signo contrario, con la
 // fecha valor de la original y la fecha de negocio de in. Pasa por Post, así que respeta los límites:
 // revertir un depósito ya gastado es ErrInsufficientFunds. Si la transacción ya tiene reversa, la
-// devuelve con ErrAlreadyReversed y no escribe nada.
-func Reverse(ctx context.Context, store ReversalStore, guard PeriodGuard, in ReverseInput) (Transaction, error) {
+// devuelve con ErrAlreadyReversed y no escribe nada; si la asienta, emite transaction.reversed.
+func Reverse(ctx context.Context, store ReversalStore, guard PeriodGuard, events Events, in ReverseInput) (Transaction, error) {
 	if in.Reason == "" {
 		return Transaction{}, fmt.Errorf("%w: falta el motivo de la reversa", ErrInvalidPosting)
 	}
@@ -59,6 +59,12 @@ func Reverse(ctx context.Context, store ReversalStore, guard PeriodGuard, in Rev
 		RuleVersion: domain.ReversalRuleVersion, ReversesID: original.ID, Metadata: map[string]string{"reason": in.Reason},
 		Entries: entries,
 	}, pendingRelease{})
+	if err == nil {
+		if err := events.Emit(ctx, transactionEvent(typeTransactionReversed, reversal)); err != nil {
+			return Transaction{}, err
+		}
+		return reversal, nil
+	}
 	if !errors.Is(err, ErrDuplicateExternalRef) {
 		return reversal, err
 	}

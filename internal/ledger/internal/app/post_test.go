@@ -103,6 +103,11 @@ type openPeriods struct{}
 
 func (openPeriods) EnsureOpen(context.Context, ids.ID, time.Time) error { return nil }
 
+// noEvents descarta los eventos: lo que emite cada caso de uso lo prueba events_integration_test.go.
+type noEvents struct{}
+
+func (noEvents) Emit(context.Context, Event) error { return nil }
+
 func cop(t *testing.T) money.Currency {
 	t.Helper()
 	c, err := money.CurrencyOf("COP")
@@ -133,7 +138,7 @@ func TestPostNetsEntriesPerAccountAndLocksEachOnce(t *testing.T) {
 	cash, deposit := account(t, domain.KindAsset, domain.BalanceModeSync), account(t, domain.KindLiability, domain.BalanceModeSync)
 	store := newFakeStore(cash, deposit)
 
-	_, err := Post(t.Context(), store, openPeriods{}, input(entry(cash, 70), entry(cash, 30), entry(deposit, -100)))
+	_, err := Post(t.Context(), store, openPeriods{}, noEvents{}, input(entry(cash, 70), entry(cash, 30), entry(deposit, -100)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +157,7 @@ func TestPostChecksTheNetNotEachEntry(t *testing.T) {
 	store := newFakeStore(cash, deposit)
 	store.balances[deposit.ID] = LockedBalance{Posted: 50} // natural -50: bajo su límite de 0
 
-	_, err := Post(t.Context(), store, openPeriods{}, input(entry(deposit, 10), entry(deposit, -10), entry(cash, 5), entry(cash, -5)))
+	_, err := Post(t.Context(), store, openPeriods{}, noEvents{}, input(entry(deposit, 10), entry(deposit, -10), entry(cash, 5), entry(cash, -5)))
 	if err != nil {
 		t.Fatalf("un neto de cero no reduce el saldo: %v", err)
 	}
@@ -162,7 +167,7 @@ func TestPostSkipsAsyncAccounts(t *testing.T) {
 	deposit, clearing := account(t, domain.KindLiability, domain.BalanceModeSync), account(t, domain.KindAsset, domain.BalanceModeAsync)
 	store := newFakeStore(deposit, clearing)
 
-	if _, err := Post(t.Context(), store, openPeriods{}, input(entry(clearing, 100), entry(deposit, -100))); err != nil {
+	if _, err := Post(t.Context(), store, openPeriods{}, noEvents{}, input(entry(clearing, 100), entry(deposit, -100))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -193,7 +198,7 @@ func TestPostRejectsBeforeWriting(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			store := newFakeStore(cash, deposit, foreign)
 
-			_, err := Post(t.Context(), store, openPeriods{}, input(tc.entries...))
+			_, err := Post(t.Context(), store, openPeriods{}, noEvents{}, input(tc.entries...))
 
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("error = %v, se esperaba %v", err, tc.want)
@@ -208,7 +213,7 @@ func TestPostRejectsBeforeWriting(t *testing.T) {
 		store := newFakeStore(cash, deposit)
 		store.accounts[noBalance.ID] = noBalance // sin saldo materializado
 
-		if _, err := Post(t.Context(), store, openPeriods{}, input(entry(cash, 100), entry(noBalance, -100))); err == nil || len(store.inserted) != 0 {
+		if _, err := Post(t.Context(), store, openPeriods{}, noEvents{}, input(entry(cash, 100), entry(noBalance, -100))); err == nil || len(store.inserted) != 0 {
 			t.Fatalf("debe fallar sin escribir: error = %v, transacciones %d", err, len(store.inserted))
 		}
 	})
@@ -240,7 +245,7 @@ func TestPostReturnsTheOriginalOfARepeatedRef(t *testing.T) {
 			store := newFakeStore(cash, deposit)
 			tc.prepare(store)
 
-			got, err := Post(t.Context(), store, openPeriods{}, in)
+			got, err := Post(t.Context(), store, openPeriods{}, noEvents{}, in)
 
 			if !errors.Is(err, ErrDuplicateExternalRef) || got.ID != original.ID {
 				t.Fatalf("= %s, %v; se esperaba la original %s con ErrDuplicateExternalRef", got.ID, err, original.ID)
@@ -258,7 +263,7 @@ func TestPostDoesNotTakeAnotherEntitysRefAsRepeated(t *testing.T) {
 	store := newFakeStore(cash, deposit)
 	store.posted[ref{ids.New(), in.Source, in.ExternalRef}] = Transaction{TransactionRecord: TransactionRecord{ID: ids.New()}}
 
-	if _, err := Post(t.Context(), store, openPeriods{}, in); err != nil || len(store.inserted) != 1 {
+	if _, err := Post(t.Context(), store, openPeriods{}, noEvents{}, in); err != nil || len(store.inserted) != 1 {
 		t.Fatalf("la misma referencia en otra entidad = %v, %d insertadas; se esperaba asentarla", err, len(store.inserted))
 	}
 }
@@ -281,7 +286,7 @@ func TestPostValidatesTheHeader(t *testing.T) {
 			in := input(entry(cash, 1), entry(deposit, -1))
 			breakIt(&in)
 
-			if _, err := Post(t.Context(), store, openPeriods{}, in); !errors.Is(err, ErrInvalidPosting) || len(store.inserted) != 0 {
+			if _, err := Post(t.Context(), store, openPeriods{}, noEvents{}, in); !errors.Is(err, ErrInvalidPosting) || len(store.inserted) != 0 {
 				t.Fatalf("error = %v, se esperaba ErrInvalidPosting sin escribir", err)
 			}
 		})
@@ -297,7 +302,7 @@ func TestPostKeepsTheCalendarDay(t *testing.T) {
 	in.ValueDate = time.Date(2026, 10, 26, 23, 30, 0, 0, bogota) // en UTC ya es el 27
 	in.BusinessDate = in.ValueDate
 
-	posted, err := Post(t.Context(), store, openPeriods{}, in)
+	posted, err := Post(t.Context(), store, openPeriods{}, noEvents{}, in)
 	if err != nil {
 		t.Fatal(err)
 	}

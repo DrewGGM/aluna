@@ -37,7 +37,7 @@ func newDeps(t *testing.T) jobs.Deps {
 		t.Fatal(err)
 	}
 	return jobs.Deps{
-		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledger.New(calendar.New()), Idempotency: idempotency.NewStore(testPool), Outbox: events,
+		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledger.New(calendar.New(), events), Idempotency: idempotency.NewStore(testPool), Outbox: events,
 	}
 }
 

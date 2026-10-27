@@ -23,6 +23,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
@@ -35,7 +36,11 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 func apiServer(t *testing.T, entity ids.ID) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(calendar.New()), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool, entity)}
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(calendar.New(), events), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool, entity)}
 	ts := httptest.NewServer(NewServer(ServerConfig{}, Routes(api, log), log).Handler)
 	t.Cleanup(ts.Close)
 	return ts

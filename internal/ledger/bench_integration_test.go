@@ -81,7 +81,7 @@ func requireDurableServer(b *testing.B) {
 // exige que el settlement quede con la suma de sus entries.
 func checkAggregated(b *testing.B, l benchLedger) {
 	b.Helper()
-	backlog, err := svc.AggregateAsyncBalances(b.Context(), postgres.NewUnitOfWork(testPool), benchAggregateBatch)
+	backlog, err := svc().AggregateAsyncBalances(b.Context(), postgres.NewUnitOfWork(testPool), benchAggregateBatch)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func setUpBenchLedger(ctx context.Context) (benchLedger, error) {
 	}
 	l := benchLedger{cur: cur}
 	account := func(tx postgres.Tx, kind ledger.Kind, mode ledger.BalanceMode, limit int64) (ids.ID, error) {
-		a, err := svc.CreateAccount(ctx, tx, ledger.CreateAccountInput{
+		a, err := svc().CreateAccount(ctx, tx, ledger.CreateAccountInput{
 			LegalEntityID: entity, Code: "bench-" + ids.New().String(), Kind: kind, Currency: cur, Mode: mode, LowerLimit: limit,
 		})
 		return a.ID, err
@@ -146,7 +146,7 @@ func aggregateEverySecond(ctx context.Context) func() error {
 				done <- nil
 				return
 			case <-tick.C:
-				if _, err := svc.AggregateAsyncBalances(ctx, uow, benchAggregateBatch); err != nil && ctx.Err() == nil {
+				if _, err := svc().AggregateAsyncBalances(ctx, uow, benchAggregateBatch); err != nil && ctx.Err() == nil {
 					done <- fmt.Errorf("agregador: %w", err)
 					return
 				}
@@ -230,7 +230,7 @@ func postIdempotent(ctx context.Context, uow *postgres.UnitOfWork, keys *idempot
 		if _, err := tx.Exec(ctx, "SAVEPOINT idempotent_effect"); err != nil {
 			return err
 		}
-		posted, err := svc.Post(ctx, tx, in)
+		posted, err := svc().Post(ctx, tx, in)
 		if err != nil {
 			return err
 		}

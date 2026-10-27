@@ -106,15 +106,23 @@ func (r pendingRelease) from(id ids.ID, b LockedBalance) LockedBalance {
 
 // Post valida la cabecera y la partida doble, bloquea los saldos de las cuentas sync, revisa que el
 // neto de cada cuenta quepa en ella y asienta transacción, entries y saldos. Si la entidad ya asentó
-// (source, external_ref) devuelve esa transacción original con ErrDuplicateExternalRef y no escribe
-// nada (FR-11). El reintento de algo que ya pasó no debe fallar por un saldo que cambió después, así
-// que la referencia se busca antes de validar, otra vez si los fondos no alcanzan (ver available) y al
-// insertar, si otro productor la asentó sobre otras cuentas mientras tanto.
-func Post(ctx context.Context, store PostingStore, guard PeriodGuard, in PostInput) (Transaction, error) {
+// (source, external_ref) devuelve esa transacción original con ErrDuplicateExternalRef y no escribe ni
+// emite nada (FR-11); si asienta, emite transaction.posted. El reintento de algo que ya pasó no debe
+// fallar por un saldo que cambió después, así que la referencia se busca antes de validar, otra vez si
+// los fondos no alcanzan (ver available) y al insertar, si otro productor la asentó sobre otras cuentas
+// mientras tanto.
+func Post(ctx context.Context, store PostingStore, guard PeriodGuard, events Events, in PostInput) (Transaction, error) {
 	if strings.HasPrefix(in.Source, reservedSourcePrefix) || in.ReversesID != (ids.ID{}) {
 		return Transaction{}, fmt.Errorf("%w: las fuentes %s* y las reversas son del ledger", ErrInvalidPosting, reservedSourcePrefix)
 	}
-	return post(ctx, store, guard, in, pendingRelease{})
+	posted, err := post(ctx, store, guard, in, pendingRelease{})
+	if err != nil {
+		return posted, err
+	}
+	if err := events.Emit(ctx, transactionEvent(typeTransactionPosted, posted)); err != nil {
+		return Transaction{}, err
+	}
+	return posted, nil
 }
 
 // PeriodGuard rechaza asentar con una fecha de negocio dentro de un periodo cerrado (FR-15).

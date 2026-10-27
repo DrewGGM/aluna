@@ -25,8 +25,8 @@ type ExpiryStore interface {
 // ExpireDueHolds expira un lote de hasta limit holds vencidos a now (FR-6): los marca expired y quita su
 // importe del pendiente de la cuenta origen. Bloquea los holds antes que los saldos (ADR-0004), como el
 // capture; un hold que el capture ya bloqueó no entra al lote, y si lo bloquea primero la expiración,
-// el capture lo ve expirado. Devuelve cuántos expiró.
-func ExpireDueHolds(ctx context.Context, store ExpiryStore, now time.Time, limit int) (int, error) {
+// el capture lo ve expirado. Emite hold.expired de cada uno y devuelve cuántos expiró.
+func ExpireDueHolds(ctx context.Context, store ExpiryStore, events Events, now time.Time, limit int) (int, error) {
 	due, err := store.LockDueHolds(ctx, now, limit)
 	if err != nil || len(due) == 0 {
 		return 0, err
@@ -44,7 +44,12 @@ func ExpireDueHolds(ctx context.Context, store ExpiryStore, now time.Time, limit
 		if err != nil {
 			return 0, err
 		}
-		if err := store.CloseHold(ctx, h.with(next), ids.ID{}); err != nil {
+		expired := h.with(next)
+		if err := store.CloseHold(ctx, expired, ids.ID{}); err != nil {
+			return 0, err
+		}
+		// el lote mezcla entidades: la del hold es la de su cuenta
+		if err := events.Emit(ctx, holdEvent(typeHoldExpired, accounts[h.AccountID()].LegalEntityID, expired, ids.ID{})); err != nil {
 			return 0, err
 		}
 		debits, credits := pendingOf(outgoingOf(accounts[h.AccountID()], h.Amount()))

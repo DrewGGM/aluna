@@ -40,7 +40,7 @@ func inTx[T any](t *testing.T, fn func(tx postgres.Tx) (T, error)) (T, error) { 
 func placeHold(t *testing.T, account, counter ids.ID, units int64, expiresIn time.Duration) (ledger.Hold, error) {
 	t.Helper()
 	return inTx(t, func(tx postgres.Tx) (ledger.Hold, error) {
-		return svc.PlaceHold(t.Context(), tx, ledger.PlaceHoldInput{
+		return svc().PlaceHold(t.Context(), tx, ledger.PlaceHoldInput{
 			LegalEntityID: entity, AccountID: account, CounterAccountID: counter,
 			Amount: money.New(units, cop(t)), ExpiresAt: time.Now().Add(expiresIn),
 		})
@@ -62,7 +62,7 @@ func captureInput(t *testing.T, hold ids.ID, units int64) ledger.CaptureInput {
 func captureHold(t *testing.T, hold ids.ID, units int64) (captured, error) {
 	t.Helper()
 	return inTx(t, func(tx postgres.Tx) (captured, error) {
-		h, posted, err := svc.CaptureHold(t.Context(), tx, captureInput(t, hold, units))
+		h, posted, err := svc().CaptureHold(t.Context(), tx, captureInput(t, hold, units))
 		return captured{h, posted}, err
 	})
 }
@@ -70,13 +70,13 @@ func captureHold(t *testing.T, hold ids.ID, units int64) (captured, error) {
 func releaseHold(t *testing.T, hold ids.ID) (ledger.Hold, error) {
 	t.Helper()
 	return inTx(t, func(tx postgres.Tx) (ledger.Hold, error) {
-		return svc.ReleaseHold(t.Context(), tx, ledger.ReleaseInput{LegalEntityID: entity, HoldID: hold})
+		return svc().ReleaseHold(t.Context(), tx, ledger.ReleaseInput{LegalEntityID: entity, HoldID: hold})
 	})
 }
 
 func balanceOf(t *testing.T, account ids.ID) ledger.Balance {
 	t.Helper()
-	b, err := svc.Balance(t.Context(), testPool, account)
+	b, err := svc().Balance(t.Context(), testPool, account)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestARejectedCaptureWritesNothing(t *testing.T) {
 	in.Actor = ""
 	var captureErr error
 	err = postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
-		_, _, captureErr = svc.CaptureHold(t.Context(), tx, in)
+		_, _, captureErr = svc().CaptureHold(t.Context(), tx, in)
 		return nil
 	})
 	if err != nil || !errors.Is(captureErr, ledger.ErrInvalidPosting) {
@@ -223,7 +223,7 @@ func TestCaptureAssentsAndReleasesTheRest(t *testing.T) {
 // referencia del hold.
 func checkCaptureTransaction(t *testing.T, hold ledger.Hold, tx ledger.Transaction) {
 	t.Helper()
-	stored, err := svc.Transaction(t.Context(), testPool, entity, tx.ID)
+	stored, err := svc().Transaction(t.Context(), testPool, entity, tx.ID)
 	if err != nil || len(stored.Entries) != 2 || stored.Source != "ledger.hold" || stored.ExternalRef != hold.ID().String() {
 		t.Fatalf("transacción del capture = %+v, %v", stored.TransactionRecord, err)
 	}
@@ -332,7 +332,7 @@ func TestHoldsOfAnotherEntityAreNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = inTx(t, func(tx postgres.Tx) (ledger.Hold, error) {
-		return svc.ReleaseHold(t.Context(), tx, ledger.ReleaseInput{LegalEntityID: ids.New(), HoldID: hold.ID()})
+		return svc().ReleaseHold(t.Context(), tx, ledger.ReleaseInput{LegalEntityID: ids.New(), HoldID: hold.ID()})
 	})
 	if !errors.Is(err, ledger.ErrHoldNotFound) {
 		t.Fatalf("liberar el hold de otra entidad = %v, se esperaba ErrHoldNotFound", err)
@@ -417,7 +417,7 @@ func captureUncommitted(t *testing.T, hold ids.ID) (int32, func() error) {
 	t.Cleanup(sync.OnceFunc(func() { close(release) }))
 	go func() {
 		done <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
-			if _, _, err := svc.CaptureHold(t.Context(), tx, captureInput(t, hold, 50)); err != nil {
+			if _, _, err := svc().CaptureHold(t.Context(), tx, captureInput(t, hold, 50)); err != nil {
 				return err
 			}
 			var pid int32

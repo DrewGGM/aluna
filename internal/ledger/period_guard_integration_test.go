@@ -105,7 +105,7 @@ func TestReversalsAndCapturesInAClosedPeriodAreRejected(t *testing.T) {
 	}
 
 	hold, err := inTx(t, func(tx postgres.Tx) (ledger.Hold, error) {
-		return svc.PlaceHold(t.Context(), tx, ledger.PlaceHoldInput{
+		return svc().PlaceHold(t.Context(), tx, ledger.PlaceHoldInput{
 			LegalEntityID: entity, AccountID: deposit.ID, CounterAccountID: cash.ID, Amount: money.New(50, cop(t)), ExpiresAt: time.Now().Add(time.Hour),
 		})
 	})
@@ -113,7 +113,7 @@ func TestReversalsAndCapturesInAClosedPeriodAreRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = inTx(t, func(tx postgres.Tx) (ledger.Transaction, error) {
-		_, posted, err := svc.CaptureHold(t.Context(), tx, ledger.CaptureInput{
+		_, posted, err := svc().CaptureHold(t.Context(), tx, ledger.CaptureInput{
 			LegalEntityID: entity, HoldID: hold.ID(), Amount: money.New(50, cop(t)), BusinessDate: june, Actor: "tester", Channel: "test",
 		})
 		return posted, err

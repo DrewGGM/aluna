@@ -17,6 +17,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
@@ -164,7 +165,7 @@ func TestAPostingKeepsTheDateItRead(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	stored, err := ledger.New(cal).Transaction(t.Context(), testPool, entity, posted)
+	stored, err := testLedger().Transaction(t.Context(), testPool, entity, posted)
 	if err != nil || !stored.BusinessDate.Equal(dateOf(monday)) {
 		t.Fatalf("el posting quedó con %v (%v), se esperaba el lunes que leyó", stored.BusinessDate, err)
 	}
@@ -246,7 +247,7 @@ func checkPostedOnTheDateRead(t *testing.T, entity ids.ID, posted []postedOn, at
 	t.Helper()
 	seen := map[calendar.Date]int{}
 	for _, p := range posted {
-		stored, err := ledger.New(cal).Transaction(t.Context(), testPool, entity, p.tx)
+		stored, err := testLedger().Transaction(t.Context(), testPool, entity, p.tx)
 		if err != nil || !stored.BusinessDate.Equal(dateOf(p.read)) {
 			t.Fatalf("transacción %s: fecha de negocio %v, había leído %v (%v)", p.tx, stored.BusinessDate, p.read, err)
 		}
@@ -259,6 +260,16 @@ func checkPostedOnTheDateRead(t *testing.T, entity ids.ID, posted []postedOn, at
 	}
 }
 
+// testLedger es el ledger sobre el calendario de las pruebas, con sus eventos al outbox; se crea la
+// primera vez, cuando ya hay base.
+var testLedger = sync.OnceValue(func() *ledger.Service {
+	events, err := outbox.New(testPool)
+	if err != nil {
+		panic(err)
+	}
+	return ledger.New(cal, events)
+})
+
 // postOn asienta dentro de tx un depósito con la fecha de negocio day, como lo hará un caso de uso.
 func postOn(t *testing.T, tx postgres.Tx, entity, cash, deposit ids.ID, day calendar.Date) (ids.ID, error) {
 	t.Helper()
@@ -266,7 +277,7 @@ func postOn(t *testing.T, tx postgres.Tx, entity, cash, deposit ids.ID, day cale
 	if err != nil {
 		return ids.ID{}, err
 	}
-	posting, err := ledger.New(cal).Post(t.Context(), tx, ledger.PostInput{
+	posting, err := testLedger().Post(t.Context(), tx, ledger.PostInput{
 		LegalEntityID: entity, Code: "deposito", ValueDate: dateOf(day), BusinessDate: dateOf(day),
 		Source: "test", ExternalRef: ids.New().String(), Actor: "tester", Channel: "test", RuleVersion: "v1",
 		Entries: []ledger.EntryInput{{AccountID: cash, Amount: money.New(100, cop)}, {AccountID: deposit, Amount: money.New(-100, cop)}},
@@ -285,7 +296,7 @@ func ledgerAccounts(t *testing.T, entity ids.ID) (cash, deposit ids.ID) {
 			id   *ids.ID
 			kind ledger.Kind
 		}{{&cash, ledger.KindAsset}, {&deposit, ledger.KindLiability}} {
-			created, err := ledger.New(cal).CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
+			created, err := testLedger().CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
 				LegalEntityID: entity, Code: "cta-" + ids.New().String(), Kind: a.kind, Currency: cop, Mode: ledger.BalanceModeSync,
 			})
 			if err != nil {

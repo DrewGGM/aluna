@@ -35,7 +35,7 @@ func postRef(t *testing.T, in ledger.PostInput) (posted ledger.Transaction, dupl
 	t.Helper()
 	err = postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
 		var postErr error
-		posted, postErr = svc.Post(t.Context(), tx, in)
+		posted, postErr = svc().Post(t.Context(), tx, in)
 		if duplicate = errors.Is(postErr, ledger.ErrDuplicateExternalRef); duplicate {
 			return nil
 		}
@@ -174,7 +174,7 @@ func postAndHold(t *testing.T, in ledger.PostInput) (int32, func(commit bool) (l
 	go func() {
 		done <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
 			var err error
-			if posted, err = svc.Post(t.Context(), tx, in); err != nil {
+			if posted, err = svc().Post(t.Context(), tx, in); err != nil {
 				return err
 			}
 			var pid int32

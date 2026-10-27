@@ -203,8 +203,13 @@ func runAPI(ctx context.Context, cfg apiConfig, log *slog.Logger) int {
 		return 1
 	}
 	defer pool.Close()
+	events, err := outbox.New(pool)
+	if err != nil {
+		log.Error("configurar el outbox", "error", err)
+		return 1
+	}
 	api := httpapi.API{
-		LedgerHandlers: httpapi.NewLedgerHandlers(ledger.New(calendar.New()), postgres.NewUnitOfWork(pool), idempotency.NewStore(pool), pool, cfg.entity),
+		LedgerHandlers: httpapi.NewLedgerHandlers(ledger.New(calendar.New(), events), postgres.NewUnitOfWork(pool), idempotency.NewStore(pool), pool, cfg.entity),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)
@@ -290,7 +295,7 @@ func newWorker(pool *pgxpool.Pool, log *slog.Logger) (*river.Client[pgx.Tx], err
 		return nil, err
 	}
 	cfg := jobs.Config(jobs.Deps{
-		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledger.New(calendar.New()), Idempotency: idempotency.NewStore(pool), Outbox: events,
+		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledger.New(calendar.New(), events), Idempotency: idempotency.NewStore(pool), Outbox: events,
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)

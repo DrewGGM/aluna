@@ -17,7 +17,7 @@ import (
 
 func aggregate(t *testing.T, batch int) int {
 	t.Helper()
-	n, err := svc.AggregateAsyncBalances(t.Context(), postgres.NewUnitOfWork(testPool), batch)
+	n, err := svc().AggregateAsyncBalances(t.Context(), postgres.NewUnitOfWork(testPool), batch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestAnOlderTransactionWithNewerEntriesIsAggregated(t *testing.T) {
 			_, err := tx.Exec(t.Context(), `SELECT pg_current_xact_id()`) // toma su xid ya
 			started <- err
 			<-release
-			_, err = svc.Post(t.Context(), tx, transfer(t, older.ID, clearing.ID, ids.New().String()))
+			_, err = svc().Post(t.Context(), tx, transfer(t, older.ID, clearing.ID, ids.New().String()))
 			return err
 		})
 	}()
@@ -166,7 +166,7 @@ func TestTheCursorOnlyMovesForward(t *testing.T) {
 }
 
 func TestAggregateRejectsAnEmptyBatch(t *testing.T) {
-	if _, err := svc.AggregateAsyncBalances(t.Context(), postgres.NewUnitOfWork(testPool), 0); err == nil {
+	if _, err := svc().AggregateAsyncBalances(t.Context(), postgres.NewUnitOfWork(testPool), 0); err == nil {
 		t.Fatal("un lote de 0 debe fallar: no avanzaría nunca")
 	}
 }

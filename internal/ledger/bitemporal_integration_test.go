@@ -12,7 +12,7 @@ import (
 
 func postedAsOf(t *testing.T, account ids.ID, at ledger.BalanceAsOf) int64 {
 	t.Helper()
-	posted, err := svc.PostedAsOf(t.Context(), testPool, account, at)
+	posted, err := svc().PostedAsOf(t.Context(), testPool, account, at)
 	if err != nil {
 		t.Fatal(err)
 	}

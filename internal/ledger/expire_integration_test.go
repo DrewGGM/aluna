@@ -17,7 +17,7 @@ func afterTheHolds() time.Time { return time.Now().Add(2 * time.Hour) }
 
 func expireDue(t *testing.T, now time.Time, batch int) int {
 	t.Helper()
-	n, err := svc.ExpireDueHolds(t.Context(), postgres.NewUnitOfWork(testPool), now, batch)
+	n, err := svc().ExpireDueHolds(t.Context(), postgres.NewUnitOfWork(testPool), now, batch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestAHoldIsNotDueAtItsExpiry(t *testing.T) {
 }
 
 func TestExpireDueHoldsRejectsAnEmptyBatch(t *testing.T) {
-	if _, err := svc.ExpireDueHolds(t.Context(), postgres.NewUnitOfWork(testPool), afterTheHolds(), 0); err == nil {
+	if _, err := svc().ExpireDueHolds(t.Context(), postgres.NewUnitOfWork(testPool), afterTheHolds(), 0); err == nil {
 		t.Fatal("un lote de 0 debe fallar: no avanzaría nunca")
 	}
 }

@@ -27,7 +27,7 @@ func tryReverse(t *testing.T, in ledger.ReverseInput) (ledger.Transaction, error
 	var reversal ledger.Transaction
 	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
 		var err error
-		reversal, err = svc.Reverse(t.Context(), tx, in)
+		reversal, err = svc().Reverse(t.Context(), tx, in)
 		return err
 	})
 	return reversal, err
@@ -58,7 +58,7 @@ func TestReverseUndoesATransaction(t *testing.T) {
 		t.Fatalf("saldos tras la reversa = %d y %d, se esperaban 0 y 0", pc, pd)
 	}
 	for _, posted := range []ledger.Transaction{original, reversal} { // sin metadata y con metadata
-		stored, err := svc.Transaction(t.Context(), testPool, entity, posted.ID)
+		stored, err := svc().Transaction(t.Context(), testPool, entity, posted.ID)
 		if err != nil || !reflect.DeepEqual(stored, posted) {
 			t.Fatalf("leída de la base = %+v (%v), se esperaba la misma que se asentó %+v", stored, err, posted)
 		}

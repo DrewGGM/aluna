@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
@@ -23,10 +25,16 @@ var testPool *pgxpool.Pool
 
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
-var (
-	svc    = ledger.New(calendar.New())
-	entity = ids.New()
-)
+var entity = ids.New()
+
+// svc es el ledger de las pruebas, con sus eventos al outbox; se crea la primera vez, cuando ya hay base.
+var svc = sync.OnceValue(func() *ledger.Service {
+	events, err := outbox.New(testPool)
+	if err != nil {
+		panic(err)
+	}
+	return ledger.New(calendar.New(), events)
+})
 
 func cop(t *testing.T) money.Currency {
 	t.Helper()
@@ -53,7 +61,7 @@ func tryCreateAccount(t *testing.T, in ledger.CreateAccountInput) (ledger.Accoun
 	var account ledger.Account
 	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
 		var err error
-		account, err = svc.CreateAccount(t.Context(), tx, in)
+		account, err = svc().CreateAccount(t.Context(), tx, in)
 		return err
 	})
 	return account, err
@@ -62,7 +70,7 @@ func tryCreateAccount(t *testing.T, in ledger.CreateAccountInput) (ledger.Accoun
 // move asienta units desde from (crédito) hacia to (débito) y devuelve el resultado de Post.
 func move(ctx context.Context, tx postgres.Tx, c money.Currency, to, from ids.ID, units int64, ref string) (ledger.Transaction, error) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	return svc.Post(ctx, tx, ledger.PostInput{
+	return svc().Post(ctx, tx, ledger.PostInput{
 		LegalEntityID: entity, Code: "test", ValueDate: today, BusinessDate: today,
 		Source: "test", ExternalRef: ref, Actor: "tester", Channel: "test", RuleVersion: "v1",
 		Entries: []ledger.EntryInput{
@@ -74,7 +82,7 @@ func move(ctx context.Context, tx postgres.Tx, c money.Currency, to, from ids.ID
 
 func postedOf(t *testing.T, account ids.ID) int64 {
 	t.Helper()
-	b, err := svc.Balance(t.Context(), testPool, account)
+	b, err := svc().Balance(t.Context(), testPool, account)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +115,7 @@ func TestPostUpdatesBalancesWithTheDatabaseClock(t *testing.T) {
 	if !stored.Equal(posted.PostedAt) || posted.PostedAt.Before(before.Add(-time.Minute)) {
 		t.Errorf("posted_at devuelto %v, guardado %v: debe venir de la base", posted.PostedAt, stored)
 	}
-	b, err := svc.Balance(t.Context(), testPool, cash.ID)
+	b, err := svc().Balance(t.Context(), testPool, cash.ID)
 	if err != nil || b.Version != 1 {
 		t.Errorf("version = %d (%v), se esperaba 1 tras un posting", b.Version, err)
 	}
@@ -259,10 +267,10 @@ func TestBalance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := svc.Balance(t.Context(), testPool, clearing.ID); err != nil {
+	if _, err := svc().Balance(t.Context(), testPool, clearing.ID); err != nil {
 		t.Errorf("una cuenta async también tiene saldo materializado: %v", err)
 	}
-	if _, err := svc.Balance(t.Context(), testPool, ids.New()); !errors.Is(err, ledger.ErrAccountNotFound) {
+	if _, err := svc().Balance(t.Context(), testPool, ids.New()); !errors.Is(err, ledger.ErrAccountNotFound) {
 		t.Errorf("error = %v, se esperaba ErrAccountNotFound para una cuenta que no existe", err)
 	}
 }

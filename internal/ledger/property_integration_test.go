@@ -322,7 +322,7 @@ func (m *ledgerModel) aggregateStep(rt *rapid.T) {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if _, err := svc.AggregateAsyncBalances(m.t.Context(), postgres.NewUnitOfWork(testPool), 100); err != nil {
+		if _, err := svc().AggregateAsyncBalances(m.t.Context(), postgres.NewUnitOfWork(testPool), 100); err != nil {
 			rt.Fatal(err)
 		}
 		lagging := 0

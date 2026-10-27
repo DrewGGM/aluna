@@ -1,0 +1,14 @@
+# Binarios
+/aluna
+/aluna.exe
+*.exe
+/bin/
+/dist/
+
+# Pruebas
+cover.out
+*.test
+
+# Entorno local
+.env*
+tmp/

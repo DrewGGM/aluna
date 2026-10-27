@@ -1,7 +1,8 @@
 version: "2"
 sql:
   - engine: postgresql
-    schema: migrations
+    # Solo las migraciones del ledger: con todo migrations/, sqlc generaría aquí los modelos de otros módulos.
+    schema: [migrations/0001_schemas.sql, migrations/0002_ledger.sql]
     queries: internal/ledger/internal/adapters/postgres/queries.sql
     gen:
       go:

@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
@@ -32,16 +33,24 @@ var testPool *pgxpool.Pool
 
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
-// apiServer levanta la API completa (middleware, código generado y handlers) de la entidad entity.
+// apiServer levanta la API completa (middleware, auditoría, código generado y handlers) de la entidad
+// entity.
 func apiServer(t *testing.T, entity ids.ID) *httptest.Server {
 	t.Helper()
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	events, err := outbox.New(testPool)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return apiServerWith(t, entity, events)
+}
+
+// apiServerWith es apiServer con los eventos del ledger en events.
+func apiServerWith(t *testing.T, entity ids.ID, events ledger.Events) *httptest.Server {
+	t.Helper()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(calendar.New(), events), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool, entity)}
-	ts := httptest.NewServer(NewServer(ServerConfig{}, Routes(api, log), log).Handler)
+	cfg := ServerConfig{Audit: &CommandAudit{Records: audit.New(), UoW: postgres.NewUnitOfWork(testPool)}}
+	ts := httptest.NewServer(NewServer(cfg, Routes(api, log), log).Handler)
 	t.Cleanup(ts.Close)
 	return ts
 }

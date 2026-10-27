@@ -209,12 +209,13 @@ func (l benchLedger) posting(rng *rand.Rand) []ledger.EntryInput {
 	return []ledger.EntryInput{entry(l.customers[from], 1000), entry(l.customers[to], -900), entry(l.settlement, -90), entry(l.revenue, -10)}
 }
 
-// postIdempotent asienta entries con las sentencias de idempotentCommands.run y underSavepoint
-// (internal/httpapi/idempotency.go) para un comando que pasa: reclamo de la clave, savepoint, Post y
-// respuesta guardada. Si ese camino suma una sentencia, hay que sumarla aquí; la huella, el scope y el
-// cuerpo se simplifican porque no cambian el SQL. La clave (también la referencia externa) es al azar, como
-// la de un cliente: una clave ordenada en el tiempo insertaría siempre al final de los índices. Cuenta
-// cada intento de la transacción: los que pasan de uno son reintentos de UnitOfWork.
+// postIdempotent asienta entries con las sentencias de commands.idempotent y underSavepoint
+// (internal/httpapi/idempotency.go) para un comando que pasa, en su orden: reclamo de la clave, savepoint,
+// Post, respuesta guardada y registro de auditoría. Si ese camino suma una sentencia, hay que sumarla
+// aquí; la huella, el scope, el cuerpo y el resumen se simplifican porque no cambian el SQL. La clave
+// (también la referencia externa) es al azar, como la de un cliente: una clave ordenada en el tiempo
+// insertaría siempre al final de los índices. Cuenta cada intento de la transacción: los que pasan de uno
+// son reintentos de UnitOfWork.
 func postIdempotent(ctx context.Context, uow *postgres.UnitOfWork, keys *idempotency.Store, entries []ledger.EntryInput, attempts *atomic.Int64) error {
 	key, today := crand.Text(), time.Now().UTC().Truncate(24*time.Hour)
 	in := ledger.PostInput{
@@ -227,7 +228,7 @@ func postIdempotent(ctx context.Context, uow *postgres.UnitOfWork, keys *idempot
 		if _, err := keys.Claim(ctx, tx, benchScope, key, hash); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, "SAVEPOINT idempotent_effect"); err != nil {
+		if _, err := tx.Exec(ctx, "SAVEPOINT command_effect"); err != nil {
 			return err
 		}
 		posted, err := svc().Post(ctx, tx, in)
@@ -238,7 +239,12 @@ func postIdempotent(ctx context.Context, uow *postgres.UnitOfWork, keys *idempot
 		if err != nil {
 			return err
 		}
-		return keys.Complete(ctx, tx, benchScope, key, 201, body)
+		if err := keys.Complete(ctx, tx, benchScope, key, 201, body); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO audit.records (actor, role, channel, ip, correlation_id, command, targets, result, after)
+			VALUES ('api', 'api', 'api', '127.0.0.1', $1, 'POST /v1/transactions', $2, 'ok', $3)`, key, []string{posted.ID.String()}, body)
+		return err
 	})
 }
 

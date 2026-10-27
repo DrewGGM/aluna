@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/postgres"
@@ -226,16 +227,18 @@ func TestAccountNotFoundIsStored(t *testing.T) {
 // TestAnUnexpectedErrorIsNotStored: un error que no es de negocio (un 500) sube tal cual y no se
 // guarda, así que el reintento con la misma clave ejecuta el comando.
 func TestAnUnexpectedErrorIsNotStored(t *testing.T) {
-	commands := idempotentCommands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool), entity: ids.New()}
-	op := idempotentOperation{method: http.MethodPost, path: "/prueba", success: http.StatusCreated}
+	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool), entity: ids.New()}
+	op := operation{method: http.MethodPost, path: "/prueba", success: http.StatusCreated}
 	key, down := ids.New().String(), errors.New("la base se cayó")
 	failing := func(postgres.Tx) (any, error) { return nil, down }
 	succeeding := func(postgres.Tx) (any, error) { return map[string]string{"ok": "sí"}, nil }
 
-	if _, err := commands.run(t.Context(), op, key, "cuerpo", failing); !errors.Is(err, down) {
+	ctx := withTestTrail(t)
+
+	if _, err := cmds.idempotent(ctx, op, key, "cuerpo", failing); !errors.Is(err, down) {
 		t.Fatalf("= %v; el error del comando debe subir tal cual", err)
 	}
-	resp, err := commands.run(t.Context(), op, key, "cuerpo", succeeding)
+	resp, err := cmds.idempotent(ctx, op, key, "cuerpo", succeeding)
 
 	if err != nil || resp.status != http.StatusCreated || string(resp.body) != "{\"ok\":\"sí\"}\n" {
 		t.Fatalf("reintento tras un 500 = %+v, %v; se esperaba que corriera el comando", resp, err)
@@ -323,4 +326,28 @@ func TestKeysAreScopedByEntity(t *testing.T) {
 			t.Fatalf("la misma clave en otra entidad = %d %s, se esperaba 201", r.status, r.body)
 		}
 	}
+}
+
+// TestACommandWithoutTrailFailsClosed: sin rastro de auditoría en el contexto, un comando no corre.
+func TestACommandWithoutTrailFailsClosed(t *testing.T) {
+	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool), entity: ids.New()}
+	op := operation{method: http.MethodPost, path: "/prueba", success: http.StatusCreated}
+	ran := false
+	effect := func(postgres.Tx) (any, error) { ran = true; return map[string]string{}, nil }
+
+	_, runErr := cmds.run(t.Context(), op, effect)
+	_, keyErr := cmds.idempotent(t.Context(), op, ids.New().String(), "cuerpo", effect)
+
+	if !errors.Is(runErr, errNoAuditTrail) || !errors.Is(keyErr, errNoAuditTrail) || ran {
+		t.Fatalf("sin rastro: run = %v, idempotent = %v, corrió el efecto: %v", runErr, keyErr, ran)
+	}
+}
+
+// withTestTrail es un contexto con el rastro de auditoría que pone withAudit, para correr un comando sin
+// pasar por el servidor.
+func withTestTrail(t *testing.T) context.Context {
+	t.Helper()
+	return context.WithValue(t.Context(), auditTrailKey{}, &auditTrail{records: audit.New(), base: audit.Record{
+		Actor: "prueba", Role: "prueba", Channel: "prueba", CorrelationID: ids.New().String(), Command: "POST /prueba",
+	}})
 }

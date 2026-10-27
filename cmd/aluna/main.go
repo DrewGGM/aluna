@@ -20,6 +20,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
+	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi"
 	"github.com/DrewGGM/aluna/internal/idempotency"
@@ -208,15 +209,17 @@ func runAPI(ctx context.Context, cfg apiConfig, log *slog.Logger) int {
 		log.Error("configurar el outbox", "error", err)
 		return 1
 	}
+	uow := postgres.NewUnitOfWork(pool)
 	api := httpapi.API{
-		LedgerHandlers: httpapi.NewLedgerHandlers(ledger.New(calendar.New(), events), postgres.NewUnitOfWork(pool), idempotency.NewStore(pool), pool, cfg.entity),
+		LedgerHandlers: httpapi.NewLedgerHandlers(ledger.New(calendar.New(), events), uow, idempotency.NewStore(pool), pool, cfg.entity),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)
 		defer cancel()
 		return pool.Ping(ctx)
 	}
-	return serveAPI(ctx, ln, httpapi.NewServer(httpapi.ServerConfig{Ready: ready}, httpapi.Routes(api, log), log), log)
+	serverCfg := httpapi.ServerConfig{Ready: ready, Audit: &httpapi.CommandAudit{Records: audit.New(), UoW: uow}}
+	return serveAPI(ctx, ln, httpapi.NewServer(serverCfg, httpapi.Routes(api, log), log), log)
 }
 
 // serveAPI sirve en ln hasta que ctx se cancela y luego espera hasta shutdownTimeout a que terminen

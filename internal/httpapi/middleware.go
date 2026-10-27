@@ -28,17 +28,17 @@ const (
 	requestIDChars  = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
 )
 
-// middleware envuelve h con la cadena común, del más externo al más interno. Un middleware nuevo se
-// agrega en esta lista con la forma func(http.Handler) http.Handler.
-func middleware(log *slog.Logger, h http.Handler) http.Handler {
-	chain := []func(http.Handler) http.Handler{
-		withRequestID,
-		withObservability(log),
-		withRecovery(log),
-		withBodyLimit,
-		withProblemForUnrouted,
-		withRoute,
+// middleware envuelve mux con la cadena común, del más externo al más interno. Un middleware nuevo se
+// agrega en esta lista con la forma func(http.Handler) http.Handler. La auditoría va antes de la
+// recuperación, para ver como 500 un comando que hizo panic; sin a, el servidor no tiene comandos que
+// auditar (solo los probes).
+func middleware(log *slog.Logger, mux *http.ServeMux, a *CommandAudit) http.Handler {
+	chain := []func(http.Handler) http.Handler{withRequestID, withObservability(log)}
+	if a != nil {
+		chain = append(chain, withAudit(a, mux, log))
 	}
+	chain = append(chain, withRecovery(log), withBodyLimit, withProblemForUnrouted, withRoute)
+	var h http.Handler = mux
 	for _, mw := range slices.Backward(chain) {
 		h = mw(h)
 	}

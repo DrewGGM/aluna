@@ -30,6 +30,7 @@ type Problem struct {
 
 // WriteProblem responde p como application/problem+json, completado para la ruta pedida.
 func WriteProblem(w http.ResponseWriter, r *http.Request, p Problem) {
+	noteRejection(r.Context(), p.Code)
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(p.Status)
 	json.NewEncoder(w).Encode(p.complete(r.Context(), r.URL.Path)) //nolint:errcheck,gosec // si el cliente cortó, no hay a quién responder; el log de acceso ya tiene el status

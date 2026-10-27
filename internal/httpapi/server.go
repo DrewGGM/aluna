@@ -43,6 +43,8 @@ const (
 type ServerConfig struct {
 	// Ready dice si el proceso puede atender tráfico (base de datos, dependencias). Nil es "listo".
 	Ready func(ctx context.Context) error
+	// Audit registra los comandos (POST); nil solo en un servidor sin rutas de comandos.
+	Audit *CommandAudit
 }
 
 // NewServer arma el servidor con /healthz, /readyz, las rutas que registra routes (puede ser nil) y
@@ -55,7 +57,7 @@ func NewServer(cfg ServerConfig, routes func(*http.ServeMux), log *slog.Logger) 
 		routes(mux)
 	}
 	return &http.Server{
-		Handler:           middleware(log, mux),
+		Handler:           middleware(log, mux, cfg.Audit),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

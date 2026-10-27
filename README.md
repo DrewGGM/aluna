@@ -10,21 +10,22 @@ En la tradición kogui y arhuaca de la Sierra Nevada de Santa Marta, *aluna* es 
 pensamiento y la memoria donde todo existe antes de existir. Un ledger es eso: la memoria completa e
 inmutable de cada movimiento de dinero.
 
-## Cómo funciona
+## Diseño
 
-Aluna es un **monolito modular hexagonal**: un solo binario, una base PostgreSQL por entidad regulada
+Así está diseñado Aluna; cada pieza llega en la etapa de la [hoja de ruta](#hoja-de-ruta) que se
+indica. Es un **monolito modular hexagonal**: un solo binario, una base PostgreSQL por entidad regulada
 y módulos con límites estrictos.
 
 - **Un módulo por contexto de negocio** en `internal/<módulo>/`. Cada uno expone una fachada; su
   dominio, casos de uso y adaptadores viven en `internal/<módulo>/internal/` y nadie más los importa.
 - **El dominio no depende de nada externo**: solo de la biblioteca estándar y de los tipos propios de
   dinero e identificadores. Los adaptadores (PostgreSQL, HTTP, rails de pago) se conectan por puertos.
-- **Un binario, varios procesos**: `aluna api`, `aluna worker` y `aluna migrate` son subcomandos del
-  mismo ejecutable.
+- **Un binario, varios procesos**: `aluna api` y `aluna migrate` (M0) y `aluna worker` (M2) serán
+  subcomandos del mismo ejecutable. Hoy existe `aluna version`.
 
-### Garantías del ledger
+### Garantías del ledger (M1)
 
-| Garantía | Cómo se cumple |
+| Garantía | Cómo se cumplirá |
 |---|---|
 | El dinero no se crea ni se destruye | Cada transacción suma cero por moneda; la base lo verifica con un trigger diferido |
 | Lo asentado no cambia | Los entries son *append-only*; una corrección es una reversa enlazada al original |
@@ -66,3 +67,7 @@ go test -race -count=1 ./...
 | M3 | Productos versionados, cuentas de depósito, interés, comisiones y GMF |
 | M4 | Screening SARLAFT, pagos salientes y entrantes, reconciliación |
 | M5 | Contabilidad proyectada a CUIF, cierre de periodo, extractos, webhooks, observabilidad |
+
+## Licencia
+
+[Apache License 2.0](LICENSE).

@@ -12,18 +12,32 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 )
 
+// ref es la clave de la unicidad de FR-11.
+type ref struct {
+	entity         ids.ID
+	source, extRef string
+}
+
 // fakeStore es un PostingStore y AccountWriter en memoria que registra qué se bloqueó y qué se escribió.
+// posted son las transacciones ya asentadas. Para simular a otro productor con la misma referencia,
+// whileLocking aparece al bloquear los saldos y whileInserting al insertar.
 type fakeStore struct {
-	accounts map[ids.ID]domain.Account
-	balances map[ids.ID]LockedBalance
-	locked   []ids.ID
-	inserted []TransactionRecord
-	entries  []domain.EntryInput
-	added    map[ids.ID]int64
+	accounts       map[ids.ID]domain.Account
+	balances       map[ids.ID]LockedBalance
+	posted         map[ref]Transaction
+	whileLocking   *Transaction
+	whileInserting *Transaction
+	locked         []ids.ID
+	inserted       []TransactionRecord
+	entries        []domain.EntryInput
+	added          map[ids.ID]int64
 }
 
 func newFakeStore(accounts ...domain.Account) *fakeStore {
-	s := &fakeStore{accounts: map[ids.ID]domain.Account{}, balances: map[ids.ID]LockedBalance{}, added: map[ids.ID]int64{}}
+	s := &fakeStore{
+		accounts: map[ids.ID]domain.Account{}, balances: map[ids.ID]LockedBalance{}, posted: map[ref]Transaction{},
+		added: map[ids.ID]int64{},
+	}
 	for _, a := range accounts {
 		s.accounts[a.ID] = a
 		s.balances[a.ID] = LockedBalance{}
@@ -48,6 +62,9 @@ func (s *fakeStore) Accounts(_ context.Context, accountIDs []ids.ID) (map[ids.ID
 
 func (s *fakeStore) LockBalances(_ context.Context, accountIDs []ids.ID) (map[ids.ID]LockedBalance, error) {
 	s.locked = append(s.locked, accountIDs...)
+	if s.whileLocking != nil {
+		s.posted[refOf(s.whileLocking.TransactionRecord)] = *s.whileLocking
+	}
 	found := map[ids.ID]LockedBalance{}
 	for _, id := range accountIDs {
 		if b, ok := s.balances[id]; ok {
@@ -57,14 +74,21 @@ func (s *fakeStore) LockBalances(_ context.Context, accountIDs []ids.ID) (map[id
 	return found, nil
 }
 
-func (s *fakeStore) InsertTransaction(_ context.Context, rec TransactionRecord) (time.Time, error) {
-	s.inserted = append(s.inserted, rec)
-	return time.Unix(1_800_000_000, 0), nil
+func refOf(rec TransactionRecord) ref { return ref{rec.LegalEntityID, rec.Source, rec.ExternalRef} }
+
+func (s *fakeStore) TransactionByRef(_ context.Context, entity ids.ID, source, extRef string) (Transaction, bool, error) {
+	t, ok := s.posted[ref{entity, source, extRef}]
+	return t, ok, nil
 }
 
-func (s *fakeStore) InsertEntries(_ context.Context, _ ids.ID, entries []domain.EntryInput) error {
+func (s *fakeStore) InsertTransaction(_ context.Context, rec TransactionRecord, entries []domain.EntryInput) (time.Time, error) {
+	if s.whileInserting != nil {
+		s.posted[refOf(rec)] = *s.whileInserting
+		return time.Time{}, ErrDuplicateExternalRef
+	}
+	s.inserted = append(s.inserted, rec)
 	s.entries = append(s.entries, entries...)
-	return nil
+	return time.Unix(1_800_000_000, 0), nil
 }
 
 func (s *fakeStore) AddToBalance(_ context.Context, accountID ids.ID, delta int64) error {
@@ -183,6 +207,55 @@ func TestPostRejectsBeforeWriting(t *testing.T) {
 			t.Fatalf("debe fallar sin escribir: error = %v, transacciones %d", err, len(store.inserted))
 		}
 	})
+}
+
+// TestPostReturnsTheOriginalOfARepeatedRef: con una referencia ya asentada, Post devuelve la original
+// con ErrDuplicateExternalRef y no escribe, también si ya no cabría (FR-11). Si ya estaba, ni bloquea
+// saldos. Si otro productor la asienta mientras se esperan los locks (y con eso ya no alcanza) o entre
+// los locks y el INSERT, Post la encuentra y tampoco escribe.
+func TestPostReturnsTheOriginalOfARepeatedRef(t *testing.T) {
+	cash, deposit := account(t, domain.KindAsset, domain.BalanceModeSync), account(t, domain.KindLiability, domain.BalanceModeSync)
+	in := input(entry(deposit, 100), entry(cash, -100)) // sin fondos: no debe importar
+	original := Transaction{TransactionRecord: TransactionRecord{
+		ID: ids.New(), LegalEntityID: in.LegalEntityID, Source: in.Source, ExternalRef: in.ExternalRef,
+	}}
+	cases := map[string]struct {
+		prepare    func(*fakeStore)
+		wantLocked bool
+	}{
+		"ya asentada":           {func(s *fakeStore) { s.posted[refOf(original.TransactionRecord)] = original }, false},
+		"asentada en los locks": {func(s *fakeStore) { s.whileLocking = &original }, true},
+		"asentada en el INSERT": {func(s *fakeStore) { // con fondos: la validación pasa y el INSERT descubre el repetido
+			s.whileInserting = &original
+			s.balances[cash.ID], s.balances[deposit.ID] = LockedBalance{Posted: 100}, LockedBalance{Posted: -100}
+		}, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := newFakeStore(cash, deposit)
+			tc.prepare(store)
+
+			got, err := Post(t.Context(), store, in)
+
+			if !errors.Is(err, ErrDuplicateExternalRef) || got.ID != original.ID {
+				t.Fatalf("= %s, %v; se esperaba la original %s con ErrDuplicateExternalRef", got.ID, err, original.ID)
+			}
+			if len(store.inserted) != 0 || len(store.added) != 0 || (len(store.locked) > 0) != tc.wantLocked {
+				t.Fatalf("un repetido no escribe: %d transacciones, deltas %v, bloqueó %v", len(store.inserted), store.added, store.locked)
+			}
+		})
+	}
+}
+
+func TestPostDoesNotTakeAnotherEntitysRefAsRepeated(t *testing.T) {
+	cash, deposit := account(t, domain.KindAsset, domain.BalanceModeSync), account(t, domain.KindLiability, domain.BalanceModeSync)
+	in := input(entry(cash, 100), entry(deposit, -100))
+	store := newFakeStore(cash, deposit)
+	store.posted[ref{ids.New(), in.Source, in.ExternalRef}] = Transaction{TransactionRecord: TransactionRecord{ID: ids.New()}}
+
+	if _, err := Post(t.Context(), store, in); err != nil || len(store.inserted) != 1 {
+		t.Fatalf("la misma referencia en otra entidad = %v, %d insertadas; se esperaba asentarla", err, len(store.inserted))
+	}
 }
 
 func TestPostValidatesTheHeader(t *testing.T) {

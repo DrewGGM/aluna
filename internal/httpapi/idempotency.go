@@ -89,7 +89,7 @@ func (c idempotentCommands) run(ctx context.Context, op idempotentOperation, key
 }
 
 // underSavepoint corre effect bajo un savepoint y lo vuelve la respuesta que se guarda. Un error de
-// negocio se deshace hasta ahí, también si la base abortó la transacción (un 23505), y su problem es la
+// negocio se deshace hasta ahí, también si la base abortó la transacción, y su problem es la
 // respuesta. Cualquier otro error, incluidos los conflictos que UnitOfWork reintenta, sube tal cual. El
 // cuerpo termina en '\n', como el de json.Encoder que usan el código generado y WriteProblem.
 func underSavepoint(ctx context.Context, tx postgres.Tx, op idempotentOperation, effect func(tx postgres.Tx) (any, error)) (storedResponse, error) {

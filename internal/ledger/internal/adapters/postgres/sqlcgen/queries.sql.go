@@ -212,6 +212,7 @@ const insertTransaction = `-- name: InsertTransaction :one
 INSERT INTO ledger.transactions
     (id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (legal_entity_id, source, external_ref) DO NOTHING
 RETURNING posted_at
 `
 
@@ -286,6 +287,23 @@ func (q *Queries) LockBalances(ctx context.Context, accountIds []ids.ID) ([]Lock
 		return nil, err
 	}
 	return items, nil
+}
+
+const transactionIDByRef = `-- name: TransactionIDByRef :one
+SELECT id FROM ledger.transactions WHERE legal_entity_id = $1 AND source = $2 AND external_ref = $3
+`
+
+type TransactionIDByRefParams struct {
+	LegalEntityID ids.ID
+	Source        string
+	ExternalRef   string
+}
+
+func (q *Queries) TransactionIDByRef(ctx context.Context, arg TransactionIDByRefParams) (ids.ID, error) {
+	row := q.db.QueryRow(ctx, transactionIDByRef, arg.LegalEntityID, arg.Source, arg.ExternalRef)
+	var id ids.ID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const transactionOfEntity = `-- name: TransactionOfEntity :one

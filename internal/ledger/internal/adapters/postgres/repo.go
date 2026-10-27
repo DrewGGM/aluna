@@ -90,18 +90,11 @@ func toAccount(r sqlcgen.LedgerAccount) (domain.Account, error) {
 	}, nil
 }
 
-var (
-	// ErrTransactionNotFound indica una transacción que no existe o que es de otra entidad legal.
-	ErrTransactionNotFound = errors.New("transacción no encontrada")
-	// ErrDuplicateExternalRef indica que la fuente ya asentó una transacción con esa referencia.
-	ErrDuplicateExternalRef = errors.New("la referencia externa ya se asentó")
-)
-
 // TransactionOf lee una transacción de la entidad con sus entries, en el orden en que se asentaron.
 func (s *Store) TransactionOf(ctx context.Context, entity, id ids.ID) (app.Transaction, error) {
 	r, err := s.q.TransactionOfEntity(ctx, sqlcgen.TransactionOfEntityParams{ID: id, LegalEntityID: entity})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return app.Transaction{}, fmt.Errorf("%w: %s", ErrTransactionNotFound, id)
+		return app.Transaction{}, fmt.Errorf("%w: %s", app.ErrTransactionNotFound, id)
 	}
 	if err != nil {
 		return app.Transaction{}, fmt.Errorf("leer la transacción: %w", err)
@@ -141,24 +134,44 @@ func (s *Store) LockBalances(ctx context.Context, accountIDs []ids.ID) (map[ids.
 	return balances, nil
 }
 
-// InsertTransaction inserta la cabecera y devuelve el posted_at que fijó la base.
-func (s *Store) InsertTransaction(ctx context.Context, rec app.TransactionRecord) (time.Time, error) {
+// TransactionByRef lee la transacción de la entidad con (source, ref), con sus entries; found dice si
+// la hay.
+func (s *Store) TransactionByRef(ctx context.Context, entity ids.ID, source, ref string) (app.Transaction, bool, error) {
+	id, err := s.q.TransactionIDByRef(ctx, sqlcgen.TransactionIDByRefParams{LegalEntityID: entity, Source: source, ExternalRef: ref})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.Transaction{}, false, nil
+	}
+	if err != nil {
+		return app.Transaction{}, false, fmt.Errorf("buscar la transacción por referencia: %w", err)
+	}
+	tx, err := s.TransactionOf(ctx, entity, id)
+	return tx, err == nil, err
+}
+
+// InsertTransaction inserta la cabecera y sus entries y devuelve el posted_at que fijó la base. Una
+// referencia repetida no se inserta (ON CONFLICT DO NOTHING): así la transacción de base sigue usable
+// para releer la original, sin el 23505 que la abortaría. Si otra transacción insertó la misma
+// referencia y no ha terminado, el INSERT la espera y decide según su commit o su rollback.
+func (s *Store) InsertTransaction(ctx context.Context, rec app.TransactionRecord, entries []domain.EntryInput) (time.Time, error) {
 	postedAt, err := s.q.InsertTransaction(ctx, sqlcgen.InsertTransactionParams{
 		ID: rec.ID, LegalEntityID: rec.LegalEntityID, Code: rec.Code, ValueDate: rec.ValueDate,
 		BusinessDate: rec.BusinessDate, Source: rec.Source, ExternalRef: rec.ExternalRef, Actor: rec.Actor,
 		Channel: rec.Channel, RuleVersion: rec.RuleVersion,
 	})
-	if isUniqueViolation(err, "transactions_idempotent_ref") {
-		return time.Time{}, fmt.Errorf("%w: %s/%s", ErrDuplicateExternalRef, rec.Source, rec.ExternalRef)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, fmt.Errorf("%w: %s/%s", app.ErrDuplicateExternalRef, rec.Source, rec.ExternalRef)
 	}
 	if err != nil {
 		return time.Time{}, fmt.Errorf("insertar la transacción: %w", err)
 	}
+	if err := s.insertEntries(ctx, rec.ID, entries); err != nil {
+		return time.Time{}, err
+	}
 	return postedAt, nil
 }
 
-// InsertEntries inserta los entries de la transacción txID en una sola sentencia.
-func (s *Store) InsertEntries(ctx context.Context, txID ids.ID, entries []domain.EntryInput) error {
+// insertEntries inserta los entries de la transacción txID en una sola sentencia.
+func (s *Store) insertEntries(ctx context.Context, txID ids.ID, entries []domain.EntryInput) error {
 	params := sqlcgen.InsertEntriesParams{
 		TransactionID: txID,
 		AccountIds:    make([]ids.ID, len(entries)),

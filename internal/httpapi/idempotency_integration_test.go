@@ -199,8 +199,8 @@ func TestInsufficientFundsIsStored(t *testing.T) {
 	}
 }
 
-// TestDuplicateExternalRefIsStored: también se guarda el 4xx que detecta la base abortando la
-// transacción (23505): el savepoint la recupera.
+// TestDuplicateExternalRefIsStored: una referencia que la entidad ya asentó, con otra clave, es 409
+// duplicate_external_ref, y esa respuesta se guarda.
 func TestDuplicateExternalRefIsStored(t *testing.T) {
 	ts, cash, deposit := newAccounts(t)
 	ref := ids.New().String()

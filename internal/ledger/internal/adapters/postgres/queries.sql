@@ -21,7 +21,11 @@ FOR UPDATE;
 INSERT INTO ledger.transactions
     (id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (legal_entity_id, source, external_ref) DO NOTHING
 RETURNING posted_at;
+
+-- name: TransactionIDByRef :one
+SELECT id FROM ledger.transactions WHERE legal_entity_id = $1 AND source = $2 AND external_ref = $3;
 
 -- Los entries no llevan entidad, fecha valor ni posted_at: los copia entries_stamp de la transacción.
 -- name: InsertEntries :exec

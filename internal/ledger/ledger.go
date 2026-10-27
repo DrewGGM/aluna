@@ -53,8 +53,8 @@ var (
 	ErrInvalidPosting       = app.ErrInvalidPosting
 	ErrCurrencyMismatch     = app.ErrCurrencyMismatch
 	ErrInvalidAccount       = app.ErrInvalidAccount
-	ErrTransactionNotFound  = pg.ErrTransactionNotFound
-	ErrDuplicateExternalRef = pg.ErrDuplicateExternalRef
+	ErrTransactionNotFound  = app.ErrTransactionNotFound
+	ErrDuplicateExternalRef = app.ErrDuplicateExternalRef
 )
 
 // NaturalBalance convierte un saldo con signo al de la naturaleza de la cuenta: un depósito de cliente
@@ -73,7 +73,9 @@ func (s *Service) CreateAccount(ctx context.Context, tx postgres.Tx, in CreateAc
 }
 
 // Post asienta una transacción balanceada dentro de tx: bloquea los saldos de sus cuentas sync, revisa
-// los límites y actualiza los saldos en la misma transacción de base.
+// los límites y actualiza los saldos en la misma transacción de base. Si la entidad ya asentó
+// (source, external_ref), devuelve esa transacción original con ErrDuplicateExternalRef y no escribe
+// nada: un productor interno que reintenta la toma como hecha.
 func (s *Service) Post(ctx context.Context, tx postgres.Tx, in PostInput) (Transaction, error) {
 	return app.Post(ctx, pg.NewStore(tx), in)
 }

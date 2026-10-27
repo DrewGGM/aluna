@@ -21,6 +21,11 @@ var (
 	ErrCurrencyMismatch = errors.New("el entry no está en la moneda de su cuenta")
 	// ErrInvalidPosting indica una cabecera de posting incompleta.
 	ErrInvalidPosting = errors.New("posting inválido")
+	// ErrTransactionNotFound indica una transacción que no existe o que es de otra entidad legal.
+	ErrTransactionNotFound = errors.New("transacción no encontrada")
+	// ErrDuplicateExternalRef indica que la fuente ya asentó una transacción con esa referencia: Post la
+	// devuelve junto con este error (FR-11).
+	ErrDuplicateExternalRef = errors.New("la referencia externa ya se asentó")
 )
 
 // PostInput es un posting: su cabecera y sus entries. Las fechas valen por su día calendario tal como
@@ -60,19 +65,29 @@ type LockedBalance struct {
 
 // PostingStore es la persistencia de Post, toda dentro de una misma transacción de base.
 type PostingStore interface {
+	// TransactionByRef devuelve la transacción de la entidad con (source, ref); found dice si hay.
+	TransactionByRef(ctx context.Context, entity ids.ID, source, ref string) (tx Transaction, found bool, err error)
 	Accounts(ctx context.Context, accountIDs []ids.ID) (map[ids.ID]domain.Account, error)
 	LockBalances(ctx context.Context, accountIDs []ids.ID) (map[ids.ID]LockedBalance, error)
-	InsertTransaction(ctx context.Context, rec TransactionRecord) (time.Time, error)
-	InsertEntries(ctx context.Context, txID ids.ID, entries []domain.EntryInput) error
+	// InsertTransaction inserta cabecera y entries, y devuelve el posted_at que fijó la base. Si la
+	// entidad ya tiene (source, external_ref), no inserta nada y devuelve ErrDuplicateExternalRef.
+	InsertTransaction(ctx context.Context, rec TransactionRecord, entries []domain.EntryInput) (time.Time, error)
 	AddToBalance(ctx context.Context, accountID ids.ID, delta int64) error
 }
 
 // Post valida la cabecera y la partida doble, bloquea los saldos de las cuentas sync, revisa que el
-// neto de cada cuenta quepa en ella y asienta transacción, entries y saldos.
+// neto de cada cuenta quepa en ella y asienta transacción, entries y saldos. Si la entidad ya asentó
+// (source, external_ref) devuelve esa transacción original con ErrDuplicateExternalRef y no escribe
+// nada (FR-11). El reintento de algo que ya pasó no debe fallar por un saldo que cambió después, así
+// que la referencia se busca antes de validar, otra vez si los fondos no alcanzan (ver available) y al
+// insertar, si otro productor la asentó sobre otras cuentas mientras tanto.
 func Post(ctx context.Context, store PostingStore, in PostInput) (Transaction, error) {
 	rec, err := recordOf(in)
 	if err != nil {
 		return Transaction{}, err
+	}
+	if original, found, err := originalOf(ctx, store, rec); found || err != nil {
+		return original, err
 	}
 	tx, err := domain.NewTransaction(domain.NewTransactionInput{ID: rec.ID, Entries: in.Entries})
 	if err != nil {
@@ -87,14 +102,42 @@ func Post(ctx context.Context, store PostingStore, in PostInput) (Transaction, e
 		return Transaction{}, err
 	}
 	syncIDs := syncAccounts(accounts)
-	if err := checkAvailable(ctx, store, accounts, syncIDs, deltas); err != nil {
+	if original, err := available(ctx, store, rec, accounts, syncIDs, deltas); err != nil {
+		return original, err
+	}
+	return write(ctx, store, rec, tx.Entries(), syncIDs, deltas)
+}
+
+// available bloquea los saldos y revisa que el neto quepa. Si no cabe, busca otra vez la referencia:
+// otro productor pudo asentarla sobre estas mismas cuentas mientras se esperaban sus locks, y con su
+// commit el saldo ya no alcanza para repetirla; entonces el posting es la original, no un sobregiro.
+// Cualquier otro error (un deadlock que aborta la transacción y UnitOfWork reintenta) sube tal cual.
+func available(ctx context.Context, store PostingStore, rec TransactionRecord, accounts map[ids.ID]domain.Account,
+	syncIDs []ids.ID, deltas map[ids.ID]money.Amount,
+) (Transaction, error) {
+	err := checkAvailable(ctx, store, accounts, syncIDs, deltas)
+	if !errors.Is(err, domain.ErrInsufficientFunds) {
 		return Transaction{}, err
 	}
-	postedAt, err := store.InsertTransaction(ctx, rec)
+	if original, found, lookupErr := originalOf(ctx, store, rec); found || lookupErr != nil {
+		return original, lookupErr
+	}
+	return Transaction{}, err
+}
+
+// write asienta la transacción ya validada y suma su neto a los saldos sync.
+func write(ctx context.Context, store PostingStore, rec TransactionRecord, entries []domain.EntryInput, syncIDs []ids.ID,
+	deltas map[ids.ID]money.Amount,
+) (Transaction, error) {
+	postedAt, err := store.InsertTransaction(ctx, rec, entries)
+	if errors.Is(err, ErrDuplicateExternalRef) {
+		original, found, lookupErr := originalOf(ctx, store, rec)
+		if !found && lookupErr == nil { // el conflicto prueba que existe: sin verla, se falla cerrado y no como repetido
+			lookupErr = fmt.Errorf("la referencia %s/%s chocó al insertar y no se ve la original", rec.Source, rec.ExternalRef)
+		}
+		return original, lookupErr
+	}
 	if err != nil {
-		return Transaction{}, err
-	}
-	if err := store.InsertEntries(ctx, tx.ID(), tx.Entries()); err != nil {
 		return Transaction{}, err
 	}
 	for _, id := range syncIDs {
@@ -102,7 +145,17 @@ func Post(ctx context.Context, store PostingStore, in PostInput) (Transaction, e
 			return Transaction{}, err
 		}
 	}
-	return Transaction{TransactionRecord: rec, PostedAt: postedAt, Entries: tx.Entries()}, nil
+	return Transaction{TransactionRecord: rec, PostedAt: postedAt, Entries: entries}, nil
+}
+
+// originalOf busca la transacción ya asentada con la referencia de rec. Si la hay (found), err es
+// ErrDuplicateExternalRef, que Post devuelve junto con ella.
+func originalOf(ctx context.Context, store PostingStore, rec TransactionRecord) (Transaction, bool, error) {
+	original, found, err := store.TransactionByRef(ctx, rec.LegalEntityID, rec.Source, rec.ExternalRef)
+	if err != nil || !found {
+		return Transaction{}, false, err
+	}
+	return original, true, fmt.Errorf("%w: %s/%s es la transacción %s", ErrDuplicateExternalRef, rec.Source, rec.ExternalRef, original.ID)
 }
 
 // recordOf valida la cabecera y la lleva a la forma que se persiste.

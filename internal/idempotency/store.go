@@ -30,7 +30,7 @@ var (
 )
 
 const (
-	// lockNotAvailable es el SQLSTATE de lock_timeout y de FOR UPDATE NOWAIT sobre una fila bloqueada.
+	// lockNotAvailable es el SQLSTATE de lock_timeout y de NOWAIT sobre una fila bloqueada.
 	lockNotAvailable = "55P03"
 	// purgeBatch acota cada DELETE de Purge para que quepa en el statement_timeout del pool.
 	purgeBatch = 10_000
@@ -71,10 +71,12 @@ func (s *Store) Claim(ctx context.Context, tx postgres.Tx, scope, key string, re
 	return stored(ctx, tx, scope, key, requestHash)
 }
 
-// stored lee la respuesta guardada de una clave que ya existe. FOR UPDATE NOWAIT no deja leer una fila
-// que otra transacción está borrando (una purga): la respuesta podría desaparecer con su commit. Una
-// fila que ya no está (la purga confirmó entre el INSERT y esta lectura) o que sigue in_progress (un
-// segundo Claim de la misma clave en la misma transacción) también es ErrInProgress.
+// stored lee la respuesta guardada de una clave que ya existe. FOR KEY SHARE NOWAIT no deja leer una
+// fila que otra transacción está borrando (una purga), porque la respuesta podría desaparecer con su
+// commit, pero sí deja que varios reintentos la lean a la vez: con FOR UPDATE, uno de ellos recibiría
+// 409 aunque la respuesta ya exista. Una fila que ya no está (la purga confirmó entre el INSERT y esta
+// lectura) o que sigue in_progress (un segundo Claim de la misma clave en la misma transacción)
+// también es ErrInProgress.
 func stored(ctx context.Context, tx postgres.Tx, scope, key string, requestHash [32]byte) (Claim, error) {
 	var (
 		hash   []byte
@@ -83,7 +85,7 @@ func stored(ctx context.Context, tx postgres.Tx, scope, key string, requestHash 
 		c      Claim
 	)
 	err := tx.QueryRow(ctx, `SELECT request_hash, status, response_code, response_body FROM infra.idempotency_keys
-		WHERE scope = $1 AND key = $2 FOR UPDATE NOWAIT`, scope, key).Scan(&hash, &status, &code, &c.Body)
+		WHERE scope = $1 AND key = $2 FOR KEY SHARE NOWAIT`, scope, key).Scan(&hash, &status, &code, &c.Body)
 	if isLockNotAvailable(err) || errors.Is(err, pgx.ErrNoRows) {
 		return Claim{}, ErrInProgress
 	}

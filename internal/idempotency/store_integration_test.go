@@ -342,22 +342,28 @@ func TestPurgeDeletesOnlyOlderKeys(t *testing.T) {
 }
 
 // TestPurgeSkipsLockedKeys: un reintento que tiene una clave bloqueada no hace fallar la purga del resto.
+// Con FOR KEY SHARE, el lock de un reintento que lee su respuesta (stored), la purga tampoco espera.
 func TestPurgeSkipsLockedKeys(t *testing.T) {
-	s, locked, free := NewStore(testPool), ids.New().String(), ids.New().String()
-	mustClaimFresh(t, s, locked, hashOf("a"), 201, `{}`)
-	mustClaimFresh(t, s, free, hashOf("a"), 201, `{}`)
-	unlock := lockRow(t, `SELECT 1 FROM infra.idempotency_keys WHERE key = $1 FOR UPDATE`, locked)
+	s := NewStore(testPool)
+	for _, lock := range []string{"FOR UPDATE", "FOR KEY SHARE"} {
+		t.Run(lock, func(t *testing.T) {
+			locked, free := ids.New().String(), ids.New().String()
+			mustClaimFresh(t, s, locked, hashOf("a"), 201, `{}`)
+			mustClaimFresh(t, s, free, hashOf("a"), 201, `{}`)
+			unlock := lockRow(t, `SELECT 1 FROM infra.idempotency_keys WHERE key = $1 `+lock, locked)
 
-	_, err := s.Purge(t.Context(), time.Now().Add(time.Hour))
-	unlock()
+			_, err := s.Purge(t.Context(), time.Now().Add(time.Hour))
+			unlock()
 
-	if err != nil {
-		t.Fatalf("Purge con una fila bloqueada = %v", err)
+			if err != nil {
+				t.Fatalf("Purge con una fila bloqueada = %v", err)
+			}
+			if c, err := claim(t.Context(), s, txScope, locked, hashOf("a"), 201, nil); err != nil || c.Fresh {
+				t.Errorf("la clave bloqueada debía quedar para la próxima purga: %+v, %v", c, err)
+			}
+			mustClaimFresh(t, s, free, hashOf("b"), 201, `{}`)
+		})
 	}
-	if c, err := claim(t.Context(), s, txScope, locked, hashOf("a"), 201, nil); err != nil || c.Fresh {
-		t.Errorf("la clave bloqueada debía quedar para la próxima purga: %+v, %v", c, err)
-	}
-	mustClaimFresh(t, s, free, hashOf("b"), 201, `{}`)
 }
 
 // TestPurgeDeletesMoreThanOneBatch: con más claves que un lote, Purge sigue hasta borrarlas todas.

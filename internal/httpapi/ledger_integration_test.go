@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
+	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/postgres"
@@ -30,7 +31,7 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 func apiServer(t *testing.T, entity ids.ID) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(), postgres.NewUnitOfWork(testPool), testPool, entity)}
+	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool, entity)}
 	ts := httptest.NewServer(NewServer(ServerConfig{}, Routes(api, log), log).Handler)
 	t.Cleanup(ts.Close)
 	return ts
@@ -44,6 +45,7 @@ func call(t *testing.T, ts *httptest.Server, method, path, body string, out any)
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", ids.New().String())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

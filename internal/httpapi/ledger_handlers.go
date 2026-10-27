@@ -8,6 +8,7 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
+	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
@@ -25,17 +26,21 @@ const (
 
 // LedgerHandlers implementa las operaciones del ledger del contrato (api/openapi.yaml).
 type LedgerHandlers struct {
-	ledger *ledger.Service
-	uow    *postgres.UnitOfWork
-	reader postgres.Querier
+	ledger   *ledger.Service
+	uow      *postgres.UnitOfWork
+	commands idempotentCommands
+	reader   postgres.Querier
 	// entity es la entidad legal del despliegue (un despliegue por entidad, ADR-0002); con
 	// autenticación vendrá del token (T-035).
 	entity ids.ID
 }
 
-// NewLedgerHandlers crea los handlers del ledger. reader sirve las lecturas fuera de transacción.
-func NewLedgerHandlers(l *ledger.Service, uow *postgres.UnitOfWork, reader postgres.Querier, entity ids.ID) *LedgerHandlers {
-	return &LedgerHandlers{ledger: l, uow: uow, reader: reader, entity: entity}
+// NewLedgerHandlers crea los handlers del ledger. keys guarda las respuestas de los comandos con
+// Idempotency-Key; reader sirve las lecturas fuera de transacción.
+func NewLedgerHandlers(l *ledger.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier, entity ids.ID) *LedgerHandlers {
+	return &LedgerHandlers{
+		ledger: l, uow: uow, commands: idempotentCommands{uow: uow, keys: keys, entity: entity}, reader: reader, entity: entity,
+	}
 }
 
 // CreateLedgerAccount crea una cuenta de la entidad del despliegue.
@@ -93,7 +98,8 @@ func (h *LedgerHandlers) GetLedgerAccountBalance(ctx context.Context, req gen.Ge
 	}, nil
 }
 
-// PostTransaction asienta una transacción manual de la entidad del despliegue.
+// PostTransaction asienta una transacción manual de la entidad del despliegue, una sola vez por
+// Idempotency-Key.
 func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransactionRequestObject) (gen.PostTransactionResponseObject, error) {
 	entries := make([]ledger.EntryInput, len(req.Body.Entries))
 	for i, e := range req.Body.Entries {
@@ -108,16 +114,17 @@ func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransa
 		BusinessDate: req.Body.BusinessDate.Time, Source: req.Body.Source, ExternalRef: req.Body.ExternalRef,
 		Actor: manualActor, Channel: manualChannel, RuleVersion: manualRuleVersion, Entries: entries,
 	}
-	var posted ledger.Transaction
-	err := h.uow.Do(ctx, func(tx postgres.Tx) error {
-		var err error
-		posted, err = h.ledger.Post(ctx, tx, in)
-		return err
+	resp, err := h.commands.run(ctx, postTransaction, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		posted, err := h.ledger.Post(ctx, tx, in)
+		if err != nil {
+			return nil, err
+		}
+		return toTransactionJSON(posted), nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return gen.PostTransaction201JSONResponse(toTransactionJSON(posted)), nil
+	return resp, nil
 }
 
 // GetTransaction lee una transacción de la entidad del despliegue.

@@ -160,6 +160,11 @@ type Transaction struct {
 // ID defines model for ID.
 type ID = openapi_types.UUID
 
+// PostTransactionParams defines parameters for PostTransaction.
+type PostTransactionParams struct {
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
 // CreateLedgerAccountJSONRequestBody defines body for CreateLedgerAccount for application/json ContentType.
 type CreateLedgerAccountJSONRequestBody = CreateLedgerAccount
 
@@ -179,7 +184,7 @@ type ServerInterface interface {
 	GetLedgerAccountBalance(w http.ResponseWriter, r *http.Request, id ID)
 	// PostTransaction Asentar una transacción balanceada
 	// (POST /v1/transactions)
-	PostTransaction(w http.ResponseWriter, r *http.Request)
+	PostTransaction(w http.ResponseWriter, r *http.Request, params PostTransactionParams)
 	// GetTransaction Leer una transacción
 	// (GET /v1/transactions/{id})
 	GetTransaction(w http.ResponseWriter, r *http.Request, id ID)
@@ -263,8 +268,39 @@ func (siw *ServerInterfaceWrapper) GetLedgerAccountBalance(w http.ResponseWriter
 // PostTransaction operation middleware
 func (siw *ServerInterfaceWrapper) PostTransaction(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PostTransactionParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.PostTransaction(w, r)
+		siw.Handler.PostTransaction(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -653,7 +689,8 @@ func (response GetLedgerAccountBalancedefaultApplicationProblemPlusJSONResponse)
 }
 
 type PostTransactionRequestObject struct {
-	Body *PostTransactionJSONRequestBody
+	Params PostTransactionParams
+	Body   *PostTransactionJSONRequestBody
 }
 
 type PostTransactionResponseObject interface {
@@ -974,8 +1011,10 @@ func (sh *strictHandler) GetLedgerAccountBalance(w http.ResponseWriter, r *http.
 }
 
 // PostTransaction operation middleware
-func (sh *strictHandler) PostTransaction(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) PostTransaction(w http.ResponseWriter, r *http.Request, params PostTransactionParams) {
 	var request PostTransactionRequestObject
+
+	request.Params = params
 
 	var body PostTransactionJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

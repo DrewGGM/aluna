@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/httpapi"
+	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/postgres"
@@ -185,7 +186,7 @@ func runAPI(ctx context.Context, cfg apiConfig, log *slog.Logger) int {
 	}
 	defer pool.Close()
 	api := httpapi.API{
-		LedgerHandlers: httpapi.NewLedgerHandlers(ledger.New(), postgres.NewUnitOfWork(pool), pool, cfg.entity),
+		LedgerHandlers: httpapi.NewLedgerHandlers(ledger.New(), postgres.NewUnitOfWork(pool), idempotency.NewStore(pool), pool, cfg.entity),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)

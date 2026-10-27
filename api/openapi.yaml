@@ -66,7 +66,17 @@ paths:
     post:
       operationId: postTransaction
       summary: Asentar una transacción balanceada
+      description: >-
+        Idempotente por `Idempotency-Key` (7 días): el mismo payload con la misma clave recibe la
+        respuesta original (también un 4xx de negocio) sin asentar otra vez; otro payload es 422
+        `idempotency_key_reused` y una solicitud que no ha terminado, 409 `request_in_progress`. Un
+        5xx no se guarda: se puede reintentar con la misma clave.
       x-aluna-permission: ledger.transactions.post
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 255}
       requestBody:
         required: true
         content:

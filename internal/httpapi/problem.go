@@ -1,13 +1,17 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/DrewGGM/aluna/internal/httpapi/gen"
+	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
 )
@@ -24,29 +28,46 @@ type Problem struct {
 	TraceID  string `json:"trace_id,omitempty"`
 }
 
-// WriteProblem responde p como application/problem+json. Un Type vacío es about:blank, un Instance
-// vacío es la ruta pedida y TraceID sale del span del request, si hay.
+// WriteProblem responde p como application/problem+json, completado para la ruta pedida.
 func WriteProblem(w http.ResponseWriter, r *http.Request, p Problem) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(p.Status)
+	json.NewEncoder(w).Encode(p.complete(r.Context(), r.URL.Path)) //nolint:errcheck,gosec // si el cliente cortó, no hay a quién responder; el log de acceso ya tiene el status
+}
+
+// complete llena lo que falta: un Type vacío es about:blank, un Instance vacío es path y TraceID sale
+// del span de ctx, si hay.
+func (p Problem) complete(ctx context.Context, path string) Problem {
 	if p.Type == "" {
 		p.Type = "about:blank"
 	}
 	if p.Instance == "" {
-		p.Instance = r.URL.Path
+		p.Instance = path
 	}
-	if sc := trace.SpanContextFromContext(r.Context()); sc.HasTraceID() {
+	if sc := trace.SpanContextFromContext(ctx); sc.HasTraceID() {
 		p.TraceID = sc.TraceID().String()
 	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(p.Status)
-	json.NewEncoder(w).Encode(p) //nolint:errcheck,gosec // si el cliente cortó, no hay a quién responder; el log de acceso ya tiene el status
+	return p
 }
 
 // requestError responde a un request que el código generado no pudo leer: un cuerpo que superó
-// maxBodyBytes (sin Content-Length lo corta withBodyLimit) es 413; el resto, 400.
+// maxBodyBytes (sin Content-Length lo corta withBodyLimit) es 413; una Idempotency-Key ausente o vacía
+// en un comando que mueve dinero (el código generado da RequiredHeaderError o InvalidParamFormatError),
+// 400 idempotency_key_required; el resto, 400 invalid_request.
 func requestError(w http.ResponseWriter, r *http.Request, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		WriteProblem(w, r, Problem{Title: "Cuerpo demasiado grande", Code: "body_too_large", Status: http.StatusRequestEntityTooLarge})
+		return
+	}
+	var missing *gen.RequiredHeaderError
+	var empty *gen.InvalidParamFormatError
+	if (errors.As(err, &missing) && missing.ParamName == "Idempotency-Key") ||
+		(errors.As(err, &empty) && empty.ParamName == "Idempotency-Key") {
+		WriteProblem(w, r, Problem{
+			Title: "Falta Idempotency-Key", Code: "idempotency_key_required", Status: http.StatusBadRequest,
+			Detail: "Un comando que mueve dinero exige la cabecera Idempotency-Key.",
+		})
 		return
 	}
 	WriteProblem(w, r, Problem{
@@ -82,6 +103,14 @@ var problems = []struct {
 	err error
 	p   Problem
 }{
+	// httpapi
+	{errInvalidIdempotencyKey, Problem{
+		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Idempotency-Key inválida",
+		Detail: fmt.Sprintf("La clave debe ser texto UTF-8 de hasta %d caracteres.", maxIdempotencyKey),
+	}},
+	// idempotency
+	{idempotency.ErrKeyReused, unprocessable("idempotency_key_reused", "La Idempotency-Key ya se usó con otro payload")},
+	{idempotency.ErrInProgress, Problem{Status: http.StatusConflict, Code: "request_in_progress", Title: "Hay una solicitud con la misma Idempotency-Key en curso"}},
 	// money
 	{money.ErrUnknownCurrency, unprocessable("unknown_currency", "Moneda no soportada")},
 	{money.ErrOverflow, unprocessable("amount_overflow", "El importe no cabe en el rango permitido")},

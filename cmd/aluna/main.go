@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/httpapi"
+	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
 // version se inyecta al compilar: go build -ldflags "-X main.version=1.2.3" ./cmd/aluna
@@ -27,8 +28,9 @@ var stderr io.Writer = os.Stderr
 const usage = `uso: aluna <comando>
 
 comandos:
-  api       sirve la API HTTP en ALUNA_HTTP_ADDR (por defecto :8080)
-  version   imprime la versión
+  api                        sirve la API HTTP en ALUNA_HTTP_ADDR (por defecto :8080)
+  migrate up|down|status     aplica, revierte la última o lista las migraciones en ALUNA_DATABASE_URL
+  version                    imprime la versión
 `
 
 // shutdownTimeout es lo máximo que se espera a que terminen los requests en curso al apagar.
@@ -40,15 +42,29 @@ func main() {
 
 // run ejecuta el subcomando indicado y devuelve el código de salida del proceso.
 func run(args []string, stdout io.Writer) int {
-	if len(args) != 1 {
+	if len(args) == 0 {
 		return printUsage()
 	}
-	switch args[0] {
+	command, rest := args[0], args[1:]
+	switch command {
 	case "api":
+		if len(rest) != 0 {
+			return printUsage()
+		}
 		return untilSignal(func(ctx context.Context) int {
 			return runAPI(ctx, envOr("ALUNA_HTTP_ADDR", ":8080"), slog.New(slog.NewJSONHandler(stdout, nil)))
 		})
+	case "migrate":
+		if len(rest) != 1 || !postgres.ValidDirection(rest[0]) {
+			return printUsage()
+		}
+		return untilSignal(func(ctx context.Context) int {
+			return exitCode(runMigrate(ctx, os.Getenv("ALUNA_DATABASE_URL"), rest[0], stdout))
+		})
 	case "version":
+		if len(rest) != 0 {
+			return printUsage()
+		}
 		if _, err := fmt.Fprintf(stdout, "aluna %s\n", version); err != nil {
 			return 1
 		}
@@ -56,6 +72,15 @@ func run(args []string, stdout io.Writer) int {
 	default:
 		return printUsage()
 	}
+}
+
+// exitCode imprime el error de un subcomando de una sola ejecución y lo convierte en código de salida.
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintln(stderr, err) //nolint:errcheck // si stderr falla no hay dónde reportarlo
+	return 1
 }
 
 func printUsage() int {
@@ -115,4 +140,17 @@ func serveAPI(ctx context.Context, ln net.Listener, log *slog.Logger) int {
 	}
 	log.Info("api detenida")
 	return 0
+}
+
+// runMigrate aplica direction sobre la base de dsn con la conexión propia de las migraciones.
+func runMigrate(ctx context.Context, dsn, direction string, out io.Writer) error {
+	if dsn == "" {
+		return errors.New("falta ALUNA_DATABASE_URL")
+	}
+	db, err := postgres.OpenForMigrations(dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close() //nolint:errcheck // el proceso termina enseguida
+	return postgres.Migrate(ctx, db, direction, out)
 }

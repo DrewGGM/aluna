@@ -42,9 +42,13 @@ func TestRunVersionInyectada(t *testing.T) {
 
 func TestRunSinComandoValidoImprimeUso(t *testing.T) {
 	casos := map[string][]string{
-		"sin argumentos":      nil,
-		"comando desconocido": {"fiar"},
-		"argumentos de más":   {"version", "extra"},
+		"sin argumentos":                nil,
+		"comando desconocido":           {"fiar"},
+		"argumentos de más":             {"version", "extra"},
+		"migrate sin dirección":         {"migrate"},
+		"migrate dirección inválida":    {"migrate", "sideways"},
+		"migrate con argumentos de más": {"migrate", "up", "extra"},
+		"api con argumentos":            {"api", "extra"},
 	}
 	for nombre, args := range casos {
 		t.Run(nombre, func(t *testing.T) {
@@ -163,5 +167,18 @@ func expectExit(t *testing.T, exit <-chan int, want int) {
 		}
 	case <-time.After(shutdownTimeout):
 		t.Fatalf("el apagado tardó más de %v", shutdownTimeout)
+	}
+}
+
+func TestMigrateNeedsDatabaseURL(t *testing.T) {
+	t.Setenv("ALUNA_DATABASE_URL", "")
+	defer func(w io.Writer) { stderr = w }(stderr)
+	var errOut bytes.Buffer
+	stderr = &errOut
+
+	code := run([]string{"migrate", "up"}, io.Discard)
+
+	if code != 1 || !strings.Contains(errOut.String(), "ALUNA_DATABASE_URL") {
+		t.Fatalf("código = %d, stderr = %q", code, errOut.String())
 	}
 }

@@ -54,7 +54,9 @@ type Account struct {
 // NaturalBalance convierte el saldo con signo (débito +, crédito −) al saldo en la naturaleza de la
 // cuenta: activos y gastos son de naturaleza débito; pasivos, patrimonio e ingresos, de crédito. Un
 // depósito de 100.000 pesos deja posted = -10_000_000 en la cuenta del cliente y su saldo natural es
-// 10_000_000. En una cuenta de crédito, posted = MinInt64 no tiene opuesto en int64.
+// 10_000_000. En una cuenta de crédito, posted = MinInt64 no tiene opuesto en int64. Una clase
+// desconocida se trata como de crédito; por eso CheckAvailable, que decide si el dinero se mueve, la
+// rechaza antes.
 func NaturalBalance(k Kind, posted int64) int64 {
 	if debit, _ := debitNormal(k); debit {
 		return posted

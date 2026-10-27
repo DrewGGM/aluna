@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -55,6 +56,24 @@ func TestNewTransaction(t *testing.T) {
 				t.Fatalf("transacción = %v %v", tx.ID(), tx.Entries())
 			}
 		})
+	}
+}
+
+// TestUnbalancedErrorNamesTheFirstCurrency fija el mensaje: con varias monedas descuadradas nombra la
+// primera en el orden de los entries, siempre la misma (logs y respuestas reproducibles).
+func TestUnbalancedErrorNamesTheFirstCurrency(t *testing.T) {
+	cop, usd := currency(t, "COP"), currency(t, "USD")
+	entries := []EntryInput{
+		{ids.New(), money.New(1, cop)},
+		{ids.New(), money.New(1, usd)},
+		{ids.New(), money.New(2, cop)},
+		{ids.New(), money.New(2, usd)},
+	}
+	for range 50 {
+		_, err := NewTransaction(NewTransactionInput{ID: ids.New(), Entries: entries})
+		if !errors.Is(err, ErrUnbalanced) || !strings.Contains(err.Error(), "COP suma 3") {
+			t.Fatalf("error = %v, se esperaba que nombrara COP", err)
+		}
 	}
 }
 

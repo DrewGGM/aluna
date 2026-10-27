@@ -23,6 +23,12 @@ type LedgerAccount struct {
 	CreatedAt     time.Time
 }
 
+type LedgerAsyncCursor struct {
+	Singleton  bool
+	PostedXact uint64
+	EntryID    int64
+}
+
 type LedgerBalance struct {
 	AccountID      ids.ID
 	Posted         int64
@@ -63,7 +69,7 @@ type LedgerTransaction struct {
 	ValueDate     time.Time
 	BusinessDate  time.Time
 	PostedAt      time.Time
-	PostedXact    pgtype.Uint64
+	PostedXact    uint64
 	Source        string
 	ExternalRef   string
 	Actor         string

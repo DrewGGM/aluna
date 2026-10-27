@@ -154,6 +154,31 @@ func (s *Service) ExpireDueHolds(ctx context.Context, uow *postgres.UnitOfWork, 
 	}
 }
 
+// AggregateAsyncBalances suma a los saldos de las cuentas async los entries que aún no agregó (FR-9),
+// en lotes de batch entries, cada uno en su propia transacción, hasta que uno sale incompleto. Devuelve
+// cuántos entries agregó, también cuando falla un lote (los anteriores ya quedaron confirmados).
+func (s *Service) AggregateAsyncBalances(ctx context.Context, uow *postgres.UnitOfWork, batch int) (int, error) {
+	if batch < 1 {
+		return 0, fmt.Errorf("lote de agregación %d: debe ser positivo", batch)
+	}
+	aggregated := 0
+	for {
+		var n int
+		err := uow.Do(ctx, func(tx postgres.Tx) error {
+			var err error
+			n, err = app.AggregateAsyncBalances(ctx, pg.NewStore(tx), batch)
+			return err
+		})
+		if err != nil {
+			return aggregated, err
+		}
+		aggregated += n
+		if n < batch {
+			return aggregated, nil
+		}
+	}
+}
+
 // Account lee una cuenta de la entidad: la de otra entidad no existe para ella. q puede ser el pool o
 // una Tx.
 func (s *Service) Account(ctx context.Context, q postgres.Querier, entity, id ids.ID) (Account, error) {

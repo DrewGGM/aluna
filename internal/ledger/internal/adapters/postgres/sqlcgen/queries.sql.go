@@ -105,6 +105,66 @@ func (q *Queries) AddToBalance(ctx context.Context, arg AddToBalanceParams) erro
 	return err
 }
 
+const asyncEntriesAfter = `-- name: AsyncEntriesAfter :many
+SELECT t.posted_xact, e.id, e.account_id, e.currency, e.amount
+FROM ledger.transactions t
+CROSS JOIN LATERAL (
+    SELECT id, account_id, currency, amount FROM ledger.entries WHERE transaction_id = t.id OFFSET 0
+) e
+JOIN ledger.accounts a ON a.id = e.account_id
+WHERE a.balance_mode = 'async'
+  AND t.posted_xact >= $1::xid8
+  AND (t.posted_xact > $1::xid8 OR e.id > $2::bigint)
+  AND t.posted_xact < pg_snapshot_xmin(pg_current_snapshot())
+ORDER BY t.posted_xact, e.id
+LIMIT $3::bigint
+`
+
+type AsyncEntriesAfterParams struct {
+	PostedXact uint64
+	EntryID    int64
+	Batch      int64
+}
+
+type AsyncEntriesAfterRow struct {
+	PostedXact uint64
+	ID         int64
+	AccountID  ids.ID
+	Currency   string
+	Amount     int64
+}
+
+// Entries de cuentas async después del cursor, en orden de (posted_xact, id), solo de transacciones de
+// base anteriores a la más vieja en curso: esas ya confirmaron o abortaron y no suman entries. Recorre
+// transactions por posted_xact y lee los entries de cada una por transaction_id: unidos directo, el
+// planner entra por la cuenta async y lee su historia completa en cada lote. OFFSET 0 impide que
+// aplane la subconsulta y vuelva a ese plan.
+func (q *Queries) AsyncEntriesAfter(ctx context.Context, arg AsyncEntriesAfterParams) ([]AsyncEntriesAfterRow, error) {
+	rows, err := q.db.Query(ctx, asyncEntriesAfter, arg.PostedXact, arg.EntryID, arg.Batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AsyncEntriesAfterRow
+	for rows.Next() {
+		var i AsyncEntriesAfterRow
+		if err := rows.Scan(
+			&i.PostedXact,
+			&i.ID,
+			&i.AccountID,
+			&i.Currency,
+			&i.Amount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const balance = `-- name: Balance :one
 SELECT posted, pending_debits, pending_credits, version FROM ledger.balances WHERE account_id = $1
 `
@@ -323,6 +383,23 @@ func (q *Queries) InsertTransaction(ctx context.Context, arg InsertTransactionPa
 	return posted_at, err
 }
 
+const lockAsyncCursor = `-- name: LockAsyncCursor :one
+SELECT posted_xact, entry_id FROM ledger.async_cursor FOR UPDATE
+`
+
+type LockAsyncCursorRow struct {
+	PostedXact uint64
+	EntryID    int64
+}
+
+// Serializa los agregadores: el segundo espera y, al bloquear, lee el cursor que dejó el primero.
+func (q *Queries) LockAsyncCursor(ctx context.Context) (LockAsyncCursorRow, error) {
+	row := q.db.QueryRow(ctx, lockAsyncCursor)
+	var i LockAsyncCursorRow
+	err := row.Scan(&i.PostedXact, &i.EntryID)
+	return i, err
+}
+
 const lockBalances = `-- name: LockBalances :many
 SELECT account_id, posted, pending_debits, pending_credits
 FROM ledger.balances
@@ -460,6 +537,20 @@ func (q *Queries) LockHold(ctx context.Context, arg LockHoldParams) (LockHoldRow
 		&i.ExpiresAt,
 	)
 	return i, err
+}
+
+const moveAsyncCursor = `-- name: MoveAsyncCursor :exec
+UPDATE ledger.async_cursor SET posted_xact = $1, entry_id = $2
+`
+
+type MoveAsyncCursorParams struct {
+	PostedXact uint64
+	EntryID    int64
+}
+
+func (q *Queries) MoveAsyncCursor(ctx context.Context, arg MoveAsyncCursorParams) error {
+	_, err := q.db.Exec(ctx, moveAsyncCursor, arg.PostedXact, arg.EntryID)
+	return err
 }
 
 const transactionIDByRef = `-- name: TransactionIDByRef :one

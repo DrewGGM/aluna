@@ -83,3 +83,29 @@ FOR UPDATE SKIP LOCKED;
 -- name: CloseHold :exec
 UPDATE ledger.holds SET status = @status, captured_amount = @captured_amount, capture_tx_id = @capture_tx_id
 WHERE id = @id;
+
+-- Serializa los agregadores: el segundo espera y, al bloquear, lee el cursor que dejó el primero.
+-- name: LockAsyncCursor :one
+SELECT posted_xact, entry_id FROM ledger.async_cursor FOR UPDATE;
+
+-- Entries de cuentas async después del cursor, en orden de (posted_xact, id), solo de transacciones de
+-- base anteriores a la más vieja en curso: esas ya confirmaron o abortaron y no suman entries. Recorre
+-- transactions por posted_xact y lee los entries de cada una por transaction_id: unidos directo, el
+-- planner entra por la cuenta async y lee su historia completa en cada lote. OFFSET 0 impide que
+-- aplane la subconsulta y vuelva a ese plan.
+-- name: AsyncEntriesAfter :many
+SELECT t.posted_xact, e.id, e.account_id, e.currency, e.amount
+FROM ledger.transactions t
+CROSS JOIN LATERAL (
+    SELECT id, account_id, currency, amount FROM ledger.entries WHERE transaction_id = t.id OFFSET 0
+) e
+JOIN ledger.accounts a ON a.id = e.account_id
+WHERE a.balance_mode = 'async'
+  AND t.posted_xact >= sqlc.arg(posted_xact)::xid8
+  AND (t.posted_xact > sqlc.arg(posted_xact)::xid8 OR e.id > sqlc.arg(entry_id)::bigint)
+  AND t.posted_xact < pg_snapshot_xmin(pg_current_snapshot())
+ORDER BY t.posted_xact, e.id
+LIMIT sqlc.arg(batch)::bigint;
+
+-- name: MoveAsyncCursor :exec
+UPDATE ledger.async_cursor SET posted_xact = @posted_xact, entry_id = @entry_id;

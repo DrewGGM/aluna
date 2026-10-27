@@ -282,7 +282,7 @@ func netByAccount(entries []domain.EntryInput) (map[ids.ID]money.Amount, error) 
 }
 
 // syncAccounts devuelve las cuentas sync. Las async no se bloquean ni se validan; su saldo lo agrega
-// otro proceso (T-023). El orden de los locks lo pone la consulta (ORDER BY account_id).
+// AggregateAsyncBalances. El orden de los locks lo pone la consulta (ORDER BY account_id).
 func syncAccounts(accounts map[ids.ID]domain.Account) []ids.ID {
 	var syncIDs []ids.ID
 	for id, a := range accounts {

@@ -325,3 +325,38 @@ func (s *Store) CloseHold(ctx context.Context, h app.Hold, captureTxID ids.ID) e
 	}
 	return nil
 }
+
+// LockAsyncCursor bloquea y lee el cursor del agregador.
+func (s *Store) LockAsyncCursor(ctx context.Context) (app.AsyncCursor, error) {
+	r, err := s.q.LockAsyncCursor(ctx)
+	if err != nil {
+		return app.AsyncCursor{}, fmt.Errorf("bloquear el cursor de agregación: %w", err)
+	}
+	return app.AsyncCursor{Xact: r.PostedXact, EntryID: r.EntryID}, nil
+}
+
+// AsyncEntriesAfter lee un lote de entries de cuentas async posteriores a c y el cursor del último.
+func (s *Store) AsyncEntriesAfter(ctx context.Context, c app.AsyncCursor, limit int) ([]domain.EntryInput, app.AsyncCursor, error) {
+	rows, err := s.q.AsyncEntriesAfter(ctx, sqlcgen.AsyncEntriesAfterParams{PostedXact: c.Xact, EntryID: c.EntryID, Batch: int64(limit)})
+	if err != nil {
+		return nil, c, fmt.Errorf("leer los entries async: %w", err)
+	}
+	entries := make([]domain.EntryInput, len(rows))
+	for i, r := range rows {
+		cur, err := money.CurrencyOf(r.Currency)
+		if err != nil {
+			return nil, c, fmt.Errorf("entry %d: %w", r.ID, err)
+		}
+		entries[i] = domain.EntryInput{AccountID: r.AccountID, Amount: money.New(r.Amount, cur)}
+		c = app.AsyncCursor{Xact: r.PostedXact, EntryID: r.ID}
+	}
+	return entries, c, nil
+}
+
+// MoveAsyncCursor deja el cursor en c.
+func (s *Store) MoveAsyncCursor(ctx context.Context, c app.AsyncCursor) error {
+	if err := s.q.MoveAsyncCursor(ctx, sqlcgen.MoveAsyncCursorParams{PostedXact: c.Xact, EntryID: c.EntryID}); err != nil {
+		return fmt.Errorf("mover el cursor de agregación: %w", err)
+	}
+	return nil
+}

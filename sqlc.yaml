@@ -12,6 +12,12 @@ sql:
         overrides:
           - db_type: uuid
             go_type: github.com/DrewGGM/aluna/internal/ids.ID
+          - db_type: uuid
+            nullable: true
+            go_type:
+              import: github.com/DrewGGM/aluna/internal/ids
+              type: ID
+              pointer: true
           - db_type: timestamptz
             go_type: time.Time
           - db_type: date

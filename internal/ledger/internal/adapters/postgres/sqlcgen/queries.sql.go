@@ -210,9 +210,10 @@ func (q *Queries) InsertEntries(ctx context.Context, arg InsertEntriesParams) er
 
 const insertTransaction = `-- name: InsertTransaction :one
 INSERT INTO ledger.transactions
-    (id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (legal_entity_id, source, external_ref) DO NOTHING
+    (id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version,
+     reverses_id, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT DO NOTHING
 RETURNING posted_at
 `
 
@@ -227,6 +228,8 @@ type InsertTransactionParams struct {
 	Actor         string
 	Channel       string
 	RuleVersion   string
+	ReversesID    *ids.ID
+	Metadata      []byte
 }
 
 func (q *Queries) InsertTransaction(ctx context.Context, arg InsertTransactionParams) (time.Time, error) {
@@ -241,6 +244,8 @@ func (q *Queries) InsertTransaction(ctx context.Context, arg InsertTransactionPa
 		arg.Actor,
 		arg.Channel,
 		arg.RuleVersion,
+		arg.ReversesID,
+		arg.Metadata,
 	)
 	var posted_at time.Time
 	err := row.Scan(&posted_at)
@@ -307,7 +312,8 @@ func (q *Queries) TransactionIDByRef(ctx context.Context, arg TransactionIDByRef
 }
 
 const transactionOfEntity = `-- name: TransactionOfEntity :one
-SELECT id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version, posted_at
+SELECT id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version,
+       reverses_id, metadata, posted_at
 FROM ledger.transactions
 WHERE id = $1 AND legal_entity_id = $2
 `
@@ -328,6 +334,8 @@ type TransactionOfEntityRow struct {
 	Actor         string
 	Channel       string
 	RuleVersion   string
+	ReversesID    *ids.ID
+	Metadata      []byte
 	PostedAt      time.Time
 }
 
@@ -345,6 +353,8 @@ func (q *Queries) TransactionOfEntity(ctx context.Context, arg TransactionOfEnti
 		&i.Actor,
 		&i.Channel,
 		&i.RuleVersion,
+		&i.ReversesID,
+		&i.Metadata,
 		&i.PostedAt,
 	)
 	return i, err

@@ -26,6 +26,8 @@ type (
 	CreateAccountInput = app.CreateAccountInput
 	// PostInput es un posting: cabecera y entries.
 	PostInput = app.PostInput
+	// ReverseInput pide revertir una transacción.
+	ReverseInput = app.ReverseInput
 	// Transaction es una transacción asentada: cabecera, posted_at de la base y entries.
 	Transaction = app.Transaction
 	// Balance es el saldo materializado de una cuenta, con signo.
@@ -55,6 +57,7 @@ var (
 	ErrInvalidAccount       = app.ErrInvalidAccount
 	ErrTransactionNotFound  = app.ErrTransactionNotFound
 	ErrDuplicateExternalRef = app.ErrDuplicateExternalRef
+	ErrAlreadyReversed      = app.ErrAlreadyReversed
 )
 
 // NaturalBalance convierte un saldo con signo al de la naturaleza de la cuenta: un depósito de cliente
@@ -78,6 +81,13 @@ func (s *Service) CreateAccount(ctx context.Context, tx postgres.Tx, in CreateAc
 // nada: un productor interno que reintenta la toma como hecha.
 func (s *Service) Post(ctx context.Context, tx postgres.Tx, in PostInput) (Transaction, error) {
 	return app.Post(ctx, pg.NewStore(tx), in)
+}
+
+// Reverse asienta dentro de tx la reversa de una transacción de la entidad: sus entries con el signo
+// contrario, sujetos a los mismos límites que un posting. Si ya tiene reversa, la devuelve con
+// ErrAlreadyReversed y no escribe nada.
+func (s *Service) Reverse(ctx context.Context, tx postgres.Tx, in ReverseInput) (Transaction, error) {
+	return app.Reverse(ctx, pg.NewStore(tx), in)
 }
 
 // Account lee una cuenta de la entidad: la de otra entidad no existe para ella. q puede ser el pool o

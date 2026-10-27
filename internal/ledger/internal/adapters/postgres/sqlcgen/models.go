@@ -55,6 +55,6 @@ type LedgerTransaction struct {
 	Actor         string
 	Channel       string
 	RuleVersion   string
-	ReversesID    pgtype.UUID
+	ReversesID    *ids.ID
 	Metadata      []byte
 }

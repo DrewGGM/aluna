@@ -19,9 +19,10 @@ FOR UPDATE;
 
 -- name: InsertTransaction :one
 INSERT INTO ledger.transactions
-    (id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (legal_entity_id, source, external_ref) DO NOTHING
+    (id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version,
+     reverses_id, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT DO NOTHING
 RETURNING posted_at;
 
 -- name: TransactionIDByRef :one
@@ -43,7 +44,8 @@ SELECT posted, pending_debits, pending_credits, version FROM ledger.balances WHE
 SELECT sqlc.embed(a) FROM ledger.accounts a WHERE a.id = @id AND a.legal_entity_id = @legal_entity_id;
 
 -- name: TransactionOfEntity :one
-SELECT id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version, posted_at
+SELECT id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version,
+       reverses_id, metadata, posted_at
 FROM ledger.transactions
 WHERE id = @id AND legal_entity_id = @legal_entity_id;
 

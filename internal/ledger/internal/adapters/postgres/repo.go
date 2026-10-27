@@ -6,6 +6,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -111,14 +112,30 @@ func (s *Store) TransactionOf(ctx context.Context, entity, id ids.ID) (app.Trans
 		}
 		entries[i] = domain.EntryInput{AccountID: e.AccountID, Amount: money.New(e.Amount, cur)}
 	}
-	return app.Transaction{
-		TransactionRecord: app.TransactionRecord{
-			ID: r.ID, LegalEntityID: r.LegalEntityID, Code: r.Code, ValueDate: r.ValueDate, BusinessDate: r.BusinessDate,
-			Source: r.Source, ExternalRef: r.ExternalRef, Actor: r.Actor, Channel: r.Channel, RuleVersion: r.RuleVersion,
-		},
-		PostedAt: r.PostedAt,
-		Entries:  entries,
-	}, nil
+	rec, err := recordOfRow(r)
+	if err != nil {
+		return app.Transaction{}, err
+	}
+	return app.Transaction{TransactionRecord: rec, PostedAt: r.PostedAt, Entries: entries}, nil
+}
+
+func recordOfRow(r sqlcgen.TransactionOfEntityRow) (app.TransactionRecord, error) {
+	var metadata map[string]string
+	if err := json.Unmarshal(r.Metadata, &metadata); err != nil {
+		return app.TransactionRecord{}, fmt.Errorf("metadata de %s: %w", r.ID, err)
+	}
+	if len(metadata) == 0 {
+		metadata = nil // como la escribió Post: lo leído es igual a lo que Post devolvió
+	}
+	rec := app.TransactionRecord{
+		ID: r.ID, LegalEntityID: r.LegalEntityID, Code: r.Code, ValueDate: r.ValueDate, BusinessDate: r.BusinessDate,
+		Source: r.Source, ExternalRef: r.ExternalRef, Actor: r.Actor, Channel: r.Channel, RuleVersion: r.RuleVersion,
+		Metadata: metadata,
+	}
+	if r.ReversesID != nil {
+		rec.ReversesID = *r.ReversesID
+	}
+	return rec, nil
 }
 
 // LockBalances bloquea (FOR UPDATE, en orden de account_id) y devuelve los saldos de accountIDs.
@@ -149,14 +166,27 @@ func (s *Store) TransactionByRef(ctx context.Context, entity ids.ID, source, ref
 }
 
 // InsertTransaction inserta la cabecera y sus entries y devuelve el posted_at que fijó la base. Una
-// referencia repetida no se inserta (ON CONFLICT DO NOTHING): así la transacción de base sigue usable
-// para releer la original, sin el 23505 que la abortaría. Si otra transacción insertó la misma
-// referencia y no ha terminado, el INSERT la espera y decide según su commit o su rollback.
+// referencia repetida no se inserta: así la transacción de base sigue usable para releer la original,
+// sin el 23505 que la abortaría. El ON CONFLICT no nombra columnas para cubrir también
+// transactions_single_reversal: dos reversas concurrentes de la misma transacción chocan en los dos
+// índices, y sin locks de saldo (cuentas async) la segunda vería el 23505 de ese. Si otra transacción
+// insertó la misma fila y no ha terminado, el INSERT la espera y decide según su commit o su rollback.
 func (s *Store) InsertTransaction(ctx context.Context, rec app.TransactionRecord, entries []domain.EntryInput) (time.Time, error) {
+	metadata := []byte("{}") // json.Marshal de un mapa nil da null, y la columna espera un objeto
+	if len(rec.Metadata) > 0 {
+		var err error
+		if metadata, err = json.Marshal(rec.Metadata); err != nil {
+			return time.Time{}, fmt.Errorf("metadata de la transacción: %w", err)
+		}
+	}
+	var reverses *ids.ID
+	if rec.ReversesID != (ids.ID{}) {
+		reverses = &rec.ReversesID
+	}
 	postedAt, err := s.q.InsertTransaction(ctx, sqlcgen.InsertTransactionParams{
 		ID: rec.ID, LegalEntityID: rec.LegalEntityID, Code: rec.Code, ValueDate: rec.ValueDate,
 		BusinessDate: rec.BusinessDate, Source: rec.Source, ExternalRef: rec.ExternalRef, Actor: rec.Actor,
-		Channel: rec.Channel, RuleVersion: rec.RuleVersion,
+		Channel: rec.Channel, RuleVersion: rec.RuleVersion, ReversesID: reverses, Metadata: metadata,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return time.Time{}, fmt.Errorf("%w: %s/%s", app.ErrDuplicateExternalRef, rec.Source, rec.ExternalRef)

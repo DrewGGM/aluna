@@ -29,7 +29,8 @@ var (
 )
 
 // PostInput es un posting: su cabecera y sus entries. Las fechas valen por su día calendario tal como
-// están escritas, sin importar la zona horaria del time.Time.
+// están escritas, sin importar la zona horaria del time.Time. ReversesID es la transacción que el
+// posting revierte (la pone Reverse); el valor cero es ninguna.
 type PostInput struct {
 	LegalEntityID           ids.ID
 	Code                    string
@@ -37,6 +38,8 @@ type PostInput struct {
 	Source, ExternalRef     string
 	Actor, Channel          string
 	RuleVersion             string
+	ReversesID              ids.ID
+	Metadata                map[string]string
 	Entries                 []domain.EntryInput
 }
 
@@ -49,6 +52,8 @@ type TransactionRecord struct {
 	Source, ExternalRef     string
 	Actor, Channel          string
 	RuleVersion             string
+	ReversesID              ids.ID // cero si no es una reversa
+	Metadata                map[string]string
 }
 
 // Transaction es una transacción asentada: su cabecera, el instante que fijó la base y sus entries.
@@ -176,11 +181,27 @@ func recordOf(in PostInput) (TransactionRecord, error) {
 	if in.ValueDate.IsZero() || in.BusinessDate.IsZero() {
 		return TransactionRecord{}, fmt.Errorf("%w: faltan las fechas", ErrInvalidPosting)
 	}
+	if err := checkReversalHeader(in); err != nil {
+		return TransactionRecord{}, err
+	}
 	return TransactionRecord{
 		ID: ids.New(), LegalEntityID: in.LegalEntityID, Code: in.Code,
 		ValueDate: civilDate(in.ValueDate), BusinessDate: civilDate(in.BusinessDate),
 		Source: in.Source, ExternalRef: in.ExternalRef, Actor: in.Actor, Channel: in.Channel, RuleVersion: in.RuleVersion,
+		ReversesID: in.ReversesID, Metadata: in.Metadata,
 	}, nil
+}
+
+// checkReversalHeader reserva la cabecera de las reversas: la fuente ledger.reversal va con ReversesID y
+// con la transacción revertida como referencia externa, y nada más la usa. Si no, un posting cualquiera
+// (también uno manual por la API) ocuparía el lugar de la reversa de otra transacción, y Reverse la daría
+// por revertida.
+func checkReversalHeader(in PostInput) error {
+	isReversal := in.ReversesID != (ids.ID{})
+	if isReversal != (in.Source == reversalSource) || (isReversal && in.ExternalRef != in.ReversesID.String()) {
+		return fmt.Errorf("%w: la fuente %s es solo de las reversas, con la transacción revertida como referencia", ErrInvalidPosting, reversalSource)
+	}
+	return nil
 }
 
 // civilDate conserva el día calendario de t como medianoche UTC: así la Transaction que devuelve Post

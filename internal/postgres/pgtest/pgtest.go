@@ -1,8 +1,8 @@
-//go:build integration
+//go:build integration || e2e
 
-// Package pgtest prepara la base de las pruebas de integración de un paquete. Cada paquete recibe una
-// base propia, recién migrada: en CI los paquetes corren en paralelo contra el mismo servidor y no
-// deben verse los datos ni las migraciones entre sí.
+// Package pgtest prepara la base de las pruebas de integración y E2E de un paquete. Cada paquete
+// recibe una base propia: en CI los paquetes corren en paralelo contra el mismo servidor y no deben
+// verse los datos ni las migraciones entre sí.
 package pgtest
 
 import (
@@ -46,8 +46,23 @@ func Run(m *testing.M, pool **pgxpool.Pool) int {
 
 // Start crea una base propia ya migrada y devuelve su DSN, con el usuario dueño de las tablas (no
 // aluna_app: quien la use no ejercita los GRANT), y la función que la borra. Es para pruebas que
-// arrancan el binario o necesitan el DSN en vez de un pool.
+// necesitan el DSN en vez de un pool.
 func Start(ctx context.Context) (string, func(), error) {
+	dsn, cleanup, err := StartEmpty(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := migrate(ctx, dsn); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return dsn, cleanup, nil
+}
+
+// StartEmpty es Start sin migrar, para cuando lo que se prueba es la migración misma. La función que
+// devuelve borra la base y detiene el contenedor aunque ctx ya esté cancelado, como pasa con
+// t.Context() en t.Cleanup.
+func StartEmpty(ctx context.Context) (string, func(), error) {
 	serverDSN, stop, err := server(ctx)
 	if err != nil {
 		return "", nil, err
@@ -57,6 +72,7 @@ func Start(ctx context.Context) (string, func(), error) {
 		stop()
 		return "", nil, err
 	}
+	ctx = context.WithoutCancel(ctx)
 	return db.dsn, func() { db.drop(ctx); stop() }, nil
 }
 
@@ -71,7 +87,7 @@ func server(ctx context.Context) (string, func(), error) {
 		return "", nil, fmt.Errorf("levantar PostgreSQL: %w", err)
 	}
 	stop := func() {
-		if err := container.Terminate(ctx); err != nil {
+		if err := container.Terminate(context.WithoutCancel(ctx)); err != nil {
 			fmt.Fprintln(os.Stderr, "pgtest: detener el contenedor (Ryuk lo recoge):", err)
 		}
 	}
@@ -87,7 +103,7 @@ type database struct {
 	name, serverDSN, dsn string
 }
 
-// createDatabase crea una base con nombre aleatorio (solo [a-z2-7]: no admite inyección) y la migra.
+// createDatabase crea una base vacía con nombre aleatorio (solo [a-z2-7]: no admite inyección).
 func createDatabase(ctx context.Context, serverDSN string) (*database, error) {
 	db := &database{name: "aluna_test_" + strings.ToLower(rand.Text()), serverDSN: serverDSN}
 	var err error
@@ -96,10 +112,6 @@ func createDatabase(ctx context.Context, serverDSN string) (*database, error) {
 	}
 	if err := db.exec(ctx, "CREATE DATABASE "+db.name); err != nil {
 		return nil, fmt.Errorf("crear la base %s: %w", db.name, err)
-	}
-	if err := migrate(ctx, db.dsn); err != nil {
-		db.drop(ctx)
-		return nil, err
 	}
 	return db, nil
 }

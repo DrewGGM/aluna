@@ -139,7 +139,10 @@ type Problem struct {
 	Instance string  `json:"instance"`
 	Status   int     `json:"status"`
 	Title    string  `json:"title"`
-	Type     string  `json:"type"`
+
+	// TraceId Traza del request (W3C), para buscarla en los logs y en el backend de trazas.
+	TraceId *string `json:"trace_id,omitempty"`
+	Type    string  `json:"type"`
 }
 
 // Transaction defines model for Transaction.

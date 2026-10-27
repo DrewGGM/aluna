@@ -19,6 +19,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/telemetry"
 )
 
 // version se inyecta al compilar: go build -ldflags "-X main.version=1.2.3" ./cmd/aluna
@@ -31,7 +32,8 @@ const usage = `uso: aluna <comando>
 
 comandos:
   api                        sirve la API HTTP en ALUNA_HTTP_ADDR (por defecto :8080); necesita
-                             ALUNA_DATABASE_URL y ALUNA_LEGAL_ENTITY_ID
+                             ALUNA_DATABASE_URL y ALUNA_LEGAL_ENTITY_ID; con
+                             OTEL_EXPORTER_OTLP_ENDPOINT exporta trazas y métricas por OTLP
   migrate up|down|status     aplica, revierte la última o lista las migraciones en ALUNA_DATABASE_URL
   version                    imprime la versión
 `
@@ -105,15 +107,30 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// apiCommand lee la configuración del entorno y corre la api; los logs van en JSON a stdout.
+// apiCommand lee la configuración del entorno, prepara la telemetría y corre la api; los logs van en
+// JSON a stdout.
 func apiCommand(ctx context.Context, stdout io.Writer) int {
-	log := slog.New(slog.NewJSONHandler(stdout, nil))
+	log, shutdown, err := telemetry.Setup(ctx, "aluna", version, stdout)
+	if err != nil {
+		return exitCode(fmt.Errorf("telemetría: %w", err))
+	}
+	defer flushTelemetry(ctx, shutdown, log)
 	cfg, err := apiConfigFromEnv()
 	if err != nil {
 		log.Error("configuración de la api", "error", err)
 		return 1
 	}
 	return runAPI(ctx, cfg, log)
+}
+
+// flushTelemetry envía lo que quede de trazas y métricas antes de salir, sin esperar más de
+// telemetryFlushTimeout a un colector que no responde.
+func flushTelemetry(ctx context.Context, shutdown telemetry.Shutdown, log *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), telemetryFlushTimeout)
+	defer cancel()
+	if err := shutdown(ctx); err != nil {
+		log.Error("vaciar la telemetría", "error", err)
+	}
 }
 
 // apiConfig es la configuración de aluna api. Un despliegue sirve a una sola entidad regulada
@@ -141,6 +158,9 @@ var errNoDatabaseURL = errors.New("falta ALUNA_DATABASE_URL")
 // connectTimeout acota la conexión inicial: si la base no responde, el proceso falla en vez de dejar el
 // puerto abierto sin servir.
 const connectTimeout = 10 * time.Second
+
+// telemetryFlushTimeout acota el envío final de trazas y métricas al apagar.
+const telemetryFlushTimeout = 5 * time.Second
 
 // readyTimeout acota el ping de /readyz: un probe no debe colgarse si la base no responde.
 const readyTimeout = 2 * time.Second

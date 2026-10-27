@@ -5,13 +5,28 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/DrewGGM/aluna/internal/telemetry"
 )
 
 func newTestServer(t *testing.T, cfg ServerConfig, routes func(*http.ServeMux)) (*http.Server, *bytes.Buffer) {
@@ -310,5 +325,112 @@ func TestUnroutedRequestsGetProblems(t *testing.T) {
 				t.Fatal("el 405 debe conservar el encabezado Allow")
 			}
 		})
+	}
+}
+
+// recordTelemetry deja trazas y métricas en memoria durante la prueba.
+func recordTelemetry(t *testing.T) (*tracetest.SpanRecorder, *sdkmetric.ManualReader) {
+	t.Helper()
+	spans, reader := tracetest.NewSpanRecorder(), sdkmetric.NewManualReader()
+	tracer, meter, propagator, handler := otel.GetTracerProvider(), otel.GetMeterProvider(), otel.GetTextMapPropagator(), otel.GetErrorHandler()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans)))
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(tracer)
+		otel.SetMeterProvider(meter)
+		otel.SetTextMapPropagator(propagator)
+		otel.SetErrorHandler(handler)
+	})
+	return spans, reader
+}
+
+// durationPoints devuelve los puntos de http.server.request.duration.
+func durationPoints(t *testing.T, reader *sdkmetric.ManualReader) []metricdata.HistogramDataPoint[float64] {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if h, ok := m.Data.(metricdata.Histogram[float64]); ok && m.Name == "http.server.request.duration" && m.Unit == "s" {
+				return h.DataPoints
+			}
+		}
+	}
+	t.Fatalf("no se registró http.server.request.duration en segundos: %+v", rm)
+	return nil
+}
+
+func TestTelemetryPerRequest(t *testing.T) {
+	spans, reader := recordTelemetry(t)
+	srv, _ := newTestServer(t, ServerConfig{}, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /recurso/{id}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+		mux.HandleFunc("GET /falla", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) })
+	})
+	serve(srv, httptest.NewRequest(http.MethodGet, "/recurso/7", nil))
+	serve(srv, httptest.NewRequest(http.MethodGet, "/recurso/8", nil))
+	serve(srv, httptest.NewRequest(http.MethodGet, "/falla", nil))
+	serve(srv, httptest.NewRequest("INVENTADO", "/nada", nil))
+
+	ended := spans.Ended()
+	names := make([]string, len(ended))
+	for i, s := range ended {
+		names[i] = s.Name()
+	}
+	if want := []string{"GET /recurso/{id}", "GET /recurso/{id}", "GET /falla", "HTTP"}; !slices.Equal(names, want) {
+		t.Errorf("nombres de los spans = %q, se esperaba %q", names, want)
+	}
+	if ended[0].SpanKind() != trace.SpanKindServer || ended[2].Status().Code != codes.Error || ended[0].Status().Code == codes.Error {
+		t.Errorf("tipo o estado de los spans: %v %v %v", ended[0].SpanKind(), ended[0].Status(), ended[2].Status())
+	}
+	got := map[string]uint64{}
+	for _, p := range durationPoints(t, reader) {
+		route, _ := p.Attributes.Value(semconv.HTTPRouteKey)
+		method, _ := p.Attributes.Value(semconv.HTTPRequestMethodKey)
+		status, _ := p.Attributes.Value(semconv.HTTPResponseStatusCodeKey)
+		got[fmt.Sprintf("%s %s %d", method.AsString(), route.AsString(), status.AsInt64())] = p.Count
+	}
+	want := map[string]uint64{"GET /recurso/{id} 418": 2, "GET /falla 502": 1, "_OTHER  404": 1}
+	if !maps.Equal(got, want) {
+		t.Errorf("series del histograma = %v, se esperaba %v", got, want)
+	}
+}
+
+// TestTraceContinuesAndReachesLogsAndProblems: el span continúa el traceparent del cliente y su
+// trace_id llega al log de acceso y al problem.
+func TestTraceContinuesAndReachesLogsAndProblems(t *testing.T) {
+	recordTelemetry(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "") // Setup solo arma el logger: no toca los providers de la prueba
+	var logs bytes.Buffer
+	log, _, err := telemetry.Setup(t.Context(), "aluna", "test", &logs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(ServerConfig{}, nil, log)
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	req := httptest.NewRequest(http.MethodGet, "/no-existe", nil)
+	req.Header.Set("traceparent", "00-"+traceID+"-00f067aa0ba902b7-01")
+
+	rec := serve(srv, req)
+
+	if p := decodeProblem(t, rec); p["trace_id"] != traceID {
+		t.Errorf("trace_id del problem = %v, se esperaba %s", p["trace_id"], traceID)
+	}
+	if !strings.Contains(logs.String(), `"trace_id":"`+traceID+`"`) {
+		t.Errorf("el log de acceso no lleva el trace_id: %s", logs.String())
+	}
+}
+
+func TestProbesLogAtDebug(t *testing.T) {
+	var logs bytes.Buffer
+	srv := NewServer(ServerConfig{}, nil, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	serve(srv, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	serve(srv, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if got := strings.Count(logs.String(), `"level":"DEBUG","msg":"request"`); got != 2 || strings.Contains(logs.String(), `"INFO"`) {
+		t.Errorf("los dos probes deben salir en Debug y nada en Info: %s", logs.String())
 	}
 }

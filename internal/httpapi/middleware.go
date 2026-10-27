@@ -11,6 +11,14 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -25,10 +33,11 @@ const (
 func middleware(log *slog.Logger, h http.Handler) http.Handler {
 	chain := []func(http.Handler) http.Handler{
 		withRequestID,
-		withAccessLog(log),
+		withObservability(log),
 		withRecovery(log),
 		withBodyLimit,
 		withProblemForUnrouted,
+		withRoute,
 	}
 	for _, mw := range slices.Backward(chain) {
 		h = mw(h)
@@ -98,26 +107,134 @@ func (s *statusRecorder) code() int {
 	return s.status
 }
 
-// withAccessLog escribe una línea por request, también si el request termina en un panic que aborta
-// la conexión. Registra la ruta sin el query string, que puede traer datos personales.
-func withAccessLog(log *slog.Logger) func(http.Handler) http.Handler {
+// instrumentation nombra el origen de las trazas y métricas HTTP.
+const instrumentation = "github.com/DrewGGM/aluna/internal/httpapi"
+
+// durationBuckets son los límites (en segundos) que recomiendan las convenciones semánticas para
+// http.server.request.duration.
+var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10}
+
+// observability mide cada request una sola vez, también si termina en un panic que aborta la
+// conexión: un span de servidor que continúa el traceparent del cliente, el histograma
+// http.server.request.duration y la línea del log de acceso, con el mismo status y la misma duración.
+type observability struct {
+	log      *slog.Logger
+	tracer   trace.Tracer
+	duration metric.Float64Histogram
+}
+
+func withObservability(log *slog.Logger) func(http.Handler) http.Handler {
+	duration, err := otel.Meter(instrumentation).Float64Histogram("http.server.request.duration",
+		metric.WithUnit("s"), metric.WithDescription("Duración de los requests HTTP."),
+		metric.WithExplicitBucketBoundaries(durationBuckets...))
+	if err != nil {
+		otel.Handle(err)
+	}
+	o := observability{log: log, tracer: otel.Tracer(instrumentation), duration: duration}
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rec := &statusRecorder{ResponseWriter: w}
-			defer logRequest(log, r, rec, time.Now())
-			next.ServeHTTP(rec, r)
-		})
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { o.serve(next, w, r) })
 	}
 }
 
-func logRequest(log *slog.Logger, r *http.Request, rec *statusRecorder, start time.Time) {
-	log.LogAttrs(r.Context(), slog.LevelInfo, "request",
+func (o observability) serve(next http.Handler, w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := o.tracer.Start(ctx, spanName(methodOf(r), ""), trace.WithSpanKind(trace.SpanKindServer))
+	route := new(string)
+	r = r.WithContext(context.WithValue(ctx, routeKey{}, route))
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() { o.finish(span, r, *route, rec.code(), time.Since(start)) }()
+	next.ServeHTTP(rec, r)
+}
+
+// finish cierra el span, registra la duración y escribe el log de acceso. route es el patrón del mux
+// sin el método, no la URL, para que los ids no multipliquen las series; vacía si el mux no encontró
+// ruta (404, 405). El log registra la ruta sin el query string, que puede traer datos personales, y
+// los probes van en Debug porque el orquestador los llama cada pocos segundos.
+func (o observability) finish(span trace.Span, r *http.Request, route string, status int, elapsed time.Duration) {
+	method := methodOf(r)
+	attrs := []attribute.KeyValue{
+		semconv.HTTPRequestMethodKey.String(method), semconv.HTTPResponseStatusCode(status), semconv.URLScheme(schemeOf(r)),
+	}
+	if route != "" {
+		attrs = append(attrs, semconv.HTTPRoute(route))
+		span.SetName(spanName(method, route))
+	}
+	o.duration.Record(r.Context(), elapsed.Seconds(), metric.WithAttributes(attrs...))
+	span.SetAttributes(attrs...)
+	if status >= http.StatusInternalServerError {
+		span.SetStatus(codes.Error, "")
+	}
+	span.End()
+
+	level := slog.LevelInfo
+	if r.URL.Path == pathHealthz || r.URL.Path == pathReadyz {
+		level = slog.LevelDebug
+	}
+	o.log.LogAttrs(r.Context(), level, "request",
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
-		slog.Int("status", rec.code()),
-		slog.Float64("duration_ms", float64(time.Since(start).Microseconds())/1000),
+		slog.Int("status", status),
+		slog.Float64("duration_ms", float64(elapsed.Microseconds())/1000),
 		slog.String("request_id", requestIDFrom(r.Context())),
 	)
+}
+
+// routeKey guarda en el contexto dónde withRoute deja el patrón que eligió el mux.
+type routeKey struct{}
+
+// withRoute va justo antes del mux: el mux escribe r.Pattern en el request que recibe, y los
+// middlewares de afuera pueden haber reemplazado el suyo con r.WithContext.
+func withRoute(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if route, ok := r.Context().Value(routeKey{}).(*string); ok {
+				*route = routeOf(r.Pattern)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// methodOther agrupa los métodos que no están en el estándar HTTP.
+const methodOther = "_OTHER"
+
+// methodOf acota el método a los conocidos: cualquier otro es _OTHER, para que un cliente no cree
+// series nuevas con métodos inventados.
+func methodOf(r *http.Request) string {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodOptions, http.MethodConnect, http.MethodTrace:
+		return r.Method
+	default:
+		return methodOther
+	}
+}
+
+// spanName es "{método} {ruta}"; un método desconocido se nombra HTTP, como piden las convenciones.
+func spanName(method, route string) string {
+	if method == methodOther {
+		method = "HTTP"
+	}
+	if route == "" {
+		return method
+	}
+	return method + " " + route
+}
+
+func schemeOf(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+// routeOf quita el método del patrón del mux: "GET /v1/transactions/{id}" es "/v1/transactions/{id}".
+func routeOf(pattern string) string {
+	if _, route, ok := strings.Cut(pattern, " "); ok {
+		return route
+	}
+	return pattern
 }
 
 // withRecovery convierte un panic en un 500 problem+json. El stack va al log, nunca a la respuesta.

@@ -33,6 +33,12 @@ func Routes(api gen.StrictServerInterface, log *slog.Logger) func(*http.ServeMux
 	}
 }
 
+// Rutas de los probes del orquestador.
+const (
+	pathHealthz = "/healthz"
+	pathReadyz  = "/readyz"
+)
+
 // ServerConfig configura el servidor HTTP.
 type ServerConfig struct {
 	// Ready dice si el proceso puede atender tráfico (base de datos, dependencias). Nil es "listo".
@@ -43,8 +49,8 @@ type ServerConfig struct {
 // el middleware común. Quien lo usa le da el listener con Serve.
 func NewServer(cfg ServerConfig, routes func(*http.ServeMux), log *slog.Logger) *http.Server {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthz)
-	mux.HandleFunc("GET /readyz", readyz(cfg.Ready, log))
+	mux.HandleFunc("GET "+pathHealthz, healthz)
+	mux.HandleFunc("GET "+pathReadyz, readyz(cfg.Ready, log))
 	if routes != nil {
 		routes(mux)
 	}

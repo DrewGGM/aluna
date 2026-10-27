@@ -135,6 +135,9 @@ components:
         detail: {type: string}
         code: {type: string}
         instance: {type: string}
+        trace_id:
+          type: string
+          description: Traza del request (W3C), para buscarla en los logs y en el backend de trazas.
     AccountKind:
       type: string
       enum: [asset, liability, equity, income, expense]

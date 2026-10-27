@@ -89,6 +89,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test -race -count=1 -tags=integration ./...
+      - run: go test -race -count=1 -tags=e2e ./test/e2e/...
 
   security:
     runs-on: ubuntu-latest

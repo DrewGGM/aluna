@@ -6,12 +6,14 @@ import (
 	"log/slog"
 	"net/http"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
 )
 
 // Problem es un error RFC 9457. Code es estable y para máquinas; Title y Detail son para personas y
-// nunca llevan detalles internos.
+// nunca llevan detalles internos. TraceID une la respuesta con la traza y los logs del request.
 type Problem struct {
 	Type     string `json:"type"`
 	Title    string `json:"title"`
@@ -19,16 +21,20 @@ type Problem struct {
 	Detail   string `json:"detail,omitempty"`
 	Code     string `json:"code"`
 	Instance string `json:"instance"`
+	TraceID  string `json:"trace_id,omitempty"`
 }
 
-// WriteProblem responde p como application/problem+json. Un Type vacío es about:blank y un Instance
-// vacío es la ruta pedida.
+// WriteProblem responde p como application/problem+json. Un Type vacío es about:blank, un Instance
+// vacío es la ruta pedida y TraceID sale del span del request, si hay.
 func WriteProblem(w http.ResponseWriter, r *http.Request, p Problem) {
 	if p.Type == "" {
 		p.Type = "about:blank"
 	}
 	if p.Instance == "" {
 		p.Instance = r.URL.Path
+	}
+	if sc := trace.SpanContextFromContext(r.Context()); sc.HasTraceID() {
+		p.TraceID = sc.TraceID().String()
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(p.Status)

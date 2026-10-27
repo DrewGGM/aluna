@@ -1,5 +1,11 @@
 version: "2"
 
+# Las pruebas con build tag también se revisan.
+run:
+  build-tags:
+    - integration
+    - e2e
+
 linters:
   default: none
   enable:

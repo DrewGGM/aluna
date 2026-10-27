@@ -4,6 +4,8 @@ package ledger
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/DrewGGM/aluna/internal/ids"
 	pg "github.com/DrewGGM/aluna/internal/ledger/internal/adapters/postgres"
@@ -124,6 +126,32 @@ func (s *Service) CaptureHold(ctx context.Context, tx postgres.Tx, in CaptureInp
 // ReleaseHold libera dentro de tx un hold pending.
 func (s *Service) ReleaseHold(ctx context.Context, tx postgres.Tx, in ReleaseInput) (Hold, error) {
 	return app.ReleaseHold(ctx, pg.NewStore(tx), in)
+}
+
+// ExpireDueHolds expira los holds pending vencidos a now, de todas las entidades, en lotes de batch:
+// cada lote en su propia transacción, hasta que uno sale incompleto. Los holds que tiene bloqueados un
+// capture o un release en curso se saltan; si siguen pending, los toma una corrida posterior. Devuelve
+// cuántos expiró, también cuando falla un lote (los anteriores ya quedaron confirmados).
+func (s *Service) ExpireDueHolds(ctx context.Context, uow *postgres.UnitOfWork, now time.Time, batch int) (int, error) {
+	if batch < 1 {
+		return 0, fmt.Errorf("lote de expiración %d: debe ser positivo", batch)
+	}
+	expired := 0
+	for {
+		var n int
+		err := uow.Do(ctx, func(tx postgres.Tx) error {
+			var err error
+			n, err = app.ExpireDueHolds(ctx, pg.NewStore(tx), now, batch)
+			return err
+		})
+		if err != nil {
+			return expired, err
+		}
+		expired += n
+		if n < batch {
+			return expired, nil
+		}
+	}
 }
 
 // Account lee una cuenta de la entidad: la de otra entidad no existe para ella. q puede ser el pool o

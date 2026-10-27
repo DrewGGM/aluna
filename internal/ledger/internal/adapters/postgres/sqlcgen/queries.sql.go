@@ -365,6 +365,63 @@ func (q *Queries) LockBalances(ctx context.Context, accountIds []ids.ID) ([]Lock
 	return items, nil
 }
 
+const lockDueHolds = `-- name: LockDueHolds :many
+SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at
+FROM ledger.holds
+WHERE status = 'pending' AND expires_at < $1
+ORDER BY expires_at
+LIMIT $2::bigint
+FOR UPDATE SKIP LOCKED
+`
+
+type LockDueHoldsParams struct {
+	Now   time.Time
+	Batch int64
+}
+
+type LockDueHoldsRow struct {
+	ID               ids.ID
+	AccountID        ids.ID
+	CounterAccountID ids.ID
+	Currency         string
+	Amount           int64
+	CapturedAmount   int64
+	Status           string
+	ExpiresAt        time.Time
+}
+
+// Lote de la expiración: los vencidos (expires_at anterior a now, como en Hold.Expire) más antiguos
+// primero, por el índice parcial de pending. SKIP LOCKED salta los que tiene bloqueados un capture o un
+// release en curso, que deciden su resultado.
+func (q *Queries) LockDueHolds(ctx context.Context, arg LockDueHoldsParams) ([]LockDueHoldsRow, error) {
+	rows, err := q.db.Query(ctx, lockDueHolds, arg.Now, arg.Batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockDueHoldsRow
+	for rows.Next() {
+		var i LockDueHoldsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.CounterAccountID,
+			&i.Currency,
+			&i.Amount,
+			&i.CapturedAmount,
+			&i.Status,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockHold = `-- name: LockHold :one
 SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at
 FROM ledger.holds

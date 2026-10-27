@@ -250,7 +250,8 @@ func TestReleaseRestoresTheAvailable(t *testing.T) {
 }
 
 // TestCaptureRejectionsLeaveTheHoldPending: un capture de más o tras el vencimiento no toca nada. El
-// hold vencido se inserta directo, sin esperar a que venza.
+// hold vencido se inserta directo, sin esperar a que venza, y con su pendiente, como lo deja PlaceHold:
+// así la base sigue cuadrada para la expiración de otras pruebas.
 func TestCaptureRejectionsLeaveTheHoldPending(t *testing.T) {
 	deposit, clearing := fundedDeposit(t)
 	hold, err := placeHold(t, deposit.ID, clearing.ID, 70, time.Hour)
@@ -262,16 +263,20 @@ func TestCaptureRejectionsLeaveTheHoldPending(t *testing.T) {
 	}
 	expired := ids.New()
 	if _, err := testPool.Exec(t.Context(), `
-		INSERT INTO ledger.holds (id, legal_entity_id, account_id, counter_account_id, currency, amount, expires_at)
-		VALUES ($1, $2, $3, $4, 'COP', 10, clock_timestamp() - interval '1 second')`,
+		WITH h AS (
+			INSERT INTO ledger.holds (id, legal_entity_id, account_id, counter_account_id, currency, amount, expires_at)
+			VALUES ($1, $2, $3, $4, 'COP', 10, clock_timestamp() - interval '1 second')
+			RETURNING account_id, amount)
+		UPDATE ledger.balances b SET pending_debits = b.pending_debits + h.amount, version = b.version + 1
+		FROM h WHERE b.account_id = h.account_id`,
 		expired, entity, deposit.ID, clearing.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := captureHold(t, expired, 10); !errors.Is(err, ledger.ErrHoldExpired) {
 		t.Fatalf("capturar vencido = %v, se esperaba ErrHoldExpired", err)
 	}
-	if b := balanceOf(t, deposit.ID); b.PendingDebits != 70 || b.Posted != -100 {
-		t.Fatalf("saldo = %+v, se esperaba el hold de 70 pendiente y el posted intacto", b)
+	if b := balanceOf(t, deposit.ID); b.PendingDebits != 80 || b.Posted != -100 {
+		t.Fatalf("saldo = %+v, se esperaban los dos holds pendientes y el posted intacto", b)
 	}
 }
 

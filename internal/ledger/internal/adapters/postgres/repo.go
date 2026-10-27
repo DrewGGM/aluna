@@ -266,9 +266,7 @@ func (s *Store) InsertHold(ctx context.Context, entity ids.ID, h app.Hold) error
 	return nil
 }
 
-// LockHold bloquea el hold de la entidad (FOR UPDATE) y lo reconstruye. Una fila que no se puede
-// reconstruir es un dato corrupto, no un error del cliente: se informa sin el error de dominio para
-// que llegue como 500 y no se guarde como respuesta de la clave.
+// LockHold bloquea el hold de la entidad (FOR UPDATE) y lo reconstruye.
 func (s *Store) LockHold(ctx context.Context, entity, id ids.ID) (app.Hold, error) {
 	r, err := s.q.LockHold(ctx, sqlcgen.LockHoldParams{ID: id, LegalEntityID: entity})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -277,16 +275,38 @@ func (s *Store) LockHold(ctx context.Context, entity, id ids.ID) (app.Hold, erro
 	if err != nil {
 		return app.Hold{}, fmt.Errorf("bloquear el hold: %w", err)
 	}
+	return restoredHold(r)
+}
+
+// LockDueHolds bloquea un lote de holds pending vencidos a now, saltando los bloqueados.
+func (s *Store) LockDueHolds(ctx context.Context, now time.Time, limit int) ([]app.Hold, error) {
+	rows, err := s.q.LockDueHolds(ctx, sqlcgen.LockDueHoldsParams{Now: now, Batch: int64(limit)})
+	if err != nil {
+		return nil, fmt.Errorf("bloquear los holds vencidos: %w", err)
+	}
+	due := make([]app.Hold, len(rows))
+	for i, r := range rows {
+		if due[i], err = restoredHold(sqlcgen.LockHoldRow(r)); err != nil {
+			return nil, err
+		}
+	}
+	return due, nil
+}
+
+// restoredHold reconstruye un hold leído. Una fila que no se puede reconstruir es un dato corrupto, no
+// un error del cliente: se informa sin el error de dominio para que llegue como 500 y no se guarde como
+// respuesta de la clave.
+func restoredHold(r sqlcgen.LockHoldRow) (app.Hold, error) {
 	cur, err := money.CurrencyOf(r.Currency)
 	if err != nil {
-		return app.Hold{}, fmt.Errorf("hold %s corrupto: %v", id, err) //nolint:errorlint // ver LockHold
+		return app.Hold{}, fmt.Errorf("hold %s corrupto: %v", r.ID, err) //nolint:errorlint // ver restoredHold
 	}
 	h, err := domain.RestoreHold(domain.HoldSnapshot{
 		ID: r.ID, AccountID: r.AccountID, Amount: money.New(r.Amount, cur), Captured: money.New(r.CapturedAmount, cur),
 		Status: domain.HoldStatus(r.Status), ExpiresAt: r.ExpiresAt,
 	})
 	if err != nil {
-		return app.Hold{}, fmt.Errorf("hold %s corrupto: %v", id, err) //nolint:errorlint // ver LockHold
+		return app.Hold{}, fmt.Errorf("hold %s corrupto: %v", r.ID, err) //nolint:errorlint // ver restoredHold
 	}
 	return app.RestoredHold(h, r.CounterAccountID), nil
 }

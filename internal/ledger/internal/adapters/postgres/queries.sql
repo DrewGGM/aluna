@@ -69,6 +69,17 @@ FROM ledger.holds
 WHERE id = @id AND legal_entity_id = @legal_entity_id
 FOR UPDATE;
 
+-- Lote de la expiración: los vencidos (expires_at anterior a now, como en Hold.Expire) más antiguos
+-- primero, por el índice parcial de pending. SKIP LOCKED salta los que tiene bloqueados un capture o un
+-- release en curso, que deciden su resultado.
+-- name: LockDueHolds :many
+SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at
+FROM ledger.holds
+WHERE status = 'pending' AND expires_at < @now
+ORDER BY expires_at
+LIMIT sqlc.arg(batch)::bigint
+FOR UPDATE SKIP LOCKED;
+
 -- name: CloseHold :exec
 UPDATE ledger.holds SET status = @status, captured_amount = @captured_amount, capture_tx_id = @capture_tx_id
 WHERE id = @id;

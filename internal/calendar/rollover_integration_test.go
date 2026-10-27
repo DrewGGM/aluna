@@ -33,17 +33,11 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 func newEntity(t *testing.T, businessDate calendar.Date) ids.ID {
 	t.Helper()
 	id := ids.New()
-	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(t.Context(), "SET LOCAL ROLE NONE"); err != nil {
-			return err
-		}
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, timezone, business_date, functional_currency)
 			VALUES ($1, 'Entidad de prueba', 'America/Bogota', $2, 'COP')`, id, dateOf(businessDate))
 		return err
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	return id
 }
 

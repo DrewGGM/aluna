@@ -15,11 +15,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/jobs"
 	"github.com/DrewGGM/aluna/internal/ledger"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/telemetry"
 )
@@ -36,11 +43,13 @@ comandos:
   api                        sirve la API HTTP en ALUNA_HTTP_ADDR (por defecto :8080); necesita
                              ALUNA_DATABASE_URL y ALUNA_LEGAL_ENTITY_ID; con
                              OTEL_EXPORTER_OTLP_ENDPOINT exporta trazas y métricas por OTLP
+  worker                     corre los jobs (outbox, holds, saldos async, purgas) sobre
+                             ALUNA_DATABASE_URL; varios workers eligen un líder para los periódicos
   migrate up|down|status     aplica, revierte la última o lista las migraciones en ALUNA_DATABASE_URL
   version                    imprime la versión
 `
 
-// shutdownTimeout es lo máximo que se espera a que terminen los requests en curso al apagar.
+// shutdownTimeout es lo máximo que se espera a que terminen los requests o los jobs en curso al apagar.
 const shutdownTimeout = 20 * time.Second
 
 func main() {
@@ -53,30 +62,38 @@ func run(args []string, stdout io.Writer) int {
 		return printUsage()
 	}
 	command, rest := args[0], args[1:]
+	if command == "migrate" {
+		return migrateCommand(rest, stdout)
+	}
+	if len(rest) != 0 { // los demás comandos no llevan argumentos
+		return printUsage()
+	}
 	switch command {
 	case "api":
-		if len(rest) != 0 {
-			return printUsage()
-		}
 		return untilSignal(func(ctx context.Context) int { return apiCommand(ctx, stdout) })
-	case "migrate":
-		if len(rest) != 1 || !postgres.ValidDirection(rest[0]) {
-			return printUsage()
-		}
-		return untilSignal(func(ctx context.Context) int {
-			return exitCode(runMigrate(ctx, os.Getenv("ALUNA_DATABASE_URL"), rest[0], stdout))
-		})
+	case "worker":
+		return untilSignal(func(ctx context.Context) int { return workerCommand(ctx, stdout) })
 	case "version":
-		if len(rest) != 0 {
-			return printUsage()
-		}
-		if _, err := fmt.Fprintf(stdout, "aluna %s\n", version); err != nil {
-			return 1
-		}
-		return 0
+		return printVersion(stdout)
 	default:
 		return printUsage()
 	}
+}
+
+func migrateCommand(args []string, stdout io.Writer) int {
+	if len(args) != 1 || !postgres.ValidDirection(args[0]) {
+		return printUsage()
+	}
+	return untilSignal(func(ctx context.Context) int {
+		return exitCode(runMigrate(ctx, os.Getenv("ALUNA_DATABASE_URL"), args[0], stdout))
+	})
+}
+
+func printVersion(stdout io.Writer) int {
+	if _, err := fmt.Fprintf(stdout, "aluna %s\n", version); err != nil {
+		return 1
+	}
+	return 0
 }
 
 // exitCode imprime el error de un subcomando de una sola ejecución y lo convierte en código de salida.
@@ -222,6 +239,65 @@ func serveAPI(ctx context.Context, ln net.Listener, srv *http.Server, log *slog.
 	}
 	log.Info("api detenida")
 	return 0
+}
+
+// workerCommand prepara la telemetría y corre el worker sobre ALUNA_DATABASE_URL; los logs van en JSON a
+// stdout.
+func workerCommand(ctx context.Context, stdout io.Writer) int {
+	log, shutdown, err := telemetry.Setup(ctx, "aluna", version, stdout)
+	if err != nil {
+		return exitCode(fmt.Errorf("telemetría: %w", err))
+	}
+	defer flushTelemetry(ctx, shutdown, log)
+	dsn := os.Getenv("ALUNA_DATABASE_URL")
+	if dsn == "" {
+		log.Error("configuración del worker", "error", errNoDatabaseURL)
+		return 1
+	}
+	return runWorker(ctx, dsn, log)
+}
+
+// runWorker conecta la base, cablea los jobs a mano y corre River hasta que ctx se cancela. Entonces deja
+// de tomar jobs y espera hasta shutdownTimeout a los que están corriendo antes de cancelarlos.
+func runWorker(ctx context.Context, dsn string, log *slog.Logger) int {
+	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	pool, err := postgres.Open(openCtx, dsn)
+	if err != nil {
+		log.Error("no se pudo conectar a la base", "error", err)
+		return 1
+	}
+	defer pool.Close()
+	client, err := newWorker(pool, log)
+	if err != nil {
+		log.Error("configurar el worker", "error", err)
+		return 1
+	}
+	if err := client.Start(ctx); err != nil {
+		log.Error("arrancar el worker", "error", err)
+		return 1
+	}
+	log.Info("worker corriendo")
+	<-client.Stopped()
+	log.Info("worker detenido")
+	return 0
+}
+
+// newWorker arma el cliente River del worker con la configuración de jobs, cableada a mano.
+func newWorker(pool *pgxpool.Pool, log *slog.Logger) (*river.Client[pgx.Tx], error) {
+	events, err := outbox.New(pool)
+	if err != nil {
+		return nil, err
+	}
+	cfg := jobs.Config(jobs.Deps{
+		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledger.New(calendar.New()), Idempotency: idempotency.NewStore(pool), Outbox: events,
+	})
+	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
+	client, err := river.NewClient(riverpgxv5.New(pool), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("cliente River: %w", err)
+	}
+	return client, nil
 }
 
 // runMigrate aplica direction sobre la base de dsn con la conexión propia de las migraciones.

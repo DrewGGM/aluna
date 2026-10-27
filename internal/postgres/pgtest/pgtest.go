@@ -124,6 +124,22 @@ func openAsApp(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	return postgres.Open(ctx, appDSN)
 }
 
+// AsOwner corre fn en una transacción como el dueño de las tablas (SET LOCAL ROLE NONE sobre el pool de
+// Run), para sembrar o envejecer lo que aluna_app no puede escribir: entidades, periodos, fechas de
+// creación. Un error detiene la prueba.
+func AsOwner(t testing.TB, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) {
+	t.Helper()
+	err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(t.Context(), "SET LOCAL ROLE NONE"); err != nil {
+			return err
+		}
+		return fn(tx)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // AppDSN convierte el DSN del dueño en uno que se conecta con el rol aluna_app, como el proceso real.
 func AppDSN(dsn string) (string, error) {
 	u, err := url.Parse(dsn)

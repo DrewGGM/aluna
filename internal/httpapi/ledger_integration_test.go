@@ -280,10 +280,7 @@ func balanceAt(t *testing.T, ts *httptest.Server, account, query string) gen.Bal
 // period_closed.
 func TestAClosedPeriodIsAConflict(t *testing.T) {
 	entity := ids.New()
-	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(t.Context(), "SET LOCAL ROLE NONE"); err != nil { // las entidades y los cierres no son de la aplicación
-			return err
-		}
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error { // las entidades y los cierres no son de la aplicación
 		if _, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
 			VALUES ($1, 'Entidad', '2025-07-07', 'COP')`, entity); err != nil {
 			return err
@@ -292,9 +289,6 @@ func TestAClosedPeriodIsAConflict(t *testing.T) {
 			VALUES ($1, '2025-06', 'closed', clock_timestamp(), 'contador')`, entity)
 		return err
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	ts := apiServer(t, entity)
 	cash, deposit := createAccount(t, ts, "asset"), createAccount(t, ts, "liability")
 	body := strings.Replace(postingBody(t, cash, deposit, 100, 100, ""), `"business_date":"`+postingValueDate, `"business_date":"2025-06-30`, 1)

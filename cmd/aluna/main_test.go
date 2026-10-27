@@ -49,6 +49,7 @@ func TestRunSinComandoValidoImprimeUso(t *testing.T) {
 		"migrate dirección inválida":    {"migrate", "sideways"},
 		"migrate con argumentos de más": {"migrate", "up", "extra"},
 		"api con argumentos":            {"api", "extra"},
+		"worker con argumentos":         {"worker", "extra"},
 	}
 	for nombre, args := range casos {
 		t.Run(nombre, func(t *testing.T) {

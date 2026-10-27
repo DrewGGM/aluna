@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,6 +23,9 @@ import (
 
 // RiverSchema es el esquema de las tablas de River (migración 0009); todo cliente River de Aluna lo usa.
 const RiverSchema = "infra"
+
+// purgeBatch acota cada DELETE de Purge para que quepa en el statement_timeout del pool.
+const purgeBatch = 10_000
 
 // Handler procesa un evento dentro de tx, la misma transacción que lo anota en el inbox.
 type Handler func(ctx context.Context, tx postgres.Tx, e StoredEvent) error
@@ -82,6 +86,26 @@ func (o *Outbox) Subscribe(consumer string, types []string, h Handler) {
 
 // AddWorkers registra en w el worker que publica los eventos (outbox.publish).
 func (o *Outbox) AddWorkers(w *river.Workers) { river.AddWorker(w, &publishWorker{o: o}) }
+
+// Purge borra los eventos publicados antes de before (ADR-0007: la Events API los retiene 30 días), con
+// sus filas del inbox, y dice cuántos borró. Va por lotes en orden de id (UUIDv7, crece con el tiempo):
+// los publicados viejos están al principio de la llave primaria y los lotes llenos se cortan pronto; el
+// último recorre la tabla (Q-81). Salta los eventos que tiene bloqueados una publicación en curso: los
+// borrará la próxima purga.
+func (o *Outbox) Purge(ctx context.Context, before time.Time) (int64, error) {
+	var total int64
+	for {
+		tag, err := o.pool.Exec(ctx, `DELETE FROM infra.outbox WHERE id IN (
+			SELECT id FROM infra.outbox WHERE published_at < $1 ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED)`, before, purgeBatch)
+		if err != nil {
+			return total, fmt.Errorf("purgar el outbox: %w", err)
+		}
+		total += tag.RowsAffected()
+		if tag.RowsAffected() < purgeBatch {
+			return total, nil
+		}
+	}
+}
 
 type publishArgs struct {
 	EventID ids.ID `json:"event_id"`

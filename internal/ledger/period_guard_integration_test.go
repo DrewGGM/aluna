@@ -14,6 +14,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
 
 // registeredEntity registra en el calendario una entidad con fecha de negocio 2025-07-07, junio de 2025
@@ -22,10 +23,7 @@ import (
 func registeredEntity(t *testing.T) (id ids.ID, cash, deposit ledger.Account) {
 	t.Helper()
 	id = ids.New()
-	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(t.Context(), "SET LOCAL ROLE NONE"); err != nil {
-			return err
-		}
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
 			VALUES ($1, 'Entidad', '2025-07-07', 'COP')`, id); err != nil {
 			return err
@@ -34,9 +32,6 @@ func registeredEntity(t *testing.T) (id ids.ID, cash, deposit ledger.Account) {
 			($1, '2025-06', 'closed', clock_timestamp(), 'contador'), ($1, '2025-05', 'closing', NULL, NULL)`, id)
 		return err
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	return id, accountOf(t, id, ledger.KindAsset), accountOf(t, id, ledger.KindLiability)
 }
 
@@ -134,17 +129,11 @@ func TestReversalsAndCapturesInAClosedPeriodAreRejected(t *testing.T) {
 // closePeriod cierra el periodo yyyy-mm de la entidad, como lo hará el cierre (T-069).
 func closePeriod(t *testing.T, entity ids.ID, period string) {
 	t.Helper()
-	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(t.Context(), "SET LOCAL ROLE NONE"); err != nil {
-			return err
-		}
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.periods (legal_entity_id, period, status, closed_at, closed_by)
 			VALUES ($1, $2, 'closed', clock_timestamp(), 'contador')`, entity, period)
 		return err
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 }
 
 // TestARetryAfterTheCloseReturnsTheOriginal (FR-11): lo asentado en abril sigue siendo idempotente

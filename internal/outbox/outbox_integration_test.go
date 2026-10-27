@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -351,5 +352,55 @@ func TestAStoredEventIsACloudEvent(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("CloudEvent = %s, se esperaba %v", body, want)
+	}
+}
+
+// TestPurgeDeletesOnlyPublishedEvents: la purga se lleva los eventos publicados antes del corte y deja los
+// que aún no se publican. El publicado tiene su fila en el inbox: sin el borrado en cascada, la purga
+// fallaría por la llave foránea.
+func TestPurgeDeletesOnlyPublishedEvents(t *testing.T) {
+	o := newOutbox(t, newRecorder())
+	done, pending := event(), event()
+	emit(t, o, done)
+	emit(t, o, pending)
+	if err := publish(t, o, done.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := o.Purge(t.Context(), time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var left []ids.ID
+	rows, err := testPool.Query(t.Context(), `SELECT id FROM infra.outbox WHERE id IN ($1, $2)`, done.ID, pending.ID)
+	if err == nil {
+		left, err = pgx.CollectRows(rows, pgx.RowTo[ids.ID])
+	}
+	if err != nil || n < 1 || !reflect.DeepEqual(left, []ids.ID{pending.ID}) {
+		t.Fatalf("purga: %d borrados, quedan %v (%v); se esperaba solo %s", n, left, err, pending.ID)
+	}
+}
+
+// TestPurgeDeletesMoreThanOneBatch: con más publicados viejos que un lote, la purga sigue hasta borrarlos
+// todos.
+func TestPurgeDeletesMoreThanOneBatch(t *testing.T) {
+	o := newOutbox(t, newRecorder())
+	prefix := "lote-" + ids.New().String() + "/"
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO infra.outbox (id, type, subject, legal_entity_id, schema_version, payload, published_at)
+			SELECT gen_random_uuid(), $1, $2 || g, $3, 1, '{}', clock_timestamp() - interval '1 hour'
+			FROM generate_series(1, $4::int) g`, happened, prefix, ids.New(), purgeBatch+1)
+		return err
+	})
+
+	n, err := o.Purge(t.Context(), time.Now())
+
+	var left int
+	if err == nil {
+		err = testPool.QueryRow(t.Context(), `SELECT count(*) FROM infra.outbox WHERE subject LIKE $1 || '%'`, prefix).Scan(&left)
+	}
+	if err != nil || n < purgeBatch+1 || left != 0 {
+		t.Fatalf("purga de %d eventos: borró %d, quedan %d (%v)", purgeBatch+1, n, left, err)
 	}
 }

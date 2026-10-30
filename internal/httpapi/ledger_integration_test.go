@@ -55,8 +55,9 @@ func apiServerWith(t *testing.T, entity ids.ID, events ledger.Events) *httptest.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(calendar.New(), events), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool)}
 	cfg := ServerConfig{
-		Audit:    &CommandAudit{Records: audit.New(), UoW: postgres.NewUnitOfWork(testPool)},
-		Verifier: entityVerifier{Subject: testSubject, LegalEntityID: entity, Roles: []string{testRole}},
+		Audit:      &CommandAudit{Records: audit.New(), UoW: postgres.NewUnitOfWork(testPool)},
+		Verifier:   entityVerifier{Subject: testSubject, LegalEntityID: entity, Roles: []string{testRole}},
+		Authorizer: testAuthorizer(t),
 	}
 	handler := NewServer(cfg, Routes(api, log), log).Handler
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

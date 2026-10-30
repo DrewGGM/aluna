@@ -58,6 +58,14 @@ Cada request, salvo `/healthz` y `/readyz`, lleva un token OIDC del emisor confi
 vida de 15 min como mucho; la entidad legal con la que opera sale del claim `legal_entity_id` del token,
 nunca de un header.
 
+Cada operación del contrato declara el permiso que exige (`x-aluna-permission`), y
+[`config/roles.yaml`](config/roles.yaml) dice qué roles lo dan: `channel`, `operator`, `finance`,
+`compliance`, `auditor` y `system`, según el claim `roles` del token. Lo que ningún rol del token da se
+niega con 403. Un canal (`channel`) solo ve los recursos de su `party_id`: el de otra party le responde
+404, como si no existiera. Por ahora ningún recurso tiene dueño (las cuentas del ledger no son de una
+persona), así que a un canal todo le responde 404. La política viaja dentro del binario: un cambio de
+permisos es una versión nueva.
+
 | Variable | Uso |
 |---|---|
 | `ALUNA_DATABASE_URL` | Base de la entidad (obligatoria para `api`, `worker`, `migrate` y `audit verify`): `migrate` con el dueño de las tablas, el resto con el rol `aluna_app` |

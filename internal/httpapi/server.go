@@ -48,6 +48,8 @@ type ServerConfig struct {
 	// Verifier verifica el token de cada request que no es un probe; nil solo en un servidor sin rutas de
 	// negocio (los handlers no corren sin principal).
 	Verifier TokenVerifier
+	// Authorizer autoriza cada request autenticado; con Verifier y sin Authorizer, toda ruta se niega.
+	Authorizer *Authorizer
 }
 
 // NewServer arma el servidor con /healthz, /readyz, las rutas que registra routes (puede ser nil) y

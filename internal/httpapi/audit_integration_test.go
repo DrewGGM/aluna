@@ -348,6 +348,32 @@ func TestARejectedHoldCommandNamesTheHold(t *testing.T) {
 	}
 }
 
+// TestAForbiddenCommandIsAudited: un POST de un rol sin el permiso recibe 403 y queda registrado con su
+// actor y rol, y el código del problem; también por una ruta no canónica, que el mux redirige.
+func TestAForbiddenCommandIsAudited(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := ServerConfig{
+		Audit:    &CommandAudit{Records: audit.New(), UoW: postgres.NewUnitOfWork(testPool)},
+		Verifier: rolesVerifier{}, Authorizer: testAuthorizer(t),
+	}
+	handler := NewServer(cfg, Routes(API{}, log), log).Handler
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("Authorization", "Bearer auditor")
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	// la segunda, tras la redirección del mux; la tercera es canónica para el mux (mira la ruta escapada)
+	for _, path := range []string{"/v1/ledger-accounts", "/v1//ledger-accounts", "/v1/holds/%2E%2E/capture"} {
+		resp, correlation := auditedRequest(t, ts, http.MethodPost, path, "", `{}`)
+
+		got := onlyRecord(t, correlation)
+		if resp.status != http.StatusForbidden || got.Result != "forbidden" || got.Actor != "sujeto-1" || got.Role != "auditor" {
+			t.Fatalf("POST %s: respuesta %d; registro %+v, se esperaba el 403 del auditor", path, resp.status, got.Record)
+		}
+	}
+}
+
 // TestAnUnauthenticatedCommandIsAudited: un POST sin token recibe 401 y queda registrado, sin actor
 // conocido, con el código del problem.
 func TestAnUnauthenticatedCommandIsAudited(t *testing.T) {

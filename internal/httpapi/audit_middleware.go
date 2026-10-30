@@ -10,7 +10,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -155,14 +154,14 @@ func idsIn(v any, known []string) map[string]bool {
 
 // withAudit le da a cada POST con ruta su rastro de auditoría: quién, desde dónde, con qué correlación y
 // qué comando. El comando es el patrón de la ruta y se busca aquí en routes, antes del handler: withRoute
-// lo sabe solo después. Una ruta sin limpiar (/v1//transactions) no lleva rastro: el mux la redirige y el
-// comando llega en el request siguiente. Si el comando no confirmó su registro (un rechazo antes de su
-// tx, un 5xx o un panic), lo registra en una tx aparte con el código del problem que se respondió; el
-// defer lo hace aunque un panic escape de withRecovery.
+// lo sabe solo después. Una ruta que el mux redirige a su ruta limpia (/v1//transactions,
+// redirectsToCleanPath) no lleva rastro: el comando llega en el request siguiente. Si el comando no
+// confirmó su registro (un rechazo antes de su tx, un 5xx o un panic), lo registra en una tx aparte con el
+// código del problem que se respondió; el defer lo hace aunque un panic escape de withRecovery.
 func withAudit(a *CommandAudit, routes *http.ServeMux, log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || path.Clean(r.URL.Path) != r.URL.Path {
+			if r.Method != http.MethodPost || redirectsToCleanPath(r) {
 				next.ServeHTTP(w, r)
 				return
 			}

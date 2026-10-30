@@ -1,0 +1,55 @@
+# Roles y permisos del core (ADR-0014). Cada permiso es el x-aluna-permission de una operación de
+# api/openapi.yaml; lo que no está aquí se niega. "all" da el permiso sobre cualquier recurso de la entidad
+# legal del token; "own", solo sobre los de su party_id (un canal que actúa por un cliente, TH-3).
+
+# App o canal de un cliente: lee sus propias cuentas. Mientras ningún recurso tenga dueño (las cuentas de
+# depósito, T-047), "own" responde 404 a todo.
+channel:
+  own:
+    - ledger.accounts.read
+    - ledger.balances.read
+
+# Operaciones del día: cuentas, asientos manuales y holds.
+operator:
+  all:
+    - ledger.accounts.create
+    - ledger.accounts.read
+    - ledger.balances.read
+    - ledger.transactions.post
+    - ledger.transactions.read
+    - ledger.holds.place
+    - ledger.holds.capture
+    - ledger.holds.release
+
+# Finanzas: consulta y ajustes contables.
+finance:
+  all:
+    - ledger.accounts.read
+    - ledger.balances.read
+    - ledger.transactions.post
+    - ledger.transactions.read
+
+# Cumplimiento: consulta.
+compliance:
+  all:
+    - ledger.accounts.read
+    - ledger.balances.read
+    - ledger.transactions.read
+
+# Auditoría interna o revisoría fiscal: solo lectura.
+auditor:
+  all:
+    - ledger.accounts.read
+    - ledger.balances.read
+    - ledger.transactions.read
+
+# Servicios internos (rails, jobs): mueven dinero con holds y asientos.
+system:
+  all:
+    - ledger.accounts.read
+    - ledger.balances.read
+    - ledger.transactions.post
+    - ledger.transactions.read
+    - ledger.holds.place
+    - ledger.holds.capture
+    - ledger.holds.release

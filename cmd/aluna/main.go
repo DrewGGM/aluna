@@ -21,6 +21,9 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
+	contract "github.com/DrewGGM/aluna/api"
+	"github.com/DrewGGM/aluna/config"
+	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi"
@@ -153,7 +156,21 @@ func apiCommand(ctx context.Context, stdout io.Writer) int {
 		log.Error("emisor de los tokens", "error", err)
 		return 1
 	}
-	return runAPI(ctx, cfg, verifier, log)
+	authorizer, err := newAuthorizer()
+	if err != nil {
+		log.Error("autorización", "error", err)
+		return 1
+	}
+	return runAPI(ctx, cfg, verifier, authorizer, log)
+}
+
+// newAuthorizer arma la autorización con la política de roles y el contrato que viajan en el binario.
+func newAuthorizer() (*httpapi.Authorizer, error) {
+	policy, err := access.ParsePolicy(config.Roles)
+	if err != nil {
+		return nil, err
+	}
+	return httpapi.NewAuthorizer(contract.OpenAPI, policy)
 }
 
 // flushTelemetry envía lo que quede de trazas y métricas antes de salir, sin esperar más de
@@ -205,7 +222,7 @@ const readyTimeout = 2 * time.Second
 
 // runAPI abre el puerto primero (un puerto ocupado falla sin tocar la base), conecta la base, cablea
 // el ledger a mano y sirve hasta que ctx se cancela.
-func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, log *slog.Logger) int {
+func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, authorizer *httpapi.Authorizer, log *slog.Logger) int {
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.addr)
 	if err != nil {
 		log.Error("no se pudo abrir el puerto", "addr", cfg.addr, "error", err)
@@ -236,7 +253,9 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 		defer cancel()
 		return pool.Ping(ctx)
 	}
-	serverCfg := httpapi.ServerConfig{Ready: ready, Audit: &httpapi.CommandAudit{Records: audit.New(), UoW: uow}, Verifier: verifier}
+	serverCfg := httpapi.ServerConfig{
+		Ready: ready, Audit: &httpapi.CommandAudit{Records: audit.New(), UoW: uow}, Verifier: verifier, Authorizer: authorizer,
+	}
 	return serveAPI(ctx, ln, httpapi.NewServer(serverCfg, httpapi.Routes(api, log), log), log)
 }
 

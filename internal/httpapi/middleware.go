@@ -31,14 +31,15 @@ const (
 // middleware envuelve mux con la cadena común, del más externo al más interno. Un middleware nuevo se
 // agrega en esta lista con la forma func(http.Handler) http.Handler. La auditoría va antes de la
 // autenticación, para registrar también un comando rechazado sin token, y antes de la recuperación, para
-// ver como 500 un comando que hizo panic. Sin cfg.Audit ni cfg.Verifier, el servidor solo tiene probes.
+// ver como 500 un comando que hizo panic. La autorización va pegada a la autenticación: una no se monta
+// sin la otra. Sin cfg.Audit ni cfg.Verifier, el servidor solo tiene probes.
 func middleware(log *slog.Logger, mux *http.ServeMux, cfg ServerConfig) http.Handler {
 	chain := []func(http.Handler) http.Handler{withRequestID, withObservability(log)}
 	if cfg.Audit != nil {
 		chain = append(chain, withAudit(cfg.Audit, mux, log))
 	}
 	if cfg.Verifier != nil {
-		chain = append(chain, Authenticate(cfg.Verifier))
+		chain = append(chain, Authenticate(cfg.Verifier), withAuthorization(cfg.Authorizer, mux, log))
 	}
 	chain = append(chain, withRecovery(log), withBodyLimit, withProblemForUnrouted, withRoute)
 	var h http.Handler = mux

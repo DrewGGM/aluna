@@ -45,6 +45,33 @@ func (e AccountKind) Valid() bool {
 	}
 }
 
+// Defines values for ApprovalStatus.
+const (
+	ApprovalStatusApproved ApprovalStatus = "approved"
+	ApprovalStatusExpired  ApprovalStatus = "expired"
+	ApprovalStatusFailed   ApprovalStatus = "failed"
+	ApprovalStatusPending  ApprovalStatus = "pending"
+	ApprovalStatusRejected ApprovalStatus = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the ApprovalStatus enum.
+func (e ApprovalStatus) Valid() bool {
+	switch e {
+	case ApprovalStatusApproved:
+		return true
+	case ApprovalStatusExpired:
+		return true
+	case ApprovalStatusFailed:
+		return true
+	case ApprovalStatusPending:
+		return true
+	case ApprovalStatusRejected:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BalanceMode.
 const (
 	Async BalanceMode = "async"
@@ -65,22 +92,22 @@ func (e BalanceMode) Valid() bool {
 
 // Defines values for HoldStatus.
 const (
-	Captured HoldStatus = "captured"
-	Expired  HoldStatus = "expired"
-	Pending  HoldStatus = "pending"
-	Released HoldStatus = "released"
+	HoldStatusCaptured HoldStatus = "captured"
+	HoldStatusExpired  HoldStatus = "expired"
+	HoldStatusPending  HoldStatus = "pending"
+	HoldStatusReleased HoldStatus = "released"
 )
 
 // Valid indicates whether the value is a known member of the HoldStatus enum.
 func (e HoldStatus) Valid() bool {
 	switch e {
-	case Captured:
+	case HoldStatusCaptured:
 		return true
-	case Expired:
+	case HoldStatusExpired:
 		return true
-	case Pending:
+	case HoldStatusPending:
 		return true
-	case Released:
+	case HoldStatusReleased:
 		return true
 	default:
 		return false
@@ -89,6 +116,40 @@ func (e HoldStatus) Valid() bool {
 
 // AccountKind defines model for AccountKind.
 type AccountKind string
+
+// Approval defines model for Approval.
+type Approval struct {
+	// Checker sub de quien decidió
+	Checker   *string            `json:"checker,omitempty"`
+	CreatedAt time.Time          `json:"created_at"`
+	DecidedAt *time.Time         `json:"decided_at,omitempty"`
+	ExpiresAt time.Time          `json:"expires_at"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// Kind Tipo de solicitud; cada módulo registra los suyos
+	Kind string `json:"kind"`
+
+	// Maker sub de quien pidió
+	Maker string `json:"maker"`
+
+	// Payload El comando pedido, tal como se ejecutará al aprobarse.
+	Payload json.RawMessage `json:"payload"`
+
+	// Reason Motivo del rechazo
+	Reason *string `json:"reason,omitempty"`
+
+	// Result Lo que devolvió el comando aprobado.
+	Result *json.RawMessage `json:"result,omitempty"`
+	Status ApprovalStatus   `json:"status"`
+}
+
+// ApprovalList defines model for ApprovalList.
+type ApprovalList struct {
+	Items []Approval `json:"items"`
+}
+
+// ApprovalStatus defines model for ApprovalStatus.
+type ApprovalStatus string
 
 // Balance defines model for Balance.
 type Balance struct {
@@ -215,6 +276,11 @@ type Problem struct {
 	Type    string  `json:"type"`
 }
 
+// RejectApproval defines model for RejectApproval.
+type RejectApproval struct {
+	Reason string `json:"reason"`
+}
+
 // Transaction defines model for Transaction.
 type Transaction struct {
 	BusinessDate openapi_types.Date `json:"business_date"`
@@ -232,6 +298,16 @@ type ID = openapi_types.UUID
 
 // IdempotencyKey defines model for IdempotencyKey.
 type IdempotencyKey = string
+
+// ListApprovalsParams defines parameters for ListApprovals.
+type ListApprovalsParams struct {
+	Status *ApprovalStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ApproveRequestParams defines parameters for ApproveRequest.
+type ApproveRequestParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
 
 // PlaceHoldParams defines parameters for PlaceHold.
 type PlaceHoldParams struct {
@@ -262,6 +338,9 @@ type PostTransactionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// RejectRequestJSONRequestBody defines body for RejectRequest for application/json ContentType.
+type RejectRequestJSONRequestBody = RejectApproval
+
 // PlaceHoldJSONRequestBody defines body for PlaceHold for application/json ContentType.
 type PlaceHoldJSONRequestBody = PlaceHold
 
@@ -276,6 +355,15 @@ type PostTransactionJSONRequestBody = PostTransaction
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// ListApprovals Solicitudes de maker-checker de la entidad
+	// (GET /v1/approvals)
+	ListApprovals(w http.ResponseWriter, r *http.Request, params ListApprovalsParams)
+	// ApproveRequest Aprobar una solicitud
+	// (POST /v1/approvals/{id}/approval)
+	ApproveRequest(w http.ResponseWriter, r *http.Request, id ID, params ApproveRequestParams)
+	// RejectRequest Rechazar una solicitud
+	// (POST /v1/approvals/{id}/rejection)
+	RejectRequest(w http.ResponseWriter, r *http.Request, id ID)
 	// PlaceHold Retener fondos de una cuenta
 	// (POST /v1/holds)
 	PlaceHold(w http.ResponseWriter, r *http.Request, params PlaceHoldParams)
@@ -310,6 +398,119 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListApprovals operation middleware
+func (siw *ServerInterfaceWrapper) ListApprovals(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListApprovalsParams
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListApprovals(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ApproveRequest operation middleware
+func (siw *ServerInterfaceWrapper) ApproveRequest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ApproveRequestParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ApproveRequest(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RejectRequest operation middleware
+func (siw *ServerInterfaceWrapper) RejectRequest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RejectRequest(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // PlaceHold operation middleware
 func (siw *ServerInterfaceWrapper) PlaceHold(w http.ResponseWriter, r *http.Request) {
@@ -758,11 +959,279 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/holds", wrapper.PlaceHold)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/holds/{id}/capture", wrapper.CaptureHold)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/holds/{id}/release", wrapper.ReleaseHold)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/approvals", wrapper.ListApprovals)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/approvals/{id}/approval", wrapper.ApproveRequest)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/approvals/{id}/rejection", wrapper.RejectRequest)
 
 	return m
 }
 
 type ProblemApplicationProblemPlusJSONResponse Problem
+
+type ListApprovalsRequestObject struct {
+	Params ListApprovalsParams
+}
+
+type ListApprovalsResponseObject interface {
+	VisitListApprovalsResponse(w http.ResponseWriter) error
+}
+
+type ListApprovals200JSONResponse ApprovalList
+
+func (response ListApprovals200JSONResponse) VisitListApprovalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListApprovals400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListApprovals400ApplicationProblemPlusJSONResponse) VisitListApprovalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListApprovalsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListApprovalsdefaultApplicationProblemPlusJSONResponse) VisitListApprovalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveRequestRequestObject struct {
+	Id     ID `json:"id"`
+	Params ApproveRequestParams
+}
+
+type ApproveRequestResponseObject interface {
+	VisitApproveRequestResponse(w http.ResponseWriter) error
+}
+
+type ApproveRequest200JSONResponse Approval
+
+func (response ApproveRequest200JSONResponse) VisitApproveRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveRequest400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ApproveRequest400ApplicationProblemPlusJSONResponse) VisitApproveRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveRequest403ApplicationProblemPlusJSONResponse Problem
+
+func (response ApproveRequest403ApplicationProblemPlusJSONResponse) VisitApproveRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveRequest404ApplicationProblemPlusJSONResponse Problem
+
+func (response ApproveRequest404ApplicationProblemPlusJSONResponse) VisitApproveRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveRequest409ApplicationProblemPlusJSONResponse Problem
+
+func (response ApproveRequest409ApplicationProblemPlusJSONResponse) VisitApproveRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveRequestdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ApproveRequestdefaultApplicationProblemPlusJSONResponse) VisitApproveRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectRequestRequestObject struct {
+	Id   ID `json:"id"`
+	Body *RejectRequestJSONRequestBody
+}
+
+type RejectRequestResponseObject interface {
+	VisitRejectRequestResponse(w http.ResponseWriter) error
+}
+
+type RejectRequest200JSONResponse Approval
+
+func (response RejectRequest200JSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectRequest400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RejectRequest400ApplicationProblemPlusJSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectRequest403ApplicationProblemPlusJSONResponse Problem
+
+func (response RejectRequest403ApplicationProblemPlusJSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectRequest404ApplicationProblemPlusJSONResponse Problem
+
+func (response RejectRequest404ApplicationProblemPlusJSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectRequest409ApplicationProblemPlusJSONResponse Problem
+
+func (response RejectRequest409ApplicationProblemPlusJSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectRequest422ApplicationProblemPlusJSONResponse Problem
+
+func (response RejectRequest422ApplicationProblemPlusJSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectRequestdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RejectRequestdefaultApplicationProblemPlusJSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type PlaceHoldRequestObject struct {
 	Params PlaceHoldParams
@@ -1478,6 +1947,15 @@ func (response GetTransactiondefaultApplicationProblemPlusJSONResponse) VisitGet
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// ListApprovals Solicitudes de maker-checker de la entidad
+	// (GET /v1/approvals)
+	ListApprovals(ctx context.Context, request ListApprovalsRequestObject) (ListApprovalsResponseObject, error)
+	// ApproveRequest Aprobar una solicitud
+	// (POST /v1/approvals/{id}/approval)
+	ApproveRequest(ctx context.Context, request ApproveRequestRequestObject) (ApproveRequestResponseObject, error)
+	// RejectRequest Rechazar una solicitud
+	// (POST /v1/approvals/{id}/rejection)
+	RejectRequest(ctx context.Context, request RejectRequestRequestObject) (RejectRequestResponseObject, error)
 	// PlaceHold Retener fondos de una cuenta
 	// (POST /v1/holds)
 	PlaceHold(ctx context.Context, request PlaceHoldRequestObject) (PlaceHoldResponseObject, error)
@@ -1541,6 +2019,92 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// ListApprovals operation middleware
+func (sh *strictHandler) ListApprovals(w http.ResponseWriter, r *http.Request, params ListApprovalsParams) {
+	var request ListApprovalsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListApprovals(ctx, request.(ListApprovalsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListApprovals")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListApprovalsResponseObject); ok {
+		if err := validResponse.VisitListApprovalsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ApproveRequest operation middleware
+func (sh *strictHandler) ApproveRequest(w http.ResponseWriter, r *http.Request, id ID, params ApproveRequestParams) {
+	var request ApproveRequestRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ApproveRequest(ctx, request.(ApproveRequestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ApproveRequest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ApproveRequestResponseObject); ok {
+		if err := validResponse.VisitApproveRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RejectRequest operation middleware
+func (sh *strictHandler) RejectRequest(w http.ResponseWriter, r *http.Request, id ID) {
+	var request RejectRequestRequestObject
+
+	request.Id = id
+
+	var body RejectRequestJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RejectRequest(ctx, request.(RejectRequestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RejectRequest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RejectRequestResponseObject); ok {
+		if err := validResponse.VisitRejectRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // PlaceHold operation middleware

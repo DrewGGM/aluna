@@ -9,9 +9,12 @@ channel:
     - ledger.accounts.read
     - ledger.balances.read
 
-# Operaciones del día: cuentas, asientos manuales y holds.
+# Operaciones del día: cuentas, asientos manuales y holds, y decidir solicitudes de maker-checker (el
+# permiso del tipo de cada solicitud se exige aparte).
 operator:
   all:
+    - approvals.read
+    - approvals.decide
     - ledger.accounts.create
     - ledger.accounts.read
     - ledger.balances.read
@@ -21,17 +24,21 @@ operator:
     - ledger.holds.capture
     - ledger.holds.release
 
-# Finanzas: consulta y ajustes contables.
+# Finanzas: consulta, ajustes contables y decisión de solicitudes.
 finance:
   all:
+    - approvals.read
+    - approvals.decide
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.post
     - ledger.transactions.read
 
-# Cumplimiento: consulta.
+# Cumplimiento: consulta y decisión de solicitudes.
 compliance:
   all:
+    - approvals.read
+    - approvals.decide
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read
@@ -39,6 +46,7 @@ compliance:
 # Auditoría interna o revisoría fiscal: solo lectura.
 auditor:
   all:
+    - approvals.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read

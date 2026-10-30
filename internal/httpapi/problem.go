@@ -10,6 +10,8 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/DrewGGM/aluna/internal/access"
+	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ledger"
@@ -113,6 +115,10 @@ var problems = []struct {
 		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Idempotency-Key inválida",
 		Detail: fmt.Sprintf("La clave debe ser texto UTF-8 de hasta %d caracteres.", maxIdempotencyKey),
 	}},
+	{errInvalidApprovalStatus, Problem{
+		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Estado de solicitud desconocido",
+		Detail: "status es pending, approved, rejected, failed o expired.",
+	}},
 	// idempotency
 	{idempotency.ErrKeyReused, unprocessable("idempotency_key_reused", "La Idempotency-Key ya se usó con otro payload")},
 	{idempotency.ErrInProgress, conflict("request_in_progress", "Hay una solicitud con la misma Idempotency-Key en curso")},
@@ -136,6 +142,16 @@ var problems = []struct {
 	{ledger.ErrInvalidHold, unprocessable("invalid_hold", "Datos del hold inválidos")},
 	{ledger.ErrTransactionNotFound, notFound},
 	{ledger.ErrPeriodClosed, conflict("period_closed", "El periodo contable de la fecha de negocio está cerrado")},
+	// access
+	{access.ErrForbidden, forbidden},
+	// approvals
+	{approvals.ErrSelfApproval, Problem{
+		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "Quien pide no puede decidir su propia solicitud",
+	}},
+	{approvals.ErrNotFound, notFound},
+	{approvals.ErrNotPending, conflict("approval_not_pending", "La solicitud ya se decidió")},
+	{approvals.ErrExpired, conflict("approval_expired", "La solicitud venció")},
+	{approvals.ErrNoReason, unprocessable("rejection_reason_required", "Un rechazo necesita un motivo")},
 }
 
 func problemFor(err error) (Problem, bool) {

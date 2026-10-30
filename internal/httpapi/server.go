@@ -17,6 +17,7 @@ import (
 // operaciones y cada módulo aporta las suyas por embedding.
 type API struct {
 	*LedgerHandlers
+	*ApprovalHandlers
 }
 
 var _ gen.StrictServerInterface = API{}

@@ -198,6 +198,78 @@ paths:
         "404": {$ref: "#/components/responses/Problem"}
         "409": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/approvals:
+    get:
+      operationId: listApprovals
+      summary: Solicitudes de maker-checker de la entidad
+      description: >-
+        Las 100 más recientes, de la más nueva a la más vieja. Con `status`, solo las de ese estado;
+        `expired` es una pendiente que pasó sus 7 días.
+      x-aluna-permission: approvals.read
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: {$ref: "#/components/schemas/ApprovalStatus"}
+      responses:
+        "200":
+          description: Solicitudes
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ApprovalList"}
+        "400": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/approvals/{id}/approval:
+    post:
+      operationId: approveRequest
+      summary: Aprobar una solicitud
+      description: >-
+        Corre el comando pedido con su payload original, en la misma transacción que marca la solicitud
+        `approved`. Quien aprueba no puede ser quien pidió (403 `self_approval_forbidden`) y necesita el
+        permiso del tipo de solicitud. Si el comando falla, la solicitud queda `failed` y se responde 200
+        con ese estado. Idempotente por `Idempotency-Key`.
+      x-aluna-permission: approvals.decide
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Solicitud decidida (approved o failed)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "403": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/approvals/{id}/rejection:
+    post:
+      operationId: rejectRequest
+      summary: Rechazar una solicitud
+      description: >-
+        El comando no corre. Quien rechaza no puede ser quien pidió (403 `self_approval_forbidden`) y
+        necesita el permiso del tipo de solicitud.
+      x-aluna-permission: approvals.decide
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RejectApproval"}
+      responses:
+        "200":
+          description: Solicitud rechazada
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "403": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
 components:
   parameters:
     ID:
@@ -367,3 +439,37 @@ components:
       properties:
         hold: {$ref: "#/components/schemas/Hold"}
         transaction: {$ref: "#/components/schemas/Transaction"}
+    ApprovalStatus:
+      type: string
+      enum: [pending, approved, rejected, failed, expired]
+    Approval:
+      type: object
+      required: [id, kind, status, payload, maker, created_at, expires_at]
+      properties:
+        id: {type: string, format: uuid}
+        kind: {type: string, description: Tipo de solicitud; cada módulo registra los suyos}
+        status: {$ref: "#/components/schemas/ApprovalStatus"}
+        payload:
+          description: El comando pedido, tal como se ejecutará al aprobarse.
+          x-go-type: json.RawMessage
+        maker: {type: string, description: sub de quien pidió}
+        checker: {type: string, description: sub de quien decidió}
+        reason: {type: string, description: Motivo del rechazo}
+        result:
+          description: Lo que devolvió el comando aprobado.
+          x-go-type: json.RawMessage
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        decided_at: {type: string, format: date-time}
+    ApprovalList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/Approval"}
+    RejectApproval:
+      type: object
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1}

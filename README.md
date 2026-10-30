@@ -66,6 +66,12 @@ niega con 403. Un canal (`channel`) solo ve los recursos de su `party_id`: el de
 persona), así que a un canal todo le responde 404. La política viaja dentro del binario: un cambio de
 permisos es una versión nueva.
 
+Los comandos sensibles pasan por maker-checker: quedan como solicitud pendiente
+(`GET /v1/approvals`) y corren cuando otra persona, con el permiso de ese tipo de solicitud, los aprueba
+(`POST /v1/approvals/{id}/approval`) o los descarta (`POST /v1/approvals/{id}/rejection`). Quien pidió
+no puede decidir su propia solicitud, y la base lo impide aunque el código fallara; una solicitud vence a
+los 7 días.
+
 | Variable | Uso |
 |---|---|
 | `ALUNA_DATABASE_URL` | Base de la entidad (obligatoria para `api`, `worker`, `migrate` y `audit verify`): `migrate` con el dueño de las tablas, el resto con el rol `aluna_app` |

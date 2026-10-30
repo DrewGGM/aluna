@@ -40,7 +40,7 @@ func TestCaptureAHoldOverHTTP(t *testing.T) {
 	r := postTo(t, ts, path, key, captureBody(200))
 
 	var got gen.HoldCapture
-	if r.status != http.StatusOK || json.Unmarshal(r.body, &got) != nil || got.Hold.Status != gen.Captured ||
+	if r.status != http.StatusOK || json.Unmarshal(r.body, &got) != nil || got.Hold.Status != gen.HoldStatusCaptured ||
 		got.Hold.Captured.Amount != 200 || len(got.Transaction.Entries) != 2 {
 		t.Fatalf("capture = %d %s", r.status, r.body)
 	}
@@ -135,7 +135,7 @@ func placeHoldOver(t *testing.T, ts *httptest.Server, account, counter string, u
 		account, counter, units, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
 	r := postTo(t, ts, "/v1/holds", ids.New().String(), body)
 	var hold gen.Hold
-	if r.status != http.StatusCreated || json.Unmarshal(r.body, &hold) != nil || hold.Status != gen.Pending {
+	if r.status != http.StatusCreated || json.Unmarshal(r.body, &hold) != nil || hold.Status != gen.HoldStatusPending {
 		t.Fatalf("crear el hold = %d %s", r.status, r.body)
 	}
 	return hold

@@ -97,7 +97,7 @@ func TestServeAPIShutsDownWhenContextEnds(t *testing.T) {
 func TestRunAPIInvalidAddr(t *testing.T) {
 	var out bytes.Buffer
 
-	code := runAPI(context.Background(), apiConfig{addr: "127.0.0.1:-1"}, nil, nil, slog.New(slog.NewJSONHandler(&out, nil)))
+	code := runAPI(context.Background(), apiConfig{addr: "127.0.0.1:-1"}, nil, authorization{}, slog.New(slog.NewJSONHandler(&out, nil)))
 
 	if code != 1 {
 		t.Fatalf("código de salida = %d, se esperaba 1", code)

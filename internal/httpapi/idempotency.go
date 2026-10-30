@@ -41,6 +41,12 @@ func holdOperation(id ids.ID, action string) operation {
 	return operation{method: http.MethodPost, path: "/v1/holds/" + id.String() + "/" + action, success: http.StatusOK, targets: []string{id.String()}}
 }
 
+// approvalOperation es una decisión sobre una solicitud: la ruta lleva su id, así la clave y el registro
+// de auditoría son por solicitud.
+func approvalOperation(id ids.ID, action string) operation {
+	return operation{method: http.MethodPost, path: "/v1/approvals/" + id.String() + "/" + action, success: http.StatusOK, targets: []string{id.String()}}
+}
+
 // commands corre cada comando en su transacción, con su registro de auditoría (FR-40); los que mueven
 // dinero, además, una sola vez por Idempotency-Key (architecture §9): la clave se reclama y se completa
 // en la misma transacción del efecto. Las claves van por entidad y sujeto (keyScope): dos entidades que
@@ -73,6 +79,12 @@ func (r storedResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error { 
 
 // VisitReleaseHoldResponse escribe la respuesta guardada de POST /v1/holds/{id}/release.
 func (r storedResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error { return r.write(w) }
+
+// VisitApproveRequestResponse escribe la respuesta guardada de POST /v1/approvals/{id}/approval.
+func (r storedResponse) VisitApproveRequestResponse(w http.ResponseWriter) error { return r.write(w) }
+
+// VisitRejectRequestResponse escribe la respuesta de POST /v1/approvals/{id}/rejection.
+func (r storedResponse) VisitRejectRequestResponse(w http.ResponseWriter) error { return r.write(w) }
 
 // write escribe la respuesta tal como se guardó. El Store no guarda el Content-Type: lo da el status,
 // porque underSavepoint solo produce el JSON del recurso (2xx) o un problem (4xx).

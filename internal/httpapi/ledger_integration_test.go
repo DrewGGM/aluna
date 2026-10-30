@@ -4,7 +4,9 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
@@ -44,15 +47,42 @@ func apiServer(t *testing.T, entity ids.ID) *httptest.Server {
 	return apiServerWith(t, entity, events)
 }
 
-// apiServerWith es apiServer con los eventos del ledger en events.
+// apiServerWith es apiServer con los eventos del ledger en events. Cada request lleva el token de prueba,
+// que entityVerifier acepta como un operador de la entidad: la verificación de tokens se prueba en
+// auth_test.go.
 func apiServerWith(t *testing.T, entity ids.ID, events ledger.Events) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(calendar.New(), events), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool, entity)}
-	cfg := ServerConfig{Audit: &CommandAudit{Records: audit.New(), UoW: postgres.NewUnitOfWork(testPool)}}
-	ts := httptest.NewServer(NewServer(cfg, Routes(api, log), log).Handler)
+	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(calendar.New(), events), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool)}
+	cfg := ServerConfig{
+		Audit:    &CommandAudit{Records: audit.New(), UoW: postgres.NewUnitOfWork(testPool)},
+		Verifier: entityVerifier{Subject: testSubject, LegalEntityID: entity, Roles: []string{testRole}},
+	}
+	handler := NewServer(cfg, Routes(api, log), log).Handler
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+testToken) // reemplaza el que traiga la prueba
+		handler.ServeHTTP(w, r)
+	}))
 	t.Cleanup(ts.Close)
 	return ts
+}
+
+const (
+	testToken   = "token-de-prueba" //nolint:gosec // no es una credencial: entityVerifier solo acepta este texto
+	testSubject = "operador-prueba"
+	testRole    = "operator"
+)
+
+var errUnknownToken = errors.New("token desconocido")
+
+// entityVerifier acepta testToken como su principal.
+type entityVerifier access.Principal
+
+func (v entityVerifier) Verify(_ context.Context, raw string) (access.Principal, error) {
+	if raw != testToken {
+		return access.Principal{}, errUnknownToken
+	}
+	return access.Principal(v), nil
 }
 
 // call hace un request JSON, decodifica la respuesta en out (si no es nil) y devuelve el status.

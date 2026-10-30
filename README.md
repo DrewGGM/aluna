@@ -44,16 +44,26 @@ y módulos con límites estrictos.
 ```bash
 go build -o aluna ./cmd/aluna
 docker compose -f deploy/compose.yaml up -d postgres   # ALUNA_PG_PORT=55432 si el 5432 está ocupado
+docker compose -f deploy/compose.yaml --profile iam up -d keycloak   # IAM de desarrollo en :8180
 ALUNA_DATABASE_URL="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable" ./aluna migrate up
 # la API corre con el rol aluna_app, que no puede modificar ni borrar lo asentado
 ALUNA_DATABASE_URL="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable&options=-c%20role%3Daluna_app" \
-ALUNA_LEGAL_ENTITY_ID=<uuid de la entidad> ./aluna api
+ALUNA_OIDC_ISSUER=http://localhost:8180/realms/aluna ALUNA_OIDC_AUDIENCE=aluna-api ./aluna api
+# un token del realm de prueba (usuario operador/operador), para el header Authorization: Bearer
+curl -s -d grant_type=password -d client_id=aluna-dev -d username=operador -d password=operador \
+  http://localhost:8180/realms/aluna/protocol/openid-connect/token
 ```
+
+Cada request, salvo `/healthz` y `/readyz`, lleva un token OIDC del emisor configurado, con `iat` y una
+vida de 15 min como mucho; la entidad legal con la que opera sale del claim `legal_entity_id` del token,
+nunca de un header.
 
 | Variable | Uso |
 |---|---|
-| `ALUNA_DATABASE_URL` | Base de la entidad (obligatoria para `api` y `migrate`): `migrate` con el dueño de las tablas, `api` con el rol `aluna_app` |
-| `ALUNA_LEGAL_ENTITY_ID` | Entidad legal que sirve el despliegue (obligatoria para `api`) |
+| `ALUNA_DATABASE_URL` | Base de la entidad (obligatoria para `api`, `worker`, `migrate` y `audit verify`): `migrate` con el dueño de las tablas, el resto con el rol `aluna_app` |
+| `ALUNA_OIDC_ISSUER` | Emisor de los tokens (obligatoria para `api`); se descubre al arrancar |
+| `ALUNA_OIDC_AUDIENCE` | Audiencia que deben traer los tokens (obligatoria para `api`) |
+| `ALUNA_AUDIT_ANCHOR_DIR` | Directorio, ya existente, del ancla de los bloques de auditoría (obligatoria para `worker` y `audit verify`) |
 | `ALUNA_HTTP_ADDR` | Dirección de la API; por defecto `:8080` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Si existe, trazas y métricas salen por OTLP/HTTP (y el resto de variables `OTEL_*`) |
 

@@ -45,6 +45,9 @@ type ServerConfig struct {
 	Ready func(ctx context.Context) error
 	// Audit registra los comandos (POST); nil solo en un servidor sin rutas de comandos.
 	Audit *CommandAudit
+	// Verifier verifica el token de cada request que no es un probe; nil solo en un servidor sin rutas de
+	// negocio (los handlers no corren sin principal).
+	Verifier TokenVerifier
 }
 
 // NewServer arma el servidor con /healthz, /readyz, las rutas que registra routes (puede ser nil) y
@@ -57,7 +60,7 @@ func NewServer(cfg ServerConfig, routes func(*http.ServeMux), log *slog.Logger) 
 		routes(mux)
 	}
 	return &http.Server{
-		Handler:           middleware(log, mux, cfg.Audit),
+		Handler:           middleware(log, mux, cfg),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

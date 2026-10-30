@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/httpapi"
-	"github.com/DrewGGM/aluna/internal/ids"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -98,7 +97,7 @@ func TestServeAPIShutsDownWhenContextEnds(t *testing.T) {
 func TestRunAPIInvalidAddr(t *testing.T) {
 	var out bytes.Buffer
 
-	code := runAPI(context.Background(), apiConfig{addr: "127.0.0.1:-1"}, slog.New(slog.NewJSONHandler(&out, nil)))
+	code := runAPI(context.Background(), apiConfig{addr: "127.0.0.1:-1"}, nil, slog.New(slog.NewJSONHandler(&out, nil)))
 
 	if code != 1 {
 		t.Fatalf("código de salida = %d, se esperaba 1", code)
@@ -155,24 +154,27 @@ func TestMigrateNeedsDatabaseURL(t *testing.T) {
 }
 
 func TestAPIConfigFromEnv(t *testing.T) {
-	entity := ids.New().String()
+	const issuer, audience = "https://iam.example/realms/aluna", "aluna-api"
 	cases := map[string]struct {
-		dsn, entity string
-		wantErr     string
+		dsn, issuer, audience string
+		wantErr               string
 	}{
-		"completa":         {"postgres://x@db/aluna", entity, ""},
-		"sin base":         {"", entity, "ALUNA_DATABASE_URL"},
-		"entidad inválida": {"postgres://x@db/aluna", "no-es-uuid", "ALUNA_LEGAL_ENTITY_ID"},
+		"completa":      {"postgres://x@db/aluna", issuer, audience, ""},
+		"sin base":      {"", issuer, audience, "ALUNA_DATABASE_URL"},
+		"sin emisor":    {"postgres://x@db/aluna", "", audience, "ALUNA_OIDC_ISSUER"},
+		"sin audiencia": {"postgres://x@db/aluna", issuer, "", "ALUNA_OIDC_AUDIENCE"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("ALUNA_HTTP_ADDR", "") // el default se prueba sin depender del entorno
 			t.Setenv("ALUNA_DATABASE_URL", tc.dsn)
-			t.Setenv("ALUNA_LEGAL_ENTITY_ID", tc.entity)
+			t.Setenv("ALUNA_OIDC_ISSUER", tc.issuer)
+			t.Setenv("ALUNA_OIDC_AUDIENCE", tc.audience)
 
 			cfg, err := apiConfigFromEnv()
 
-			if tc.wantErr == "" && (err != nil || cfg.entity.String() != entity || cfg.addr != ":8080") {
+			want := apiConfig{addr: ":8080", dsn: tc.dsn, issuer: issuer, audience: audience}
+			if tc.wantErr == "" && (err != nil || cfg != want) {
 				t.Fatalf("cfg = %+v, err = %v", cfg, err)
 			}
 			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {

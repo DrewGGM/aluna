@@ -25,7 +25,6 @@ import (
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi"
 	"github.com/DrewGGM/aluna/internal/idempotency"
-	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/jobs"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/outbox"
@@ -43,7 +42,8 @@ const usage = `uso: aluna <comando>
 
 comandos:
   api                        sirve la API HTTP en ALUNA_HTTP_ADDR (por defecto :8080); necesita
-                             ALUNA_DATABASE_URL y ALUNA_LEGAL_ENTITY_ID; con
+                             ALUNA_DATABASE_URL, ALUNA_OIDC_ISSUER (el emisor de los tokens) y
+                             ALUNA_OIDC_AUDIENCE (la audiencia que deben traer); con
                              OTEL_EXPORTER_OTLP_ENDPOINT exporta trazas y métricas por OTLP
   worker                     corre los jobs (outbox, holds, saldos async, purgas, sellado de la
                              auditoría) sobre ALUNA_DATABASE_URL, con el ancla de los bloques en
@@ -148,7 +148,12 @@ func apiCommand(ctx context.Context, stdout io.Writer) int {
 		log.Error("configuración de la api", "error", err)
 		return 1
 	}
-	return runAPI(ctx, cfg, log)
+	verifier, err := httpapi.NewOIDCVerifier(ctx, cfg.issuer, cfg.audience, log)
+	if err != nil {
+		log.Error("emisor de los tokens", "error", err)
+		return 1
+	}
+	return runAPI(ctx, cfg, verifier, log)
 }
 
 // flushTelemetry envía lo que quede de trazas y métricas antes de salir, sin esperar más de
@@ -161,11 +166,11 @@ func flushTelemetry(ctx context.Context, shutdown telemetry.Shutdown, log *slog.
 	}
 }
 
-// apiConfig es la configuración de aluna api. Un despliegue sirve a una sola entidad regulada
-// (ADR-0002): su entidad legal es configuración hasta que llegue del token (T-035).
+// apiConfig es la configuración de aluna api. La entidad legal de cada request sale de su token (FR-41),
+// no de la configuración.
 type apiConfig struct {
-	addr, dsn string
-	entity    ids.ID
+	addr, dsn        string
+	issuer, audience string
 }
 
 func apiConfigFromEnv() (apiConfig, error) {
@@ -173,15 +178,20 @@ func apiConfigFromEnv() (apiConfig, error) {
 	if cfg.dsn == "" {
 		return apiConfig{}, errNoDatabaseURL
 	}
-	entity, err := ids.Parse(os.Getenv("ALUNA_LEGAL_ENTITY_ID"))
-	if err != nil {
-		return apiConfig{}, fmt.Errorf("ALUNA_LEGAL_ENTITY_ID: %w", err)
+	cfg.issuer, cfg.audience = os.Getenv("ALUNA_OIDC_ISSUER"), os.Getenv("ALUNA_OIDC_AUDIENCE")
+	if cfg.issuer == "" {
+		return apiConfig{}, fmt.Errorf("%w: falta ALUNA_OIDC_ISSUER", errNoOIDC)
 	}
-	cfg.entity = entity
+	if cfg.audience == "" {
+		return apiConfig{}, fmt.Errorf("%w: falta ALUNA_OIDC_AUDIENCE", errNoOIDC)
+	}
 	return cfg, nil
 }
 
-var errNoDatabaseURL = errors.New("falta ALUNA_DATABASE_URL")
+var (
+	errNoDatabaseURL = errors.New("falta ALUNA_DATABASE_URL")
+	errNoOIDC        = errors.New("configuración OIDC incompleta")
+)
 
 // connectTimeout acota la conexión inicial: si la base no responde, el proceso falla en vez de dejar el
 // puerto abierto sin servir.
@@ -195,7 +205,7 @@ const readyTimeout = 2 * time.Second
 
 // runAPI abre el puerto primero (un puerto ocupado falla sin tocar la base), conecta la base, cablea
 // el ledger a mano y sirve hasta que ctx se cancela.
-func runAPI(ctx context.Context, cfg apiConfig, log *slog.Logger) int {
+func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, log *slog.Logger) int {
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.addr)
 	if err != nil {
 		log.Error("no se pudo abrir el puerto", "addr", cfg.addr, "error", err)
@@ -219,14 +229,14 @@ func runAPI(ctx context.Context, cfg apiConfig, log *slog.Logger) int {
 	}
 	uow := postgres.NewUnitOfWork(pool)
 	api := httpapi.API{
-		LedgerHandlers: httpapi.NewLedgerHandlers(ledger.New(calendar.New(), events), uow, idempotency.NewStore(pool), pool, cfg.entity),
+		LedgerHandlers: httpapi.NewLedgerHandlers(ledger.New(calendar.New(), events), uow, idempotency.NewStore(pool), pool),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)
 		defer cancel()
 		return pool.Ping(ctx)
 	}
-	serverCfg := httpapi.ServerConfig{Ready: ready, Audit: &httpapi.CommandAudit{Records: audit.New(), UoW: uow}}
+	serverCfg := httpapi.ServerConfig{Ready: ready, Audit: &httpapi.CommandAudit{Records: audit.New(), UoW: uow}, Verifier: verifier}
 	return serveAPI(ctx, ln, httpapi.NewServer(serverCfg, httpapi.Routes(api, log), log), log)
 }
 

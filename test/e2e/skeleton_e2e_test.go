@@ -6,10 +6,13 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +20,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/coreos/go-oidc/v3/oidc/oidctest"
 
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
@@ -34,20 +40,20 @@ func TestSkeleton(t *testing.T) {
 	if out, err := alunaCmd(t, bin, []string{"ALUNA_DATABASE_URL=" + dsn}, "migrate", "up").CombinedOutput(); err != nil {
 		t.Fatalf("aluna migrate up: %v\n%s", err, out)
 	}
-	base := startAPI(t, bin, dsn)
+	api := startAPI(t, bin, dsn)
 
-	cash, deposit := createAccount(t, base, "asset"), createAccount(t, base, "liability")
+	cash, deposit := createAccount(t, api, "asset"), createAccount(t, api, "liability")
 	posting := fmt.Sprintf(`{"code":"deposito","value_date":"2026-10-26","business_date":"2026-10-26",
 		"source":"e2e","external_ref":%q,"entries":[
 		{"account_id":%q,"amount":{"amount":10000000,"currency":"COP"}},
 		{"account_id":%q,"amount":{"amount":-10000000,"currency":"COP"}}]}`, ids.New().String(), cash, deposit)
-	if status := call(t, http.MethodPost, base+"/v1/transactions", posting, nil); status != http.StatusCreated {
+	if status := call(t, api, http.MethodPost, "/v1/transactions", posting, nil); status != http.StatusCreated {
 		t.Fatalf("asentar = %d", status)
 	}
 
 	for account, posted := range map[string]int64{cash: 10_000_000, deposit: -10_000_000} {
 		var b struct{ Posted, Natural struct{ Amount int64 } }
-		if status := call(t, http.MethodGet, base+"/v1/ledger-accounts/"+account+"/balance", "", &b); status != http.StatusOK {
+		if status := call(t, api, http.MethodGet, "/v1/ledger-accounts/"+account+"/balance", "", &b); status != http.StatusOK {
 			t.Fatalf("saldo de %s = %d", account, status)
 		}
 		if b.Posted.Amount != posted || b.Natural.Amount != 10_000_000 {
@@ -77,17 +83,22 @@ func alunaCmd(t *testing.T, bin string, env []string, args ...string) *exec.Cmd 
 	return cmd
 }
 
-// startAPI arranca aluna api con el rol aluna_app, espera /readyz y devuelve su URL. El proceso muere
-// al terminar la prueba; si falla, su log sale en la prueba.
-func startAPI(t *testing.T, bin, dsn string) string {
+// runningAPI es una aluna api corriendo y el token con que se le habla.
+type runningAPI struct{ base, token string }
+
+// startAPI arranca aluna api con el rol aluna_app y un emisor OIDC de prueba, espera /readyz y devuelve
+// su URL con un token de operador de una entidad nueva. El proceso muere al terminar la prueba; si falla,
+// su log sale en la prueba.
+func startAPI(t *testing.T, bin, dsn string) runningAPI {
 	t.Helper()
 	appDSN, err := pgtest.AppDSN(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := freeAddr(t)
+	issuer, token := oidcIssuer(t)
 	cmd := alunaCmd(t, bin, []string{
-		"ALUNA_HTTP_ADDR=" + addr, "ALUNA_DATABASE_URL=" + appDSN, "ALUNA_LEGAL_ENTITY_ID=" + ids.New().String(),
+		"ALUNA_HTTP_ADDR=" + addr, "ALUNA_DATABASE_URL=" + appDSN, "ALUNA_OIDC_ISSUER=" + issuer, "ALUNA_OIDC_AUDIENCE=" + audience,
 	}, "api")
 	var logs bytes.Buffer // os/exec no escribe a la vez en Stdout y Stderr si son el mismo writer
 	cmd.Stdout, cmd.Stderr = &logs, &logs
@@ -102,7 +113,32 @@ func startAPI(t *testing.T, bin, dsn string) string {
 	})
 	base := "http://" + addr
 	waitReady(t, base+"/readyz")
-	return base
+	return runningAPI{base: base, token: token}
+}
+
+const audience = "aluna-api"
+
+// oidcIssuer es un emisor OIDC de prueba y un token suyo, con la vida máxima de 15 min, de un operador
+// de una entidad nueva.
+func oidcIssuer(t *testing.T) (issuer, token string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &oidctest.Server{PublicKeys: []oidctest.PublicKey{{PublicKey: key.Public(), KeyID: "k1", Algorithm: oidc.RS256}}}
+	ts := httptest.NewServer(s)
+	t.Cleanup(ts.Close)
+	s.SetIssuer(ts.URL)
+	now := time.Now()
+	claims, err := json.Marshal(map[string]any{
+		"iss": ts.URL, "aud": audience, "sub": "operador-e2e", "iat": now.Unix(), "exp": now.Add(15 * time.Minute).Unix(),
+		"legal_entity_id": ids.New().String(), "roles": []string{"operator"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ts.URL, oidctest.SignIDToken(key, "k1", oidc.RS256, string(claims))
 }
 
 // waitReady sondea url hasta que responde 200; mientras el proceso arranca, la conexión falla.
@@ -125,11 +161,11 @@ func waitReady(t *testing.T, url string) {
 	t.Fatalf("%s no respondió 200 en 30 s", url)
 }
 
-func createAccount(t *testing.T, base, kind string) string {
+func createAccount(t *testing.T, a runningAPI, kind string) string {
 	t.Helper()
 	var account struct{ ID string }
 	body := fmt.Sprintf(`{"code":"e2e-%s","kind":%q,"currency":"COP","balance_mode":"sync"}`, ids.New(), kind)
-	if status := call(t, http.MethodPost, base+"/v1/ledger-accounts", body, &account); status != http.StatusCreated {
+	if status := call(t, a, http.MethodPost, "/v1/ledger-accounts", body, &account); status != http.StatusCreated {
 		t.Fatalf("crear cuenta %s = %d", kind, status)
 	}
 	return account.ID
@@ -138,13 +174,15 @@ func createAccount(t *testing.T, base, kind string) string {
 // client no deja que un proceso colgado cuelgue la prueba.
 var client = &http.Client{Timeout: 10 * time.Second}
 
-// call hace un request JSON y decodifica la respuesta en out si no es nil.
-func call(t *testing.T, method, url, body string, out any) int {
+// call hace un request JSON con el token de a a path y decodifica la respuesta en out si no es nil.
+func call(t *testing.T, a runningAPI, method, path, body string, out any) int {
 	t.Helper()
+	url := a.base + path
 	req, err := http.NewRequestWithContext(t.Context(), method, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.Header.Set("Authorization", "Bearer "+a.token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", ids.New().String())
 	resp, err := client.Do(req)

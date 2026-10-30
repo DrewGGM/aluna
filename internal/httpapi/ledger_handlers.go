@@ -17,7 +17,7 @@ import (
 
 // Origen de los postings manuales que entran por POST /v1/transactions. Quedan guardados para siempre
 // en ledger.transactions: rule_version "manual.v1" dice que los entries vinieron armados por quien
-// llamó y no de una regla de posting versionada. Con autenticación, el actor será el del token (T-035).
+// llamó y no de una regla de posting versionada. Quién llamó queda en el registro de auditoría.
 const (
 	manualActor       = "api"
 	manualChannel     = "api"
@@ -29,27 +29,27 @@ type LedgerHandlers struct {
 	ledger   *ledger.Service
 	commands commands
 	reader   postgres.Querier
-	// entity es la entidad legal del despliegue (un despliegue por entidad, ADR-0002); con
-	// autenticación vendrá del token (T-035).
-	entity ids.ID
 }
 
 // NewLedgerHandlers crea los handlers del ledger. keys guarda las respuestas de los comandos con
-// Idempotency-Key; reader sirve las lecturas fuera de transacción.
-func NewLedgerHandlers(l *ledger.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier, entity ids.ID) *LedgerHandlers {
-	return &LedgerHandlers{
-		ledger: l, commands: commands{uow: uow, keys: keys, entity: entity}, reader: reader, entity: entity,
-	}
+// Idempotency-Key; reader sirve las lecturas fuera de transacción. La entidad legal de cada request es la
+// de su token (FR-41).
+func NewLedgerHandlers(l *ledger.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *LedgerHandlers {
+	return &LedgerHandlers{ledger: l, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
-// CreateLedgerAccount crea una cuenta de la entidad del despliegue.
+// CreateLedgerAccount crea una cuenta de la entidad del token.
 func (h *LedgerHandlers) CreateLedgerAccount(ctx context.Context, req gen.CreateLedgerAccountRequestObject) (gen.CreateLedgerAccountResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
 	cur, err := money.CurrencyOf(req.Body.Currency)
 	if err != nil {
 		return nil, fmt.Errorf("moneda de la cuenta: %w", err)
 	}
 	in := ledger.CreateAccountInput{
-		LegalEntityID: h.entity, Code: req.Body.Code, Kind: ledger.Kind(req.Body.Kind), Currency: cur,
+		LegalEntityID: p.LegalEntityID, Code: req.Body.Code, Kind: ledger.Kind(req.Body.Kind), Currency: cur,
 		Mode: ledger.BalanceMode(req.Body.BalanceMode),
 	}
 	if req.Body.LowerLimit != nil {
@@ -68,19 +68,27 @@ func (h *LedgerHandlers) CreateLedgerAccount(ctx context.Context, req gen.Create
 	return resp, nil
 }
 
-// GetLedgerAccount lee una cuenta de la entidad del despliegue.
+// GetLedgerAccount lee una cuenta de la entidad del token.
 func (h *LedgerHandlers) GetLedgerAccount(ctx context.Context, req gen.GetLedgerAccountRequestObject) (gen.GetLedgerAccountResponseObject, error) {
-	account, err := h.ledger.Account(ctx, h.reader, h.entity, ids.ID(req.Id))
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	account, err := h.ledger.Account(ctx, h.reader, p.LegalEntityID, ids.ID(req.Id))
 	if err != nil {
 		return nil, err
 	}
 	return gen.GetLedgerAccount200JSONResponse(toAccountJSON(account)), nil
 }
 
-// GetLedgerAccountBalance lee el saldo de una cuenta de la entidad del despliegue: el materializado o,
+// GetLedgerAccountBalance lee el saldo de una cuenta de la entidad del token: el materializado o,
 // con un corte de fecha valor o de conocimiento, el bitemporal.
 func (h *LedgerHandlers) GetLedgerAccountBalance(ctx context.Context, req gen.GetLedgerAccountBalanceRequestObject) (gen.GetLedgerAccountBalanceResponseObject, error) {
-	account, err := h.ledger.Account(ctx, h.reader, h.entity, ids.ID(req.Id))
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	account, err := h.ledger.Account(ctx, h.reader, p.LegalEntityID, ids.ID(req.Id))
 	if err != nil {
 		return nil, err
 	}
@@ -137,9 +145,13 @@ func (h *LedgerHandlers) balanceAsOf(ctx context.Context, account ledger.Account
 	return b, nil
 }
 
-// PostTransaction asienta una transacción manual de la entidad del despliegue, una sola vez por
+// PostTransaction asienta una transacción manual de la entidad del token, una sola vez por
 // Idempotency-Key.
 func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransactionRequestObject) (gen.PostTransactionResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if err := requireBusinessDate(req.Body.BusinessDate); err != nil {
 		return nil, err
 	}
@@ -152,11 +164,11 @@ func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransa
 		entries[i] = ledger.EntryInput{AccountID: ids.ID(e.AccountId), Amount: amount}
 	}
 	in := ledger.PostInput{
-		LegalEntityID: h.entity, Code: req.Body.Code, ValueDate: req.Body.ValueDate.Time,
+		LegalEntityID: p.LegalEntityID, Code: req.Body.Code, ValueDate: req.Body.ValueDate.Time,
 		BusinessDate: req.Body.BusinessDate.Time, Source: req.Body.Source, ExternalRef: req.Body.ExternalRef,
 		Actor: manualActor, Channel: manualChannel, RuleVersion: manualRuleVersion, Entries: entries,
 	}
-	resp, err := h.commands.idempotent(ctx, postTransaction, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+	resp, err := h.commands.idempotent(ctx, p, postTransaction, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
 		posted, err := h.ledger.Post(ctx, tx, in)
 		if err != nil {
 			return nil, err
@@ -169,9 +181,13 @@ func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransa
 	return resp, nil
 }
 
-// GetTransaction lee una transacción de la entidad del despliegue.
+// GetTransaction lee una transacción de la entidad del token.
 func (h *LedgerHandlers) GetTransaction(ctx context.Context, req gen.GetTransactionRequestObject) (gen.GetTransactionResponseObject, error) {
-	tx, err := h.ledger.Transaction(ctx, h.reader, h.entity, ids.ID(req.Id))
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := h.ledger.Transaction(ctx, h.reader, p.LegalEntityID, ids.ID(req.Id))
 	if err != nil {
 		return nil, err
 	}
@@ -220,18 +236,22 @@ func moneyJSON(a money.Amount) gen.Money {
 	return gen.Money{Amount: a.Units(), Currency: a.Currency().Code()}
 }
 
-// PlaceHold retiene fondos de una cuenta de la entidad del despliegue, una sola vez por
+// PlaceHold retiene fondos de una cuenta de la entidad del token, una sola vez por
 // Idempotency-Key.
 func (h *LedgerHandlers) PlaceHold(ctx context.Context, req gen.PlaceHoldRequestObject) (gen.PlaceHoldResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
 	amount, err := amountOf(req.Body.Amount)
 	if err != nil {
 		return nil, fmt.Errorf("hold: %w", err)
 	}
 	in := ledger.PlaceHoldInput{
-		LegalEntityID: h.entity, AccountID: ids.ID(req.Body.AccountId), CounterAccountID: ids.ID(req.Body.CounterAccountId),
+		LegalEntityID: p.LegalEntityID, AccountID: ids.ID(req.Body.AccountId), CounterAccountID: ids.ID(req.Body.CounterAccountId),
 		Amount: amount, ExpiresAt: req.Body.ExpiresAt,
 	}
-	resp, err := h.commands.idempotent(ctx, placeHold, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+	resp, err := h.commands.idempotent(ctx, p, placeHold, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
 		placed, err := h.ledger.PlaceHold(ctx, tx, in)
 		if err != nil {
 			return nil, err
@@ -244,9 +264,13 @@ func (h *LedgerHandlers) PlaceHold(ctx context.Context, req gen.PlaceHoldRequest
 	return resp, nil
 }
 
-// CaptureHold asienta parte o todo un hold de la entidad del despliegue, una sola vez por
+// CaptureHold asienta parte o todo un hold de la entidad del token, una sola vez por
 // Idempotency-Key.
 func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldRequestObject) (gen.CaptureHoldResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
 	op := holdOperation(ids.ID(req.Id), "capture")
 	noteTargets(ctx, op.targets) // antes de validar el cuerpo: su rechazo también nombra el hold
 	if err := requireBusinessDate(req.Body.BusinessDate); err != nil {
@@ -257,10 +281,10 @@ func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldReq
 		return nil, fmt.Errorf("capture: %w", err)
 	}
 	in := ledger.CaptureInput{
-		LegalEntityID: h.entity, HoldID: ids.ID(req.Id), Amount: amount,
+		LegalEntityID: p.LegalEntityID, HoldID: ids.ID(req.Id), Amount: amount,
 		BusinessDate: req.Body.BusinessDate.Time, Actor: manualActor, Channel: manualChannel,
 	}
-	resp, err := h.commands.idempotent(ctx, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
 		captured, posted, err := h.ledger.CaptureHold(ctx, tx, in)
 		if err != nil {
 			return nil, err
@@ -273,11 +297,15 @@ func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldReq
 	return resp, nil
 }
 
-// ReleaseHold libera un hold de la entidad del despliegue, una sola vez por Idempotency-Key.
+// ReleaseHold libera un hold de la entidad del token, una sola vez por Idempotency-Key.
 func (h *LedgerHandlers) ReleaseHold(ctx context.Context, req gen.ReleaseHoldRequestObject) (gen.ReleaseHoldResponseObject, error) {
-	in := ledger.ReleaseInput{LegalEntityID: h.entity, HoldID: ids.ID(req.Id)}
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	in := ledger.ReleaseInput{LegalEntityID: p.LegalEntityID, HoldID: ids.ID(req.Id)}
 	op := holdOperation(ids.ID(req.Id), "release")
-	resp, err := h.commands.idempotent(ctx, op, req.Params.IdempotencyKey, nil, func(tx postgres.Tx) (any, error) {
+	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, nil, func(tx postgres.Tx) (any, error) {
 		released, err := h.ledger.ReleaseHold(ctx, tx, in)
 		if err != nil {
 			return nil, err

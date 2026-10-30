@@ -137,7 +137,7 @@ func TestACommandIsAuditedInItsTransaction(t *testing.T) {
 	id, _ := body["id"].(string)
 	got := onlyRecord(t, correlation)
 	want := audit.Record{
-		Actor: auditActor, Role: auditRole, Channel: auditChannel, IP: "127.0.0.1", Command: "POST /v1/transactions",
+		Actor: testSubject, Role: testRole, Channel: auditChannel, IP: "127.0.0.1", Command: "POST /v1/transactions",
 		Targets: slices.Sorted(slices.Values([]string{id, cash, deposit})), Result: resultOK, After: got.After,
 	}
 	if !reflect.DeepEqual(got.Record, want) {
@@ -345,5 +345,24 @@ func TestARejectedHoldCommandNamesTheHold(t *testing.T) {
 				t.Fatalf("respuesta %d %s; registro %+v, se esperaba el rechazo con el hold como target", resp.status, resp.body, got.Record)
 			}
 		})
+	}
+}
+
+// TestAnUnauthenticatedCommandIsAudited: un POST sin token recibe 401 y queda registrado, sin actor
+// conocido, con el código del problem.
+func TestAnUnauthenticatedCommandIsAudited(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := ServerConfig{
+		Audit:    &CommandAudit{Records: audit.New(), UoW: postgres.NewUnitOfWork(testPool)},
+		Verifier: entityVerifier{Subject: testSubject, LegalEntityID: ids.New()},
+	}
+	ts := httptest.NewServer(NewServer(cfg, Routes(API{}, log), log).Handler)
+	t.Cleanup(ts.Close)
+
+	resp, correlation := auditedRequest(t, ts, http.MethodPost, "/v1/ledger-accounts", "", `{}`)
+
+	got := onlyRecord(t, correlation)
+	if resp.status != http.StatusUnauthorized || got.Result != "unauthenticated" || got.Actor != auditActor || got.Role != auditRole {
+		t.Fatalf("respuesta %d; registro %+v, se esperaba el 401 de un anónimo", resp.status, got.Record)
 	}
 }

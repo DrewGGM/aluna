@@ -8,12 +8,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime"
 	"syscall"
 	"testing"
 
-	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/coreos/go-oidc/v3/oidc/oidctest"
+
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
 
@@ -44,7 +46,8 @@ func TestRunAPIStopsOnSIGTERM(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ALUNA_DATABASE_URL", appDSN)
-	t.Setenv("ALUNA_LEGAL_ENTITY_ID", ids.New().String())
+	t.Setenv("ALUNA_OIDC_ISSUER", oidcIssuer(t))
+	t.Setenv("ALUNA_OIDC_AUDIENCE", "aluna-api")
 	exit := make(chan int, 1)
 	go func() { exit <- run([]string{"api"}, io.Discard) }()
 	waitHealthy(t, addr)
@@ -79,4 +82,14 @@ func freeAddr(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return addr
+}
+
+// oidcIssuer es un emisor OIDC de prueba: la api lo descubre al arrancar.
+func oidcIssuer(t *testing.T) string {
+	t.Helper()
+	s := &oidctest.Server{}
+	ts := httptest.NewServer(s)
+	t.Cleanup(ts.Close)
+	s.SetIssuer(ts.URL)
+	return ts.URL
 }

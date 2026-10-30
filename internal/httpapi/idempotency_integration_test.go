@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -227,7 +227,7 @@ func TestAccountNotFoundIsStored(t *testing.T) {
 // TestAnUnexpectedErrorIsNotStored: un error que no es de negocio (un 500) sube tal cual y no se
 // guarda, así que el reintento con la misma clave ejecuta el comando.
 func TestAnUnexpectedErrorIsNotStored(t *testing.T) {
-	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool), entity: ids.New()}
+	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool)}
 	op := operation{method: http.MethodPost, path: "/prueba", success: http.StatusCreated}
 	key, down := ids.New().String(), errors.New("la base se cayó")
 	failing := func(postgres.Tx) (any, error) { return nil, down }
@@ -235,10 +235,11 @@ func TestAnUnexpectedErrorIsNotStored(t *testing.T) {
 
 	ctx := withTestTrail(t)
 
-	if _, err := cmds.idempotent(ctx, op, key, "cuerpo", failing); !errors.Is(err, down) {
+	p := testPrincipal()
+	if _, err := cmds.idempotent(ctx, p, op, key, "cuerpo", failing); !errors.Is(err, down) {
 		t.Fatalf("= %v; el error del comando debe subir tal cual", err)
 	}
-	resp, err := cmds.idempotent(ctx, op, key, "cuerpo", succeeding)
+	resp, err := cmds.idempotent(ctx, p, op, key, "cuerpo", succeeding)
 
 	if err != nil || resp.status != http.StatusCreated || string(resp.body) != "{\"ok\":\"sí\"}\n" {
 		t.Fatalf("reintento tras un 500 = %+v, %v; se esperaba que corriera el comando", resp, err)
@@ -257,7 +258,7 @@ func TestARequestInFlightIs409(t *testing.T) {
 	defer releaseOnce() // si la prueba falla antes, la primera transacción no queda abierta
 	go func() {
 		done <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
-			scope := fmt.Sprintf("%s %s %s", entity, postTransaction.method, postTransaction.path)
+			scope := keyScope(access.Principal{Subject: testSubject, LegalEntityID: entity}, postTransaction)
 			if _, err := idempotency.NewStore(testPool).Claim(t.Context(), tx, scope, key, [32]byte{}); err != nil {
 				return err
 			}
@@ -328,15 +329,36 @@ func TestKeysAreScopedByEntity(t *testing.T) {
 	}
 }
 
+// TestKeysAreScopedBySubject: dos sujetos de una entidad no comparten claves; la misma clave con el mismo
+// cuerpo de otro sujeto no es un reintento y no recibe la respuesta del primero.
+func TestKeysAreScopedBySubject(t *testing.T) {
+	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool)}
+	op := operation{method: http.MethodPost, path: "/prueba", success: http.StatusCreated}
+	key, entity := ids.New().String(), ids.New()
+	runs := 0
+	effect := func(postgres.Tx) (any, error) { runs++; return map[string]int{"run": runs}, nil }
+
+	for _, subject := range []string{"sujeto-a", "sujeto-b"} {
+		p := access.Principal{Subject: subject, LegalEntityID: entity}
+		if _, err := cmds.idempotent(withTestTrail(t), p, op, key, "cuerpo", effect); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if runs != 2 {
+		t.Fatalf("el comando corrió %d veces para dos sujetos con la misma clave, se esperaba 2", runs)
+	}
+}
+
 // TestACommandWithoutTrailFailsClosed: sin rastro de auditoría en el contexto, un comando no corre.
 func TestACommandWithoutTrailFailsClosed(t *testing.T) {
-	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool), entity: ids.New()}
+	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool)}
 	op := operation{method: http.MethodPost, path: "/prueba", success: http.StatusCreated}
 	ran := false
 	effect := func(postgres.Tx) (any, error) { ran = true; return map[string]string{}, nil }
 
 	_, runErr := cmds.run(t.Context(), op, effect)
-	_, keyErr := cmds.idempotent(t.Context(), op, ids.New().String(), "cuerpo", effect)
+	_, keyErr := cmds.idempotent(t.Context(), testPrincipal(), op, ids.New().String(), "cuerpo", effect)
 
 	if !errors.Is(runErr, errNoAuditTrail) || !errors.Is(keyErr, errNoAuditTrail) || ran {
 		t.Fatalf("sin rastro: run = %v, idempotent = %v, corrió el efecto: %v", runErr, keyErr, ran)
@@ -350,4 +372,9 @@ func withTestTrail(t *testing.T) context.Context {
 	return context.WithValue(t.Context(), auditTrailKey{}, &auditTrail{records: audit.New(), base: audit.Record{
 		Actor: "prueba", Role: "prueba", Channel: "prueba", CorrelationID: ids.New().String(), Command: "POST /prueba",
 	}})
+}
+
+// testPrincipal es un operador de una entidad nueva.
+func testPrincipal() access.Principal {
+	return access.Principal{Subject: testSubject, LegalEntityID: ids.New(), Roles: []string{testRole}}
 }

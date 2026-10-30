@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"unicode/utf8"
 
+	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/postgres"
@@ -42,12 +43,11 @@ func holdOperation(id ids.ID, action string) operation {
 
 // commands corre cada comando en su transacción, con su registro de auditoría (FR-40); los que mueven
 // dinero, además, una sola vez por Idempotency-Key (architecture §9): la clave se reclama y se completa
-// en la misma transacción del efecto. Las claves van por entidad: dos entidades que comparten la base no
-// comparten claves.
+// en la misma transacción del efecto. Las claves van por entidad y sujeto (keyScope): dos entidades que
+// comparten la base, o dos sujetos de una entidad, no comparten claves.
 type commands struct {
-	uow    *postgres.UnitOfWork
-	keys   *idempotency.Store
-	entity ids.ID
+	uow  *postgres.UnitOfWork
+	keys *idempotency.Store
 }
 
 // storedResponse es la respuesta de un comando tal como se escribe; la de uno con Idempotency-Key se
@@ -87,10 +87,10 @@ func (r storedResponse) write(w http.ResponseWriter) error {
 	return err
 }
 
-// idempotent corre effect para op una sola vez por Idempotency-Key key. Un 4xx de negocio también se
-// guarda; un error que no es de negocio sube sin guardarse, para que el cliente pueda reintentar. Un
-// reintento con la misma clave recibe la respuesta guardada y queda auditado como replay.
-func (c commands) idempotent(ctx context.Context, op operation, key string, request any,
+// idempotent corre effect para op una sola vez por Idempotency-Key key del principal p. Un 4xx de
+// negocio también se guarda; un error que no es de negocio sube sin guardarse, para que el cliente pueda
+// reintentar. Un reintento con la misma clave recibe la respuesta guardada y queda auditado como replay.
+func (c commands) idempotent(ctx context.Context, p access.Principal, op operation, key string, request any,
 	effect func(tx postgres.Tx) (any, error),
 ) (storedResponse, error) {
 	// antes de validar: un rechazo de la clave también nombra el recurso
@@ -102,7 +102,7 @@ func (c commands) idempotent(ctx context.Context, op operation, key string, requ
 	if err != nil {
 		return storedResponse{}, err
 	}
-	scope := c.entity.String() + " " + op.method + " " + op.path
+	scope := keyScope(p, op)
 	return c.audited(ctx, func(tx postgres.Tx) (storedResponse, string, error) {
 		claim, err := c.keys.Claim(ctx, tx, scope, key, hash)
 		if err != nil {
@@ -117,6 +117,12 @@ func (c commands) idempotent(ctx context.Context, op operation, key string, requ
 		}
 		return resp, result, c.keys.Complete(ctx, tx, scope, key, resp.status, resp.body)
 	})
+}
+
+// keyScope es el scope de las claves de p para op: la entidad, la ruta y el SHA-256 del sub, que así cabe
+// en el scope sin importar el emisor.
+func keyScope(p access.Principal, op operation) string {
+	return fmt.Sprintf("%s %s %s %x", p.LegalEntityID, op.method, op.path, sha256.Sum256([]byte(p.Subject)))
 }
 
 // run corre effect para op, un comando sin Idempotency-Key; un rechazo de negocio se deshace hasta el

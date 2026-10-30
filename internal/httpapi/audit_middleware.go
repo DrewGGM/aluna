@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
@@ -26,10 +27,11 @@ type CommandAudit struct {
 	UoW     *postgres.UnitOfWork
 }
 
-// Quién llama mientras la API no tiene autenticación; con ella, actor y rol vendrán del token (T-035).
+// Quién llama antes de autenticarse: un request rechazado sin token queda con este actor y rol; uno
+// autenticado, con los de su token (notePrincipal).
 const (
-	auditActor   = "api"
-	auditRole    = "api"
+	auditActor   = "anónimo"
+	auditRole    = "ninguno"
 	auditChannel = "api"
 )
 
@@ -196,6 +198,16 @@ func (a *CommandAudit) recordApart(ctx context.Context, trail *auditTrail, log *
 	if err != nil {
 		log.LogAttrs(ctx, slog.LevelError, "auditar un comando que no confirmó",
 			slog.String("command", r.Command), slog.String("request_id", r.CorrelationID), slog.String("error", err.Error()))
+	}
+}
+
+// notePrincipal anota en el rastro del request, si hay, quién lo hace: el sujeto y los roles del token.
+func notePrincipal(ctx context.Context, p access.Principal) {
+	if trail, err := auditTrailFrom(ctx); err == nil {
+		trail.base.Actor = p.Subject
+		if len(p.Roles) > 0 {
+			trail.base.Role = strings.Join(p.Roles, ",")
+		}
 	}
 }
 

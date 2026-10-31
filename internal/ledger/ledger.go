@@ -252,6 +252,12 @@ func (s *Service) Account(ctx context.Context, q postgres.Querier, entity, id id
 	return pg.NewStore(q).AccountOf(ctx, entity, id)
 }
 
+// AccountByCode reads the entity's account with code code, or ErrAccountNotFound: a product names its
+// internal accounts by code. q can be the pool or a Tx.
+func (s *Service) AccountByCode(ctx context.Context, q postgres.Querier, entity ids.ID, code string) (Account, error) {
+	return pg.NewStore(q).AccountByCode(ctx, entity, code)
+}
+
 // Transaction reads one of the entity's posted transactions, with its entries. q can be the pool or a
 // Tx.
 func (s *Service) Transaction(ctx context.Context, q postgres.Querier, entity, id ids.ID) (Transaction, error) {

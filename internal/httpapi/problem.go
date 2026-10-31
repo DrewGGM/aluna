@@ -12,6 +12,7 @@ import (
 
 	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/approvals"
+	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ledger"
@@ -167,6 +168,13 @@ var problems = []struct {
 	{products.ErrInvalidMarketParameter, unprocessable("invalid_market_parameter", "Invalid market parameter")},
 	{products.ErrMarketParameterOverlap, conflict("market_parameter_overlap", "Another value of the parameter holds in that period")},
 	{products.ErrNoMarketParameter, Problem{Status: http.StatusNotFound, Code: "no_market_parameter", Title: "No value of the parameter holds on that day"}},
+	{products.ErrNoPublishedVersion, conflict("no_published_version", "The product has no published version")},
+	// deposits; deposits.ErrProductAccountMissing has no problem on purpose: a misconfigured product is a 500,
+	// which is not stored with the Idempotency-Key, so the request can be retried once the account exists
+	{deposits.ErrAccountNotFound, notFound},
+	{deposits.ErrAccountNotActive, conflict("account_not_active", "Only an active account moves money")},
+	{deposits.ErrKYCNotSatisfied, unprocessable("kyc_not_satisfied", "The party's KYC status does not allow the product")},
+	{deposits.ErrInvalidMovement, unprocessable("invalid_movement", "The amount must be positive and the accounts different")},
 	// approvals
 	{approvals.ErrSelfApproval, Problem{
 		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "The requester cannot decide their own request",

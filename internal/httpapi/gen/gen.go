@@ -90,6 +90,33 @@ func (e BalanceMode) Valid() bool {
 	}
 }
 
+// Defines values for DepositAccountStatus.
+const (
+	DepositAccountStatusActive  DepositAccountStatus = "active"
+	DepositAccountStatusClosed  DepositAccountStatus = "closed"
+	DepositAccountStatusDormant DepositAccountStatus = "dormant"
+	DepositAccountStatusFrozen  DepositAccountStatus = "frozen"
+	DepositAccountStatusPending DepositAccountStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the DepositAccountStatus enum.
+func (e DepositAccountStatus) Valid() bool {
+	switch e {
+	case DepositAccountStatusActive:
+		return true
+	case DepositAccountStatusClosed:
+		return true
+	case DepositAccountStatusDormant:
+		return true
+	case DepositAccountStatusFrozen:
+		return true
+	case DepositAccountStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HoldStatus.
 const (
 	HoldStatusCaptured HoldStatus = "captured"
@@ -300,6 +327,12 @@ type CaptureHold struct {
 	BusinessDate openapi_types.Date `json:"business_date"`
 }
 
+// CashMovement defines model for CashMovement.
+type CashMovement struct {
+	// Amount Positive, in the account's currency
+	Amount Money `json:"amount"`
+}
+
 // CreateLedgerAccount defines model for CreateLedgerAccount.
 type CreateLedgerAccount struct {
 	BalanceMode BalanceMode `json:"balance_mode"`
@@ -323,6 +356,39 @@ type CreateProductVersion struct {
 	// Definition The definition, following deposit-product.v1.json.
 	Definition json.RawMessage `json:"definition"`
 }
+
+// CreateTransfer defines model for CreateTransfer.
+type CreateTransfer struct {
+	// Amount Positive, in the accounts' currency
+	Amount Money `json:"amount"`
+
+	// FromAccountId Deposit account the money leaves
+	FromAccountId openapi_types.UUID `json:"from_account_id"`
+
+	// ToAccountId Deposit account that receives it
+	ToAccountId openapi_types.UUID `json:"to_account_id"`
+}
+
+// DepositAccount defines model for DepositAccount.
+type DepositAccount struct {
+	Currency string             `json:"currency"`
+	Id       openapi_types.UUID `json:"id"`
+
+	// LastCustomerActivityOn Business date of the customer's last movement
+	LastCustomerActivityOn openapi_types.Date `json:"last_customer_activity_on"`
+
+	// LedgerAccountId Liability ledger account that holds its money
+	LedgerAccountId openapi_types.UUID `json:"ledger_account_id"`
+	OpenedOn        openapi_types.Date `json:"opened_on"`
+	PartyId         openapi_types.UUID `json:"party_id"`
+
+	// ProductVersionId Version of the product the account is anchored to
+	ProductVersionId openapi_types.UUID   `json:"product_version_id"`
+	Status           DepositAccountStatus `json:"status"`
+}
+
+// DepositAccountStatus defines model for DepositAccountStatus.
+type DepositAccountStatus string
 
 // Entry defines model for Entry.
 type Entry struct {
@@ -400,6 +466,12 @@ type Money struct {
 	// Amount Minor units of the currency (COP 100,000 = 10000000).
 	Amount   int64  `json:"amount"`
 	Currency string `json:"currency"`
+}
+
+// OpenDepositAccount defines model for OpenDepositAccount.
+type OpenDepositAccount struct {
+	PartyId   openapi_types.UUID `json:"party_id"`
+	ProductId openapi_types.UUID `json:"product_id"`
 }
 
 // Party defines model for Party.
@@ -550,6 +622,21 @@ type ApproveRequestParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// OpenDepositAccountParams defines parameters for OpenDepositAccount.
+type OpenDepositAccountParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// CreateDepositParams defines parameters for CreateDeposit.
+type CreateDepositParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// CreateWithdrawalParams defines parameters for CreateWithdrawal.
+type CreateWithdrawalParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // PlaceHoldParams defines parameters for PlaceHold.
 type PlaceHoldParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -613,8 +700,22 @@ type RequestReversalParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// CreateTransferParams defines parameters for CreateTransfer.
+type CreateTransferParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // RejectRequestJSONRequestBody defines body for RejectRequest for application/json ContentType.
 type RejectRequestJSONRequestBody = RejectApproval
+
+// OpenDepositAccountJSONRequestBody defines body for OpenDepositAccount for application/json ContentType.
+type OpenDepositAccountJSONRequestBody = OpenDepositAccount
+
+// CreateDepositJSONRequestBody defines body for CreateDeposit for application/json ContentType.
+type CreateDepositJSONRequestBody = CashMovement
+
+// CreateWithdrawalJSONRequestBody defines body for CreateWithdrawal for application/json ContentType.
+type CreateWithdrawalJSONRequestBody = CashMovement
 
 // PlaceHoldJSONRequestBody defines body for PlaceHold for application/json ContentType.
 type PlaceHoldJSONRequestBody = PlaceHold
@@ -646,6 +747,9 @@ type PostTransactionJSONRequestBody = PostTransaction
 // RequestReversalJSONRequestBody defines body for RequestReversal for application/json ContentType.
 type RequestReversalJSONRequestBody = RequestReversal
 
+// CreateTransferJSONRequestBody defines body for CreateTransfer for application/json ContentType.
+type CreateTransferJSONRequestBody = CreateTransfer
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListApprovals Maker-checker requests of the entity
@@ -657,6 +761,18 @@ type ServerInterface interface {
 	// RejectRequest Reject a request
 	// (POST /v1/approvals/{id}/rejection)
 	RejectRequest(w http.ResponseWriter, r *http.Request, id ID)
+	// OpenDepositAccount Open a deposit account
+	// (POST /v1/deposit-accounts)
+	OpenDepositAccount(w http.ResponseWriter, r *http.Request, params OpenDepositAccountParams)
+	// GetDepositAccount Read a deposit account
+	// (GET /v1/deposit-accounts/{id})
+	GetDepositAccount(w http.ResponseWriter, r *http.Request, id ID)
+	// CreateDeposit Deposit cash into an account
+	// (POST /v1/deposit-accounts/{id}/deposits)
+	CreateDeposit(w http.ResponseWriter, r *http.Request, id ID, params CreateDepositParams)
+	// CreateWithdrawal Withdraw cash from an account
+	// (POST /v1/deposit-accounts/{id}/withdrawals)
+	CreateWithdrawal(w http.ResponseWriter, r *http.Request, id ID, params CreateWithdrawalParams)
 	// PlaceHold Hold funds of an account
 	// (POST /v1/holds)
 	PlaceHold(w http.ResponseWriter, r *http.Request, params PlaceHoldParams)
@@ -711,6 +827,9 @@ type ServerInterface interface {
 	// RequestReversal Request the reversal of a transaction
 	// (POST /v1/transactions/{id}/reversal)
 	RequestReversal(w http.ResponseWriter, r *http.Request, id ID, params RequestReversalParams)
+	// CreateTransfer Transfer between two deposit accounts
+	// (POST /v1/transfers)
+	CreateTransfer(w http.ResponseWriter, r *http.Request, params CreateTransferParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -826,6 +945,185 @@ func (siw *ServerInterfaceWrapper) RejectRequest(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RejectRequest(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// OpenDepositAccount operation middleware
+func (siw *ServerInterfaceWrapper) OpenDepositAccount(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params OpenDepositAccountParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.OpenDepositAccount(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDepositAccount operation middleware
+func (siw *ServerInterfaceWrapper) GetDepositAccount(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDepositAccount(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateDeposit operation middleware
+func (siw *ServerInterfaceWrapper) CreateDeposit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateDepositParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateDeposit(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateWithdrawal operation middleware
+func (siw *ServerInterfaceWrapper) CreateWithdrawal(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateWithdrawalParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateWithdrawal(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1554,6 +1852,51 @@ func (siw *ServerInterfaceWrapper) RequestReversal(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// CreateTransfer operation middleware
+func (siw *ServerInterfaceWrapper) CreateTransfer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateTransferParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateTransfer(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1695,6 +2038,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/product-versions/{id}/publication", wrapper.RequestProductPublication)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/market-parameters", wrapper.GetMarketParameter)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/market-parameters", wrapper.RequestMarketParameterLoad)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts", wrapper.OpenDepositAccount)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/deposit-accounts/{id}", wrapper.GetDepositAccount)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/deposits", wrapper.CreateDeposit)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/withdrawals", wrapper.CreateWithdrawal)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transfers", wrapper.CreateTransfer)
 
 	return m
 }
@@ -1955,6 +2303,399 @@ type RejectRequestdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response RejectRequestdefaultApplicationProblemPlusJSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenDepositAccountRequestObject struct {
+	Params OpenDepositAccountParams
+	Body   *OpenDepositAccountJSONRequestBody
+}
+
+type OpenDepositAccountResponseObject interface {
+	VisitOpenDepositAccountResponse(w http.ResponseWriter) error
+}
+
+type OpenDepositAccount201JSONResponse DepositAccount
+
+func (response OpenDepositAccount201JSONResponse) VisitOpenDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenDepositAccount400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response OpenDepositAccount400ApplicationProblemPlusJSONResponse) VisitOpenDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenDepositAccount404ApplicationProblemPlusJSONResponse Problem
+
+func (response OpenDepositAccount404ApplicationProblemPlusJSONResponse) VisitOpenDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenDepositAccount409ApplicationProblemPlusJSONResponse Problem
+
+func (response OpenDepositAccount409ApplicationProblemPlusJSONResponse) VisitOpenDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenDepositAccount422ApplicationProblemPlusJSONResponse Problem
+
+func (response OpenDepositAccount422ApplicationProblemPlusJSONResponse) VisitOpenDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenDepositAccountdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response OpenDepositAccountdefaultApplicationProblemPlusJSONResponse) VisitOpenDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDepositAccountRequestObject struct {
+	Id ID `json:"id"`
+}
+
+type GetDepositAccountResponseObject interface {
+	VisitGetDepositAccountResponse(w http.ResponseWriter) error
+}
+
+type GetDepositAccount200JSONResponse DepositAccount
+
+func (response GetDepositAccount200JSONResponse) VisitGetDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDepositAccount400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetDepositAccount400ApplicationProblemPlusJSONResponse) VisitGetDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDepositAccount404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDepositAccount404ApplicationProblemPlusJSONResponse) VisitGetDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDepositAccountdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetDepositAccountdefaultApplicationProblemPlusJSONResponse) VisitGetDepositAccountResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDepositRequestObject struct {
+	Id     ID `json:"id"`
+	Params CreateDepositParams
+	Body   *CreateDepositJSONRequestBody
+}
+
+type CreateDepositResponseObject interface {
+	VisitCreateDepositResponse(w http.ResponseWriter) error
+}
+
+type CreateDeposit201JSONResponse Transaction
+
+func (response CreateDeposit201JSONResponse) VisitCreateDepositResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDeposit400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateDeposit400ApplicationProblemPlusJSONResponse) VisitCreateDepositResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDeposit404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateDeposit404ApplicationProblemPlusJSONResponse) VisitCreateDepositResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDeposit409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateDeposit409ApplicationProblemPlusJSONResponse) VisitCreateDepositResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDeposit413ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateDeposit413ApplicationProblemPlusJSONResponse) VisitCreateDepositResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDeposit422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateDeposit422ApplicationProblemPlusJSONResponse) VisitCreateDepositResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDepositdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreateDepositdefaultApplicationProblemPlusJSONResponse) VisitCreateDepositResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWithdrawalRequestObject struct {
+	Id     ID `json:"id"`
+	Params CreateWithdrawalParams
+	Body   *CreateWithdrawalJSONRequestBody
+}
+
+type CreateWithdrawalResponseObject interface {
+	VisitCreateWithdrawalResponse(w http.ResponseWriter) error
+}
+
+type CreateWithdrawal201JSONResponse Transaction
+
+func (response CreateWithdrawal201JSONResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWithdrawal400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateWithdrawal400ApplicationProblemPlusJSONResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWithdrawal404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateWithdrawal404ApplicationProblemPlusJSONResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWithdrawal409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateWithdrawal409ApplicationProblemPlusJSONResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWithdrawal413ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateWithdrawal413ApplicationProblemPlusJSONResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWithdrawal422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateWithdrawal422ApplicationProblemPlusJSONResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWithdrawaldefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreateWithdrawaldefaultApplicationProblemPlusJSONResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -3516,6 +4257,118 @@ func (response RequestReversaldefaultApplicationProblemPlusJSONResponse) VisitRe
 	return err
 }
 
+type CreateTransferRequestObject struct {
+	Params CreateTransferParams
+	Body   *CreateTransferJSONRequestBody
+}
+
+type CreateTransferResponseObject interface {
+	VisitCreateTransferResponse(w http.ResponseWriter) error
+}
+
+type CreateTransfer201JSONResponse Transaction
+
+func (response CreateTransfer201JSONResponse) VisitCreateTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTransfer400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateTransfer400ApplicationProblemPlusJSONResponse) VisitCreateTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTransfer404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateTransfer404ApplicationProblemPlusJSONResponse) VisitCreateTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTransfer409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateTransfer409ApplicationProblemPlusJSONResponse) VisitCreateTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTransfer413ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateTransfer413ApplicationProblemPlusJSONResponse) VisitCreateTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTransfer422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateTransfer422ApplicationProblemPlusJSONResponse) VisitCreateTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTransferdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreateTransferdefaultApplicationProblemPlusJSONResponse) VisitCreateTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// ListApprovals Maker-checker requests of the entity
@@ -3527,6 +4380,18 @@ type StrictServerInterface interface {
 	// RejectRequest Reject a request
 	// (POST /v1/approvals/{id}/rejection)
 	RejectRequest(ctx context.Context, request RejectRequestRequestObject) (RejectRequestResponseObject, error)
+	// OpenDepositAccount Open a deposit account
+	// (POST /v1/deposit-accounts)
+	OpenDepositAccount(ctx context.Context, request OpenDepositAccountRequestObject) (OpenDepositAccountResponseObject, error)
+	// GetDepositAccount Read a deposit account
+	// (GET /v1/deposit-accounts/{id})
+	GetDepositAccount(ctx context.Context, request GetDepositAccountRequestObject) (GetDepositAccountResponseObject, error)
+	// CreateDeposit Deposit cash into an account
+	// (POST /v1/deposit-accounts/{id}/deposits)
+	CreateDeposit(ctx context.Context, request CreateDepositRequestObject) (CreateDepositResponseObject, error)
+	// CreateWithdrawal Withdraw cash from an account
+	// (POST /v1/deposit-accounts/{id}/withdrawals)
+	CreateWithdrawal(ctx context.Context, request CreateWithdrawalRequestObject) (CreateWithdrawalResponseObject, error)
 	// PlaceHold Hold funds of an account
 	// (POST /v1/holds)
 	PlaceHold(ctx context.Context, request PlaceHoldRequestObject) (PlaceHoldResponseObject, error)
@@ -3581,6 +4446,9 @@ type StrictServerInterface interface {
 	// RequestReversal Request the reversal of a transaction
 	// (POST /v1/transactions/{id}/reversal)
 	RequestReversal(ctx context.Context, request RequestReversalRequestObject) (RequestReversalResponseObject, error)
+	// CreateTransfer Transfer between two deposit accounts
+	// (POST /v1/transfers)
+	CreateTransfer(ctx context.Context, request CreateTransferRequestObject) (CreateTransferResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -3701,6 +4569,133 @@ func (sh *strictHandler) RejectRequest(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RejectRequestResponseObject); ok {
 		if err := validResponse.VisitRejectRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// OpenDepositAccount operation middleware
+func (sh *strictHandler) OpenDepositAccount(w http.ResponseWriter, r *http.Request, params OpenDepositAccountParams) {
+	var request OpenDepositAccountRequestObject
+
+	request.Params = params
+
+	var body OpenDepositAccountJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.OpenDepositAccount(ctx, request.(OpenDepositAccountRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "OpenDepositAccount")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(OpenDepositAccountResponseObject); ok {
+		if err := validResponse.VisitOpenDepositAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDepositAccount operation middleware
+func (sh *strictHandler) GetDepositAccount(w http.ResponseWriter, r *http.Request, id ID) {
+	var request GetDepositAccountRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDepositAccount(ctx, request.(GetDepositAccountRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDepositAccount")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDepositAccountResponseObject); ok {
+		if err := validResponse.VisitGetDepositAccountResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateDeposit operation middleware
+func (sh *strictHandler) CreateDeposit(w http.ResponseWriter, r *http.Request, id ID, params CreateDepositParams) {
+	var request CreateDepositRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body CreateDepositJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateDeposit(ctx, request.(CreateDepositRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateDeposit")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateDepositResponseObject); ok {
+		if err := validResponse.VisitCreateDepositResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateWithdrawal operation middleware
+func (sh *strictHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Request, id ID, params CreateWithdrawalParams) {
+	var request CreateWithdrawalRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body CreateWithdrawalJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateWithdrawal(ctx, request.(CreateWithdrawalRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateWithdrawal")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateWithdrawalResponseObject); ok {
+		if err := validResponse.VisitCreateWithdrawalResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -4240,6 +5235,39 @@ func (sh *strictHandler) RequestReversal(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RequestReversalResponseObject); ok {
 		if err := validResponse.VisitRequestReversalResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateTransfer operation middleware
+func (sh *strictHandler) CreateTransfer(w http.ResponseWriter, r *http.Request, params CreateTransferParams) {
+	var request CreateTransferRequestObject
+
+	request.Params = params
+
+	var body CreateTransferJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateTransfer(ctx, request.(CreateTransferRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateTransfer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateTransferResponseObject); ok {
+		if err := validResponse.VisitCreateTransferResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

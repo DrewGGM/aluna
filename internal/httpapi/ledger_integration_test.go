@@ -25,6 +25,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -73,12 +74,17 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	if err != nil {
 		t.Fatal(err)
 	}
-	l, requests := ledger.New(calendar.New(), events), approvals.New(policy)
+	calendarSvc := calendar.New()
+	ledgerSvc := ledger.New(calendarSvc, events)
+	partySvc := party.New(events)
+	productSvc := products.New(events)
+	requests := approvals.New(policy)
 	api := API{
-		LedgerHandlers:   NewLedgerHandlers(l, requests, uow, keys, testPool),
+		LedgerHandlers:   NewLedgerHandlers(ledgerSvc, requests, uow, keys, testPool),
 		ApprovalHandlers: NewApprovalHandlers(requests, uow, keys, testPool),
-		PartyHandlers:    NewPartyHandlers(party.New(events), requests, uow, keys, testPool),
-		ProductHandlers:  NewProductHandlers(products.New(events), requests, uow, keys, testPool),
+		PartyHandlers:    NewPartyHandlers(partySvc, requests, uow, keys, testPool),
+		ProductHandlers:  NewProductHandlers(productSvc, requests, uow, keys, testPool),
+		DepositHandlers:  NewDepositHandlers(deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, events), uow, keys, testPool),
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},

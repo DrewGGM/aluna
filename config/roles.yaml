@@ -2,15 +2,16 @@
 # api/openapi.yaml; anything not listed here is denied. "all" grants the permission over any resource of the
 # token's legal entity; "own", only over those of its party_id (a channel acting for a customer, TH-3).
 
-# A customer's app or channel: reads its own accounts. As long as no resource has an owner (deposit
-# accounts, T-047), "own" answers 404 to everything.
+# A customer's app or channel: reads its own accounts. As long as the authorizer does not check who owns a
+# resource (a deposit account's is its party), "own" answers 404 to everything.
 channel:
   own:
     - ledger.accounts.read
     - ledger.balances.read
 
-# Day-to-day operations: parties, products, accounts, manual entries and holds, and deciding maker-checker
-# requests (the permission for each request's type is required separately).
+# Day-to-day operations: parties, products, deposit accounts and their movements, ledger accounts, manual
+# entries and holds, and deciding maker-checker requests (the permission for each request's type is required
+# separately).
 operator:
   all:
     - approvals.read
@@ -23,6 +24,11 @@ operator:
     - products.versions.read
     - products.versions.publish
     - products.market_parameters.read
+    - deposits.accounts.open
+    - deposits.accounts.read
+    - deposits.deposits.post
+    - deposits.withdrawals.post
+    - deposits.transfers.post
     - ledger.accounts.create
     - ledger.accounts.read
     - ledger.balances.read
@@ -43,6 +49,7 @@ finance:
     - products.versions.publish
     - products.market_parameters.load
     - products.market_parameters.read
+    - deposits.accounts.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.post
@@ -58,6 +65,7 @@ compliance:
     - party.kyc.change
     - products.versions.read
     - products.market_parameters.read
+    - deposits.accounts.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read
@@ -69,6 +77,7 @@ auditor:
     - party.parties.read
     - products.versions.read
     - products.market_parameters.read
+    - deposits.accounts.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read

@@ -27,6 +27,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/jobs"
@@ -261,13 +262,17 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	}
 	uow := postgres.NewUnitOfWork(pool)
 	keys := idempotency.NewStore(pool)
-	ledgerSvc := ledger.New(calendar.New(), events)
+	calendarSvc := calendar.New()
+	ledgerSvc := ledger.New(calendarSvc, events)
+	partySvc := party.New(events)
+	productSvc := products.New(events)
 	requests := approvals.New(authz.policy)
 	api := httpapi.API{
 		LedgerHandlers:   httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
 		ApprovalHandlers: httpapi.NewApprovalHandlers(requests, uow, keys, pool),
-		PartyHandlers:    httpapi.NewPartyHandlers(party.New(events), requests, uow, keys, pool),
-		ProductHandlers:  httpapi.NewProductHandlers(products.New(events), requests, uow, keys, pool),
+		PartyHandlers:    httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
+		ProductHandlers:  httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
+		DepositHandlers:  httpapi.NewDepositHandlers(deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, events), uow, keys, pool),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)

@@ -66,6 +66,14 @@ func (s Store) SetStatus(ctx context.Context, a domain.Account, to domain.Status
 	return nil
 }
 
+// RecordActivity sets the last customer activity of account id to on.
+func (s Store) RecordActivity(ctx context.Context, id ids.ID, on calendar.Date) error {
+	if _, err := s.q.Exec(ctx, `UPDATE deposits.accounts SET last_customer_activity_on = $2 WHERE id = $1`, id, dateOf(on)); err != nil {
+		return fmt.Errorf("record the activity of deposit account %s: %w", id, err)
+	}
+	return nil
+}
+
 func scan(id ids.ID, row pgx.Row) (domain.Account, error) {
 	var a domain.Account
 	var currency string

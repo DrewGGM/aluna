@@ -1,5 +1,5 @@
-// Package app holds the use cases of deposit accounts: opening one and moving it through its life cycle
-// (FR-17, FR-19, FR-22).
+// Package app holds the use cases of deposit accounts: opening one, moving its money and moving it through
+// its life cycle (FR-17, FR-19, FR-22, FR-23).
 package app
 
 import (

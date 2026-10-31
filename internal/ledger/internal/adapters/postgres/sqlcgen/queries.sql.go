@@ -13,6 +13,36 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const accountByCode = `-- name: AccountByCode :one
+SELECT a.id, a.legal_entity_id, a.code, a.kind, a.currency, a.balance_mode, a.lower_limit, a.owner_ref, a.created_at FROM ledger.accounts a WHERE a.legal_entity_id = $1 AND a.code = $2
+`
+
+type AccountByCodeParams struct {
+	LegalEntityID ids.ID
+	Code          string
+}
+
+type AccountByCodeRow struct {
+	LedgerAccount LedgerAccount
+}
+
+func (q *Queries) AccountByCode(ctx context.Context, arg AccountByCodeParams) (AccountByCodeRow, error) {
+	row := q.db.QueryRow(ctx, accountByCode, arg.LegalEntityID, arg.Code)
+	var i AccountByCodeRow
+	err := row.Scan(
+		&i.LedgerAccount.ID,
+		&i.LedgerAccount.LegalEntityID,
+		&i.LedgerAccount.Code,
+		&i.LedgerAccount.Kind,
+		&i.LedgerAccount.Currency,
+		&i.LedgerAccount.BalanceMode,
+		&i.LedgerAccount.LowerLimit,
+		&i.LedgerAccount.OwnerRef,
+		&i.LedgerAccount.CreatedAt,
+	)
+	return i, err
+}
+
 const accountOfEntity = `-- name: AccountOfEntity :one
 SELECT a.id, a.legal_entity_id, a.code, a.kind, a.currency, a.balance_mode, a.lower_limit, a.owner_ref, a.created_at FROM ledger.accounts a WHERE a.id = $1 AND a.legal_entity_id = $2
 `

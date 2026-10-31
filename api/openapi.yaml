@@ -534,6 +534,138 @@ paths:
         "404": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/deposit-accounts:
+    post:
+      operationId: openDepositAccount
+      summary: Open a deposit account
+      description: >-
+        Opens an account for a party of the entity with the version in force of a product of the entity
+        (FR-19, FR-22): `active` if the party's KYC is approved, `pending` if the product allows a pending
+        KYC (422 `kyc_not_satisfied` if it does not). A product without a published version is 409
+        `no_published_version`. Idempotent by `Idempotency-Key`.
+      x-aluna-permission: deposits.accounts.open
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OpenDepositAccount"}
+      responses:
+        "201":
+          description: Account opened
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DepositAccount"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/deposit-accounts/{id}:
+    get:
+      operationId: getDepositAccount
+      summary: Read a deposit account
+      description: Its balance is that of its `ledger_account_id`.
+      x-aluna-permission: deposits.accounts.read
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Deposit account
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DepositAccount"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/deposit-accounts/{id}/deposits:
+    post:
+      operationId: createDeposit
+      summary: Deposit cash into an account
+      description: >-
+        Posts the amount from the product's cash account into the account, on the entity's business date
+        (FR-23). Only an `active` account moves money (409 `account_not_active`). Idempotent by
+        `Idempotency-Key`; once the key expires (7 days), the same key is 409 `duplicate_external_ref` and
+        moves nothing.
+      x-aluna-permission: deposits.deposits.post
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CashMovement"}
+      responses:
+        "201":
+          description: Deposit posted
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Transaction"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/deposit-accounts/{id}/withdrawals:
+    post:
+      operationId: createWithdrawal
+      summary: Withdraw cash from an account
+      description: >-
+        Posts the amount from the account to the product's cash account, like a deposit (an `active` account,
+        the business date); without funds it is
+        422 `insufficient_funds`. Idempotent by `Idempotency-Key`, like a deposit.
+      x-aluna-permission: deposits.withdrawals.post
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CashMovement"}
+      responses:
+        "201":
+          description: Withdrawal posted
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Transaction"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/transfers:
+    post:
+      operationId: createTransfer
+      summary: Transfer between two deposit accounts
+      description: >-
+        Moves the amount between two `active` deposit accounts of the entity (FR-23, US-5), on its business
+        date: 409 `account_not_active` if either is not, 422 `insufficient_funds` without funds and 422
+        `invalid_movement` to the same account. Idempotent by `Idempotency-Key`, like a deposit.
+      x-aluna-permission: deposits.transfers.post
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateTransfer"}
+      responses:
+        "201":
+          description: Transfer posted
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Transaction"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
 components:
   parameters:
     ID:
@@ -863,6 +995,39 @@ components:
         modality: {type: string}
         "on": {type: string, format: date}
         value: {type: string, description: Decimal as text}
+    OpenDepositAccount:
+      type: object
+      required: [party_id, product_id]
+      properties:
+        party_id: {type: string, format: uuid}
+        product_id: {type: string, format: uuid}
+    DepositAccountStatus:
+      type: string
+      enum: [pending, active, frozen, dormant, closed]
+    DepositAccount:
+      type: object
+      required: [id, party_id, product_version_id, ledger_account_id, currency, status, opened_on, last_customer_activity_on]
+      properties:
+        id: {type: string, format: uuid}
+        party_id: {type: string, format: uuid}
+        product_version_id: {type: string, format: uuid, description: Version of the product the account is anchored to}
+        ledger_account_id: {type: string, format: uuid, description: Liability ledger account that holds its money}
+        currency: {type: string}
+        status: {$ref: "#/components/schemas/DepositAccountStatus"}
+        opened_on: {type: string, format: date}
+        last_customer_activity_on: {type: string, format: date, description: Business date of the customer's last movement}
+    CashMovement:
+      type: object
+      required: [amount]
+      properties:
+        amount: {$ref: "#/components/schemas/Money", description: "Positive, in the account's currency"}
+    CreateTransfer:
+      type: object
+      required: [from_account_id, to_account_id, amount]
+      properties:
+        from_account_id: {type: string, format: uuid, description: Deposit account the money leaves}
+        to_account_id: {type: string, format: uuid, description: Deposit account that receives it}
+        amount: {$ref: "#/components/schemas/Money", description: "Positive, in the accounts' currency"}
     RequestKYCStatusChange:
       type: object
       required: [kyc_status]

@@ -81,6 +81,18 @@ func (s *Store) AccountOf(ctx context.Context, entity, id ids.ID) (domain.Accoun
 	return toAccount(r.LedgerAccount)
 }
 
+// AccountByCode reads the entity's account with code code, or ErrAccountNotFound.
+func (s *Store) AccountByCode(ctx context.Context, entity ids.ID, code string) (domain.Account, error) {
+	r, err := s.q.AccountByCode(ctx, sqlcgen.AccountByCodeParams{LegalEntityID: entity, Code: code})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Account{}, fmt.Errorf("%w: code %q", app.ErrAccountNotFound, code)
+	}
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("read account by code: %w", err)
+	}
+	return toAccount(r.LedgerAccount)
+}
+
 func toAccount(r sqlcgen.LedgerAccount) (domain.Account, error) {
 	cur, err := money.CurrencyOf(r.Currency)
 	if err != nil {

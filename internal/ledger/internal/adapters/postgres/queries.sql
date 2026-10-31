@@ -56,6 +56,9 @@ WHERE account_id = @account_id
 -- name: AccountOfEntity :one
 SELECT sqlc.embed(a) FROM ledger.accounts a WHERE a.id = @id AND a.legal_entity_id = @legal_entity_id;
 
+-- name: AccountByCode :one
+SELECT sqlc.embed(a) FROM ledger.accounts a WHERE a.legal_entity_id = @legal_entity_id AND a.code = @code;
+
 -- name: TransactionOfEntity :one
 SELECT id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version,
        reverses_id, metadata, posted_at

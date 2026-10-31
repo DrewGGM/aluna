@@ -105,6 +105,20 @@ func (r storedResponse) VisitRequestMarketParameterLoadResponse(w http.ResponseW
 	return r.write(w)
 }
 
+// VisitOpenDepositAccountResponse writes the stored response of POST /v1/deposit-accounts.
+func (r storedResponse) VisitOpenDepositAccountResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
+// VisitCreateDepositResponse writes the stored response of POST /v1/deposit-accounts/{id}/deposits.
+func (r storedResponse) VisitCreateDepositResponse(w http.ResponseWriter) error { return r.write(w) }
+
+// VisitCreateWithdrawalResponse writes the stored response of POST /v1/deposit-accounts/{id}/withdrawals.
+func (r storedResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error { return r.write(w) }
+
+// VisitCreateTransferResponse writes the stored response of POST /v1/transfers.
+func (r storedResponse) VisitCreateTransferResponse(w http.ResponseWriter) error { return r.write(w) }
+
 // VisitRequestReversalResponse writes the stored response of POST /v1/transactions/{id}/reversal.
 func (r storedResponse) VisitRequestReversalResponse(w http.ResponseWriter) error { return r.write(w) }
 

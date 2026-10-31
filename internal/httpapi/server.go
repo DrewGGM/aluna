@@ -20,6 +20,7 @@ type API struct {
 	*ApprovalHandlers
 	*PartyHandlers
 	*ProductHandlers
+	*DepositHandlers
 }
 
 var _ gen.StrictServerInterface = API{}

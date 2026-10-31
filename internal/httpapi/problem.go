@@ -17,6 +17,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/party"
+	"github.com/DrewGGM/aluna/internal/products"
 )
 
 // Problem is an RFC 9457 error. Code is stable and meant for machines; Title and Detail are meant for people
@@ -153,6 +154,16 @@ var problems = []struct {
 	{party.ErrNotFound, notFound},
 	{party.ErrInvalidKYCTransition, unprocessable("invalid_kyc_transition", "The KYC status cannot change that way")},
 	{party.ErrStaleKYCChange, conflict("kyc_change_stale", "The party changed after the KYC change was requested")},
+	// products
+	{products.ErrInvalidDefinition, unprocessable("invalid_product_definition", "The definition does not follow deposit-product.v1.json")},
+	{products.ErrInvalidProduct, unprocessable("invalid_product", "Invalid product code or name")},
+	{products.ErrProductExists, conflict("product_already_exists", "The entity already has a product with that code")},
+	{products.ErrProductNotFound, notFound},
+	{products.ErrVersionNotFound, notFound},
+	{products.ErrNotPublishable, conflict("version_not_publishable", "The version is already published or retired")},
+	{products.ErrNotTheAuthor, Problem{Status: http.StatusForbidden, Code: "not_version_author", Title: "Only the author of the version asks for its publication"}},
+	{products.ErrNotPending, conflict("version_not_pending", "The version is not pending publication")},
+	{products.ErrSuperseded, conflict("version_superseded", "A later version of the product is in force")},
 	// approvals
 	{approvals.ErrSelfApproval, Problem{
 		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "The requester cannot decide their own request",

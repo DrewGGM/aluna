@@ -156,6 +156,30 @@ func (e PartyKind) Valid() bool {
 	}
 }
 
+// Defines values for ProductVersionStatus.
+const (
+	ProductVersionStatusDraft     ProductVersionStatus = "draft"
+	ProductVersionStatusPending   ProductVersionStatus = "pending"
+	ProductVersionStatusPublished ProductVersionStatus = "published"
+	ProductVersionStatusRetired   ProductVersionStatus = "retired"
+)
+
+// Valid indicates whether the value is a known member of the ProductVersionStatus enum.
+func (e ProductVersionStatus) Valid() bool {
+	switch e {
+	case ProductVersionStatusDraft:
+		return true
+	case ProductVersionStatusPending:
+		return true
+	case ProductVersionStatusPublished:
+		return true
+	case ProductVersionStatusRetired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RiskLevel.
 const (
 	High   RiskLevel = "high"
@@ -258,6 +282,19 @@ type CreateLedgerAccount struct {
 
 	// LowerLimit Lower limit of the natural balance, in minor units (0 by default).
 	LowerLimit *int64 `json:"lower_limit,omitempty"`
+}
+
+// CreateProduct defines model for CreateProduct.
+type CreateProduct struct {
+	// Code Unique within the entity; lowercase letters, digits and underscores, starting with a letter.
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+// CreateProductVersion defines model for CreateProductVersion.
+type CreateProductVersion struct {
+	// Definition The definition, following deposit-product.v1.json.
+	Definition json.RawMessage `json:"definition"`
 }
 
 // Entry defines model for Entry.
@@ -363,6 +400,35 @@ type Problem struct {
 	Type    string  `json:"type"`
 }
 
+// Product defines model for Product.
+type Product struct {
+	Code      string             `json:"code"`
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+	Name      string             `json:"name"`
+}
+
+// ProductVersion defines model for ProductVersion.
+type ProductVersion struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy sub of the author
+	CreatedBy string `json:"created_by"`
+
+	// Definition The definition, following deposit-product.v1.json, as stored (its keys may come in another order).
+	Definition  json.RawMessage      `json:"definition"`
+	Id          openapi_types.UUID   `json:"id"`
+	ProductId   openapi_types.UUID   `json:"product_id"`
+	PublishedAt *time.Time           `json:"published_at,omitempty"`
+	Status      ProductVersionStatus `json:"status"`
+
+	// Version Number of the version within the product
+	Version int `json:"version"`
+}
+
+// ProductVersionStatus defines model for ProductVersionStatus.
+type ProductVersionStatus string
+
 // RegisterParty defines model for RegisterParty.
 type RegisterParty struct {
 	// Consents Consent by name (for example, personal_data): lowercase letters, digits and underscores, starting with a letter, up to 64 characters.
@@ -456,6 +522,16 @@ type RequestKYCStatusChangeParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// RequestProductPublicationParams defines parameters for RequestProductPublication.
+type RequestProductPublicationParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// CreateProductVersionParams defines parameters for CreateProductVersion.
+type CreateProductVersionParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // PostTransactionParams defines parameters for PostTransaction.
 type PostTransactionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -483,6 +559,12 @@ type RegisterPartyJSONRequestBody = RegisterParty
 
 // RequestKYCStatusChangeJSONRequestBody defines body for RequestKYCStatusChange for application/json ContentType.
 type RequestKYCStatusChangeJSONRequestBody = RequestKYCStatusChange
+
+// CreateProductJSONRequestBody defines body for CreateProduct for application/json ContentType.
+type CreateProductJSONRequestBody = CreateProduct
+
+// CreateProductVersionJSONRequestBody defines body for CreateProductVersion for application/json ContentType.
+type CreateProductVersionJSONRequestBody = CreateProductVersion
 
 // PostTransactionJSONRequestBody defines body for PostTransaction for application/json ContentType.
 type PostTransactionJSONRequestBody = PostTransaction
@@ -528,6 +610,18 @@ type ServerInterface interface {
 	// RequestKYCStatusChange Request a KYC status change
 	// (POST /v1/parties/{id}/kyc-status-changes)
 	RequestKYCStatusChange(w http.ResponseWriter, r *http.Request, id ID, params RequestKYCStatusChangeParams)
+	// GetProductVersion Read a product version
+	// (GET /v1/product-versions/{id})
+	GetProductVersion(w http.ResponseWriter, r *http.Request, id ID)
+	// RequestProductPublication Request the publication of a product version
+	// (POST /v1/product-versions/{id}/publication)
+	RequestProductPublication(w http.ResponseWriter, r *http.Request, id ID, params RequestProductPublicationParams)
+	// CreateProduct Create a product
+	// (POST /v1/products)
+	CreateProduct(w http.ResponseWriter, r *http.Request)
+	// CreateProductVersion Create a product version
+	// (POST /v1/products/{id}/versions)
+	CreateProductVersion(w http.ResponseWriter, r *http.Request, id ID, params CreateProductVersionParams)
 	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(w http.ResponseWriter, r *http.Request, params PostTransactionParams)
@@ -1003,6 +1097,154 @@ func (siw *ServerInterfaceWrapper) RequestKYCStatusChange(w http.ResponseWriter,
 	handler.ServeHTTP(w, r)
 }
 
+// GetProductVersion operation middleware
+func (siw *ServerInterfaceWrapper) GetProductVersion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetProductVersion(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RequestProductPublication operation middleware
+func (siw *ServerInterfaceWrapper) RequestProductPublication(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RequestProductPublicationParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestProductPublication(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateProduct operation middleware
+func (siw *ServerInterfaceWrapper) CreateProduct(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateProduct(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateProductVersion operation middleware
+func (siw *ServerInterfaceWrapper) CreateProductVersion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateProductVersionParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateProductVersion(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PostTransaction operation middleware
 func (siw *ServerInterfaceWrapper) PostTransaction(w http.ResponseWriter, r *http.Request) {
 
@@ -1263,6 +1505,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/parties", wrapper.RegisterParty)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/parties/{id}", wrapper.GetParty)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/parties/{id}/kyc-status-changes", wrapper.RequestKYCStatusChange)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/products", wrapper.CreateProduct)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/products/{id}/versions", wrapper.CreateProductVersion)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/product-versions/{id}", wrapper.GetProductVersion)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/product-versions/{id}/publication", wrapper.RequestProductPublication)
 
 	return m
 }
@@ -2302,6 +2548,341 @@ func (response RequestKYCStatusChangedefaultApplicationProblemPlusJSONResponse) 
 	return err
 }
 
+type GetProductVersionRequestObject struct {
+	Id ID `json:"id"`
+}
+
+type GetProductVersionResponseObject interface {
+	VisitGetProductVersionResponse(w http.ResponseWriter) error
+}
+
+type GetProductVersion200JSONResponse ProductVersion
+
+func (response GetProductVersion200JSONResponse) VisitGetProductVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProductVersion404ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetProductVersion404ApplicationProblemPlusJSONResponse) VisitGetProductVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProductVersiondefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetProductVersiondefaultApplicationProblemPlusJSONResponse) VisitGetProductVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestProductPublicationRequestObject struct {
+	Id     ID `json:"id"`
+	Params RequestProductPublicationParams
+}
+
+type RequestProductPublicationResponseObject interface {
+	VisitRequestProductPublicationResponse(w http.ResponseWriter) error
+}
+
+type RequestProductPublication202JSONResponse Approval
+
+func (response RequestProductPublication202JSONResponse) VisitRequestProductPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestProductPublication400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RequestProductPublication400ApplicationProblemPlusJSONResponse) VisitRequestProductPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestProductPublication403ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestProductPublication403ApplicationProblemPlusJSONResponse) VisitRequestProductPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestProductPublication404ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestProductPublication404ApplicationProblemPlusJSONResponse) VisitRequestProductPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestProductPublication409ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestProductPublication409ApplicationProblemPlusJSONResponse) VisitRequestProductPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestProductPublicationdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RequestProductPublicationdefaultApplicationProblemPlusJSONResponse) VisitRequestProductPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProductRequestObject struct {
+	Body *CreateProductJSONRequestBody
+}
+
+type CreateProductResponseObject interface {
+	VisitCreateProductResponse(w http.ResponseWriter) error
+}
+
+type CreateProduct201JSONResponse Product
+
+func (response CreateProduct201JSONResponse) VisitCreateProductResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProduct400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateProduct400ApplicationProblemPlusJSONResponse) VisitCreateProductResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProduct409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateProduct409ApplicationProblemPlusJSONResponse) VisitCreateProductResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProduct422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateProduct422ApplicationProblemPlusJSONResponse) VisitCreateProductResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProductdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreateProductdefaultApplicationProblemPlusJSONResponse) VisitCreateProductResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProductVersionRequestObject struct {
+	Id     ID `json:"id"`
+	Params CreateProductVersionParams
+	Body   *CreateProductVersionJSONRequestBody
+}
+
+type CreateProductVersionResponseObject interface {
+	VisitCreateProductVersionResponse(w http.ResponseWriter) error
+}
+
+type CreateProductVersion201JSONResponse ProductVersion
+
+func (response CreateProductVersion201JSONResponse) VisitCreateProductVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProductVersion400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateProductVersion400ApplicationProblemPlusJSONResponse) VisitCreateProductVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProductVersion404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateProductVersion404ApplicationProblemPlusJSONResponse) VisitCreateProductVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProductVersion409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateProductVersion409ApplicationProblemPlusJSONResponse) VisitCreateProductVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProductVersion422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateProductVersion422ApplicationProblemPlusJSONResponse) VisitCreateProductVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateProductVersiondefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreateProductVersiondefaultApplicationProblemPlusJSONResponse) VisitCreateProductVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PostTransactionRequestObject struct {
 	Params PostTransactionParams
 	Body   *PostTransactionJSONRequestBody
@@ -2620,6 +3201,18 @@ type StrictServerInterface interface {
 	// RequestKYCStatusChange Request a KYC status change
 	// (POST /v1/parties/{id}/kyc-status-changes)
 	RequestKYCStatusChange(ctx context.Context, request RequestKYCStatusChangeRequestObject) (RequestKYCStatusChangeResponseObject, error)
+	// GetProductVersion Read a product version
+	// (GET /v1/product-versions/{id})
+	GetProductVersion(ctx context.Context, request GetProductVersionRequestObject) (GetProductVersionResponseObject, error)
+	// RequestProductPublication Request the publication of a product version
+	// (POST /v1/product-versions/{id}/publication)
+	RequestProductPublication(ctx context.Context, request RequestProductPublicationRequestObject) (RequestProductPublicationResponseObject, error)
+	// CreateProduct Create a product
+	// (POST /v1/products)
+	CreateProduct(ctx context.Context, request CreateProductRequestObject) (CreateProductResponseObject, error)
+	// CreateProductVersion Create a product version
+	// (POST /v1/products/{id}/versions)
+	CreateProductVersion(ctx context.Context, request CreateProductVersionRequestObject) (CreateProductVersionResponseObject, error)
 	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(ctx context.Context, request PostTransactionRequestObject) (PostTransactionResponseObject, error)
@@ -3018,6 +3611,124 @@ func (sh *strictHandler) RequestKYCStatusChange(w http.ResponseWriter, r *http.R
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RequestKYCStatusChangeResponseObject); ok {
 		if err := validResponse.VisitRequestKYCStatusChangeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetProductVersion operation middleware
+func (sh *strictHandler) GetProductVersion(w http.ResponseWriter, r *http.Request, id ID) {
+	var request GetProductVersionRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetProductVersion(ctx, request.(GetProductVersionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetProductVersion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetProductVersionResponseObject); ok {
+		if err := validResponse.VisitGetProductVersionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RequestProductPublication operation middleware
+func (sh *strictHandler) RequestProductPublication(w http.ResponseWriter, r *http.Request, id ID, params RequestProductPublicationParams) {
+	var request RequestProductPublicationRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestProductPublication(ctx, request.(RequestProductPublicationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestProductPublication")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestProductPublicationResponseObject); ok {
+		if err := validResponse.VisitRequestProductPublicationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateProduct operation middleware
+func (sh *strictHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
+	var request CreateProductRequestObject
+
+	var body CreateProductJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateProduct(ctx, request.(CreateProductRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateProduct")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateProductResponseObject); ok {
+		if err := validResponse.VisitCreateProductResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateProductVersion operation middleware
+func (sh *strictHandler) CreateProductVersion(w http.ResponseWriter, r *http.Request, id ID, params CreateProductVersionParams) {
+	var request CreateProductVersionRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body CreateProductVersionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateProductVersion(ctx, request.(CreateProductVersionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateProductVersion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateProductVersionResponseObject); ok {
+		if err := validResponse.VisitCreateProductVersionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

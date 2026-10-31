@@ -375,6 +375,101 @@ paths:
         "409": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/products:
+    post:
+      operationId: createProduct
+      summary: Create a product
+      description: >-
+        Creates a product of the entity: a family of versions known by its `code`, which is unique within
+        the entity (409 `product_already_exists`). Its conditions go in its versions.
+      x-aluna-permission: products.products.create
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateProduct"}
+      responses:
+        "201":
+          description: Product created
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Product"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/products/{id}/versions:
+    post:
+      operationId: createProductVersion
+      summary: Create a product version
+      description: >-
+        Stores the next version of the product as a `draft`. Its `definition` follows
+        internal/products/schema/deposit-product.v1.json (422 `invalid_product_definition` if it does
+        not). Idempotent by `Idempotency-Key`.
+      x-aluna-permission: products.versions.create
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateProductVersion"}
+      responses:
+        "201":
+          description: Version created as a draft
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProductVersion"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/product-versions/{id}:
+    get:
+      operationId: getProductVersion
+      summary: Read a product version
+      description: The version with its definition and status.
+      x-aluna-permission: products.versions.read
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Product version
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProductVersion"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/product-versions/{id}/publication:
+    post:
+      operationId: requestProductPublication
+      summary: Request the publication of a product version
+      description: >-
+        Marks the version `pending` (from then on its definition cannot change) and creates a
+        `products.publish` maker-checker request; answers 202 with it. Only the author of the version asks
+        for it (403 `not_version_author`), so whoever approves it did not write its conditions. When someone else with
+        `products.versions.publish` approves it at `POST /v1/approvals/{id}/approval`, the version is
+        `published`, the one in force is `retired` and `aluna.products.version.published.v1` is emitted.
+        A published or retired version is 409 `version_not_publishable`; if, when approving, the version is
+        no longer pending or a later one is in force, the request is left `failed`. Idempotent by
+        `Idempotency-Key`.
+      x-aluna-permission: products.versions.publish
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Publication request created, pending approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "403": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
 components:
   parameters:
     ID:
@@ -632,6 +727,47 @@ components:
           type: object
           additionalProperties: {type: boolean}
         valid_from: {type: string, format: date-time}
+    CreateProduct:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          pattern: "^[a-z][a-z0-9_]{0,63}$"
+          description: Unique within the entity; lowercase letters, digits and underscores, starting with a letter.
+        name: {type: string, minLength: 1, maxLength: 200}
+    Product:
+      type: object
+      required: [id, code, name, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        code: {type: string}
+        name: {type: string}
+        created_at: {type: string, format: date-time}
+    ProductVersionStatus:
+      type: string
+      enum: [draft, pending, published, retired]
+    CreateProductVersion:
+      type: object
+      required: [definition]
+      properties:
+        definition:
+          description: The definition, following deposit-product.v1.json.
+          x-go-type: json.RawMessage
+    ProductVersion:
+      type: object
+      required: [id, product_id, version, status, definition, created_by, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        product_id: {type: string, format: uuid}
+        version: {type: integer, description: Number of the version within the product, from 1}
+        status: {$ref: "#/components/schemas/ProductVersionStatus"}
+        definition:
+          description: The definition, following deposit-product.v1.json, as stored (its keys may come in another order).
+          x-go-type: json.RawMessage
+        created_by: {type: string, description: sub of the author}
+        created_at: {type: string, format: date-time}
+        published_at: {type: string, format: date-time}
     RequestKYCStatusChange:
       type: object
       required: [kyc_status]

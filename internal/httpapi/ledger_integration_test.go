@@ -33,6 +33,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
+	"github.com/DrewGGM/aluna/internal/products"
 )
 
 var testPool *pgxpool.Pool
@@ -71,6 +72,7 @@ func apiServerAs(t *testing.T, entity ids.ID, events ledger.Events, subject stri
 		LedgerHandlers:   NewLedgerHandlers(l, requests, uow, keys, testPool),
 		ApprovalHandlers: NewApprovalHandlers(requests, uow, keys, testPool),
 		PartyHandlers:    NewPartyHandlers(party.New(events), requests, uow, keys, testPool),
+		ProductHandlers:  NewProductHandlers(products.New(events), requests, uow, keys, testPool),
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},

@@ -9,8 +9,8 @@ channel:
     - ledger.accounts.read
     - ledger.balances.read
 
-# Day-to-day operations: parties, accounts, manual entries and holds, and deciding maker-checker requests
-# (the permission for each request's type is required separately).
+# Day-to-day operations: parties, products, accounts, manual entries and holds, and deciding maker-checker
+# requests (the permission for each request's type is required separately).
 operator:
   all:
     - approvals.read
@@ -18,6 +18,10 @@ operator:
     - party.parties.create
     - party.parties.read
     - party.kyc.change
+    - products.products.create
+    - products.versions.create
+    - products.versions.read
+    - products.versions.publish
     - ledger.accounts.create
     - ledger.accounts.read
     - ledger.balances.read
@@ -28,11 +32,14 @@ operator:
     - ledger.holds.capture
     - ledger.holds.release
 
-# Finance: queries, accounting adjustments, reversals and deciding requests.
+# Finance: queries, accounting adjustments, reversals, product publications (rates and fees) and deciding
+# requests.
 finance:
   all:
     - approvals.read
     - approvals.decide
+    - products.versions.read
+    - products.versions.publish
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.post
@@ -46,6 +53,7 @@ compliance:
     - approvals.decide
     - party.parties.read
     - party.kyc.change
+    - products.versions.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read
@@ -55,6 +63,7 @@ auditor:
   all:
     - approvals.read
     - party.parties.read
+    - products.versions.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read

@@ -34,6 +34,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/products"
 	"github.com/DrewGGM/aluna/internal/telemetry"
 )
 
@@ -266,6 +267,7 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 		LedgerHandlers:   httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
 		ApprovalHandlers: httpapi.NewApprovalHandlers(requests, uow, keys, pool),
 		PartyHandlers:    httpapi.NewPartyHandlers(party.New(events), requests, uow, keys, pool),
+		ProductHandlers:  httpapi.NewProductHandlers(products.New(events), requests, uow, keys, pool),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)

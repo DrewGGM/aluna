@@ -86,6 +86,20 @@ func (r storedResponse) VisitRequestKYCStatusChangeResponse(w http.ResponseWrite
 // VisitRegisterPartyResponse writes the response of POST /v1/parties.
 func (r storedResponse) VisitRegisterPartyResponse(w http.ResponseWriter) error { return r.write(w) }
 
+// VisitCreateProductResponse writes the stored response of POST /v1/products.
+func (r storedResponse) VisitCreateProductResponse(w http.ResponseWriter) error { return r.write(w) }
+
+// VisitCreateProductVersionResponse writes the stored response of POST /v1/products/{id}/versions.
+func (r storedResponse) VisitCreateProductVersionResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
+// VisitRequestProductPublicationResponse writes the stored response of POST
+// /v1/product-versions/{id}/publication.
+func (r storedResponse) VisitRequestProductPublicationResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitRequestReversalResponse writes the stored response of POST /v1/transactions/{id}/reversal.
 func (r storedResponse) VisitRequestReversalResponse(w http.ResponseWriter) error { return r.write(w) }
 

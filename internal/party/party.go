@@ -6,7 +6,6 @@ package party
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/outbox"
@@ -142,14 +141,4 @@ func (s *Service) ChangeKYC(ctx context.Context, tx postgres.Tx, entity, id ids.
 		return Party{}, err
 	}
 	return p, nil
-}
-
-// KYCSatisfies reports whether the current KYC status of party partyID of the entity is among allowed
-// (FR-17).
-func (s *Service) KYCSatisfies(ctx context.Context, q postgres.Querier, entity, partyID ids.ID, allowed []KYCStatus) (bool, error) {
-	p, err := pg.Get(ctx, q, entity, partyID)
-	if err != nil {
-		return false, err
-	}
-	return slices.Contains(allowed, p.Current.KYCStatus), nil
 }

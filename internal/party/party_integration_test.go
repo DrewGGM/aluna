@@ -190,8 +190,8 @@ func TestRegisterRejectsInvalidData(t *testing.T) {
 	}
 }
 
-// TestAnotherEntitysPartyDoesNotExist: Get and KYCSatisfies only see the parties of the entity they are
-// given; another entity's party is ErrNotFound.
+// TestAnotherEntitysPartyDoesNotExist: Get only sees the parties of the entity it is given; another entity's
+// party is ErrNotFound.
 func TestAnotherEntitysPartyDoesNotExist(t *testing.T) {
 	svc := party.New(&recorder{})
 	p, err := register(t, svc, input(ids.New()))
@@ -201,32 +201,9 @@ func TestAnotherEntitysPartyDoesNotExist(t *testing.T) {
 	other := ids.New()
 
 	_, getErr := svc.Get(t.Context(), testPool, other, p.ID)
-	_, kycErr := svc.KYCSatisfies(t.Context(), testPool, other, p.ID, []party.KYCStatus{party.KYCPending})
 
-	if !errors.Is(getErr, party.ErrNotFound) || !errors.Is(kycErr, party.ErrNotFound) {
-		t.Fatalf("Get = %v, KYCSatisfies = %v from another entity, want ErrNotFound", getErr, kycErr)
-	}
-}
-
-// TestKYCSatisfies (FR-17): it reports whether the current KYC status is among the allowed ones; a party
-// that does not exist is ErrNotFound.
-func TestKYCSatisfies(t *testing.T) {
-	svc := party.New(&recorder{})
-	p, err := register(t, svc, input(ids.New()))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	entity := p.LegalEntityID
-	pending, errPending := svc.KYCSatisfies(t.Context(), testPool, entity, p.ID, []party.KYCStatus{party.KYCPending, party.KYCApproved})
-	approvedOnly, errApproved := svc.KYCSatisfies(t.Context(), testPool, entity, p.ID, []party.KYCStatus{party.KYCApproved})
-	_, errMissing := svc.KYCSatisfies(t.Context(), testPool, entity, ids.New(), []party.KYCStatus{party.KYCApproved})
-
-	if !pending || errPending != nil || approvedOnly || errApproved != nil {
-		t.Fatalf("pending allowed = %v (%v), approved only = %v (%v)", pending, errPending, approvedOnly, errApproved)
-	}
-	if !errors.Is(errMissing, party.ErrNotFound) {
-		t.Fatalf("missing party = %v, want ErrNotFound", errMissing)
+	if !errors.Is(getErr, party.ErrNotFound) {
+		t.Fatalf("Get from another entity = %v, want ErrNotFound", getErr)
 	}
 }
 

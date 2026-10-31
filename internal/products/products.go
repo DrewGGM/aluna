@@ -1,12 +1,15 @@
 // Package products is the product directory (ADR-0008): products, their versions defined by
-// deposit-product.v1.json and their publication through maker-checker (FR-18). A published version is
-// immutable; accounts are anchored to the version they were opened with (FR-19).
+// deposit-product.v1.json and their publication through maker-checker (FR-18), and the market parameters
+// with their validity periods (FR-21). A published version is immutable; accounts are anchored to the
+// version they were opened with (FR-19).
 package products
 
 import (
 	"context"
 
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	pg "github.com/DrewGGM/aluna/internal/products/internal/adapters/postgres"
@@ -23,6 +26,19 @@ type (
 	Status = app.Status
 	// DepositProduct is the definition of a version of a deposit product.
 	DepositProduct = domain.DepositProduct
+	// MarketKind is the kind of a market parameter.
+	MarketKind = app.MarketKind
+	// MarketParameter is the value of a market parameter in a period.
+	MarketParameter = app.MarketParameter
+)
+
+// Kinds of market parameter.
+const (
+	UsuryRate = app.UsuryRate
+	UVT       = app.UVT
+	SMMLV     = app.SMMLV
+	UVB       = app.UVB
+	IBR       = app.IBR
 )
 
 // Statuses of a product version.
@@ -54,6 +70,12 @@ var (
 	ErrSuperseded = app.ErrSuperseded
 	// ErrNoPublishedVersion means the product has no version in force.
 	ErrNoPublishedVersion = app.ErrNoPublishedVersion
+	// ErrInvalidMarketParameter means a market parameter that is not valid.
+	ErrInvalidMarketParameter = app.ErrInvalidMarketParameter
+	// ErrMarketParameterOverlap means another value of the parameter holds in that period.
+	ErrMarketParameterOverlap = app.ErrMarketParameterOverlap
+	// ErrNoMarketParameter means no value of the parameter holds on that day.
+	ErrNoMarketParameter = app.ErrNoMarketParameter
 )
 
 // typePublished is the event of a published version (architecture §8).
@@ -118,6 +140,28 @@ type publishedPayload struct {
 // version it is anchored to. q can be the pool or a Tx.
 func (s *Service) Version(ctx context.Context, q postgres.Querier, versionID ids.ID) (Version, error) {
 	return pg.NewStore(q).Version(ctx, versionID)
+}
+
+// ParseMarketValue reads the value of a market parameter as it is loaded (a decimal without sign or
+// exponent), or ErrInvalidMarketParameter.
+func ParseMarketValue(text string) (money.Precise, error) { return app.ParseMarketValue(text) }
+
+// CheckMarketParameter reports whether p can be loaded (valid and without overlapping another value), or
+// ErrInvalidMarketParameter or ErrMarketParameterOverlap. q can be the pool or a Tx.
+func (s *Service) CheckMarketParameter(ctx context.Context, q postgres.Querier, p MarketParameter) error {
+	return app.CheckMarketParameter(ctx, pg.NewStore(q), p)
+}
+
+// LoadMarketParameter stores p within tx, or ErrInvalidMarketParameter or ErrMarketParameterOverlap.
+func (s *Service) LoadMarketParameter(ctx context.Context, tx postgres.Tx, p MarketParameter) error {
+	return app.LoadMarketParameter(ctx, pg.NewStore(tx), p)
+}
+
+// MarketParameter is the value of parameter kind (with its modality, empty if it has none) on day on, or
+// ErrNoMarketParameter: whoever needs it does not go on without it. An unknown kind or a wrong modality is
+// ErrInvalidMarketParameter. q can be the pool or a Tx.
+func (s *Service) MarketParameter(ctx context.Context, q postgres.Querier, kind MarketKind, modality string, on calendar.Date) (money.Precise, error) {
+	return app.MarketValue(ctx, pg.NewStore(q), kind, modality, on)
 }
 
 // CurrentVersion returns the published version of product productID, the one new accounts are opened with,

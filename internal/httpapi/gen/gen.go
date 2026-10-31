@@ -138,6 +138,33 @@ func (e KYCStatus) Valid() bool {
 	}
 }
 
+// Defines values for MarketKind.
+const (
+	Ibr       MarketKind = "ibr"
+	Smmlv     MarketKind = "smmlv"
+	UsuryRate MarketKind = "usury_rate"
+	Uvb       MarketKind = "uvb"
+	Uvt       MarketKind = "uvt"
+)
+
+// Valid indicates whether the value is a known member of the MarketKind enum.
+func (e MarketKind) Valid() bool {
+	switch e {
+	case Ibr:
+		return true
+	case Smmlv:
+		return true
+	case UsuryRate:
+		return true
+	case Uvb:
+		return true
+	case Uvt:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PartyKind.
 const (
 	Legal   PartyKind = "legal"
@@ -338,6 +365,36 @@ type LedgerAccount struct {
 	LowerLimit  int64              `json:"lower_limit"`
 }
 
+// LoadMarketParameter defines model for LoadMarketParameter.
+type LoadMarketParameter struct {
+	Kind MarketKind `json:"kind"`
+
+	// Modality Credit modality of the usury rate or tenor of the IBR (lowercase letters, digits and _, starting with a letter, up to 64 characters); absent for the others.
+	Modality *string `json:"modality,omitempty"`
+
+	// ValidFrom First day the value holds
+	ValidFrom openapi_types.Date `json:"valid_from"`
+
+	// ValidTo First day the value no longer holds
+	ValidTo openapi_types.Date `json:"valid_to"`
+
+	// Value Decimal with up to 8 decimals, as text so it is not read as a float: a rate as an effective annual fraction (0.2531 is 25.31 % EA; the IBR is loaded in its effective annual form, not the nominal one), the UVT, the SMMLV and the UVB in pesos.
+	Value string `json:"value"`
+}
+
+// MarketKind defines model for MarketKind.
+type MarketKind string
+
+// MarketParameterValue defines model for MarketParameterValue.
+type MarketParameterValue struct {
+	Kind     MarketKind         `json:"kind"`
+	Modality *string            `json:"modality,omitempty"`
+	On       openapi_types.Date `json:"on"`
+
+	// Value Decimal as text
+	Value string `json:"value"`
+}
+
 // Money defines model for Money.
 type Money struct {
 	// Amount Minor units of the currency (COP 100,000 = 10000000).
@@ -517,6 +574,20 @@ type GetLedgerAccountBalanceParams struct {
 	AsKnownAt *time.Time `form:"as_known_at,omitempty" json:"as_known_at,omitempty"`
 }
 
+// GetMarketParameterParams defines parameters for GetMarketParameter.
+type GetMarketParameterParams struct {
+	Kind MarketKind `form:"kind" json:"kind"`
+
+	// Modality Credit modality of the usury rate or tenor of the IBR; absent for the others.
+	Modality *string            `form:"modality,omitempty" json:"modality,omitempty"`
+	On       openapi_types.Date `form:"on" json:"on"`
+}
+
+// RequestMarketParameterLoadParams defines parameters for RequestMarketParameterLoad.
+type RequestMarketParameterLoadParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // RequestKYCStatusChangeParams defines parameters for RequestKYCStatusChange.
 type RequestKYCStatusChangeParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -553,6 +624,9 @@ type CaptureHoldJSONRequestBody = CaptureHold
 
 // CreateLedgerAccountJSONRequestBody defines body for CreateLedgerAccount for application/json ContentType.
 type CreateLedgerAccountJSONRequestBody = CreateLedgerAccount
+
+// RequestMarketParameterLoadJSONRequestBody defines body for RequestMarketParameterLoad for application/json ContentType.
+type RequestMarketParameterLoadJSONRequestBody = LoadMarketParameter
 
 // RegisterPartyJSONRequestBody defines body for RegisterParty for application/json ContentType.
 type RegisterPartyJSONRequestBody = RegisterParty
@@ -601,6 +675,12 @@ type ServerInterface interface {
 	// GetLedgerAccountBalance Read an account balance
 	// (GET /v1/ledger-accounts/{id}/balance)
 	GetLedgerAccountBalance(w http.ResponseWriter, r *http.Request, id ID, params GetLedgerAccountBalanceParams)
+	// GetMarketParameter Read the value of a market parameter on a day
+	// (GET /v1/market-parameters)
+	GetMarketParameter(w http.ResponseWriter, r *http.Request, params GetMarketParameterParams)
+	// RequestMarketParameterLoad Request the load of a market parameter
+	// (POST /v1/market-parameters)
+	RequestMarketParameterLoad(w http.ResponseWriter, r *http.Request, params RequestMarketParameterLoadParams)
 	// RegisterParty Register a party
 	// (POST /v1/parties)
 	RegisterParty(w http.ResponseWriter, r *http.Request)
@@ -994,6 +1074,110 @@ func (siw *ServerInterfaceWrapper) GetLedgerAccountBalance(w http.ResponseWriter
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetLedgerAccountBalance(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMarketParameter operation middleware
+func (siw *ServerInterfaceWrapper) GetMarketParameter(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetMarketParameterParams
+
+	// ------------- Required query parameter "kind" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "kind", r.URL.Query(), &params.Kind, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "kind"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "modality" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "modality", r.URL.Query(), &params.Modality, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "modality"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "modality", Err: err})
+		}
+		return
+	}
+
+	// ------------- Required query parameter "on" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "on", r.URL.Query(), &params.On, runtime.BindQueryParameterOptions{Type: "string", Format: "date"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "on"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "on", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMarketParameter(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RequestMarketParameterLoad operation middleware
+func (siw *ServerInterfaceWrapper) RequestMarketParameterLoad(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RequestMarketParameterLoadParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestMarketParameterLoad(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1509,6 +1693,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/products/{id}/versions", wrapper.CreateProductVersion)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/product-versions/{id}", wrapper.GetProductVersion)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/product-versions/{id}/publication", wrapper.RequestProductPublication)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/market-parameters", wrapper.GetMarketParameter)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/market-parameters", wrapper.RequestMarketParameterLoad)
 
 	return m
 }
@@ -2300,6 +2486,173 @@ type GetLedgerAccountBalancedefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response GetLedgerAccountBalancedefaultApplicationProblemPlusJSONResponse) VisitGetLedgerAccountBalanceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMarketParameterRequestObject struct {
+	Params GetMarketParameterParams
+}
+
+type GetMarketParameterResponseObject interface {
+	VisitGetMarketParameterResponse(w http.ResponseWriter) error
+}
+
+type GetMarketParameter200JSONResponse MarketParameterValue
+
+func (response GetMarketParameter200JSONResponse) VisitGetMarketParameterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMarketParameter400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetMarketParameter400ApplicationProblemPlusJSONResponse) VisitGetMarketParameterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMarketParameter404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetMarketParameter404ApplicationProblemPlusJSONResponse) VisitGetMarketParameterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMarketParameter422ApplicationProblemPlusJSONResponse Problem
+
+func (response GetMarketParameter422ApplicationProblemPlusJSONResponse) VisitGetMarketParameterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMarketParameterdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetMarketParameterdefaultApplicationProblemPlusJSONResponse) VisitGetMarketParameterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestMarketParameterLoadRequestObject struct {
+	Params RequestMarketParameterLoadParams
+	Body   *RequestMarketParameterLoadJSONRequestBody
+}
+
+type RequestMarketParameterLoadResponseObject interface {
+	VisitRequestMarketParameterLoadResponse(w http.ResponseWriter) error
+}
+
+type RequestMarketParameterLoad202JSONResponse Approval
+
+func (response RequestMarketParameterLoad202JSONResponse) VisitRequestMarketParameterLoadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestMarketParameterLoad400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RequestMarketParameterLoad400ApplicationProblemPlusJSONResponse) VisitRequestMarketParameterLoadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestMarketParameterLoad409ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestMarketParameterLoad409ApplicationProblemPlusJSONResponse) VisitRequestMarketParameterLoadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestMarketParameterLoad422ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestMarketParameterLoad422ApplicationProblemPlusJSONResponse) VisitRequestMarketParameterLoadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestMarketParameterLoaddefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RequestMarketParameterLoaddefaultApplicationProblemPlusJSONResponse) VisitRequestMarketParameterLoadResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -3192,6 +3545,12 @@ type StrictServerInterface interface {
 	// GetLedgerAccountBalance Read an account balance
 	// (GET /v1/ledger-accounts/{id}/balance)
 	GetLedgerAccountBalance(ctx context.Context, request GetLedgerAccountBalanceRequestObject) (GetLedgerAccountBalanceResponseObject, error)
+	// GetMarketParameter Read the value of a market parameter on a day
+	// (GET /v1/market-parameters)
+	GetMarketParameter(ctx context.Context, request GetMarketParameterRequestObject) (GetMarketParameterResponseObject, error)
+	// RequestMarketParameterLoad Request the load of a market parameter
+	// (POST /v1/market-parameters)
+	RequestMarketParameterLoad(ctx context.Context, request RequestMarketParameterLoadRequestObject) (RequestMarketParameterLoadResponseObject, error)
 	// RegisterParty Register a party
 	// (POST /v1/parties)
 	RegisterParty(ctx context.Context, request RegisterPartyRequestObject) (RegisterPartyResponseObject, error)
@@ -3520,6 +3879,65 @@ func (sh *strictHandler) GetLedgerAccountBalance(w http.ResponseWriter, r *http.
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetLedgerAccountBalanceResponseObject); ok {
 		if err := validResponse.VisitGetLedgerAccountBalanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetMarketParameter operation middleware
+func (sh *strictHandler) GetMarketParameter(w http.ResponseWriter, r *http.Request, params GetMarketParameterParams) {
+	var request GetMarketParameterRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetMarketParameter(ctx, request.(GetMarketParameterRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetMarketParameter")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetMarketParameterResponseObject); ok {
+		if err := validResponse.VisitGetMarketParameterResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RequestMarketParameterLoad operation middleware
+func (sh *strictHandler) RequestMarketParameterLoad(w http.ResponseWriter, r *http.Request, params RequestMarketParameterLoadParams) {
+	var request RequestMarketParameterLoadRequestObject
+
+	request.Params = params
+
+	var body RequestMarketParameterLoadJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestMarketParameterLoad(ctx, request.(RequestMarketParameterLoadRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestMarketParameterLoad")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestMarketParameterLoadResponseObject); ok {
+		if err := validResponse.VisitRequestMarketParameterLoadResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

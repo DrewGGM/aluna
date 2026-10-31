@@ -1,4 +1,5 @@
-// Package postgres stores products in products.products and their versions in products.versions.
+// Package postgres stores products in products.products, their versions in products.versions and the
+// market parameters in products.market_parameters.
 package postgres
 
 import (

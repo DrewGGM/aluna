@@ -5,23 +5,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/approvals"
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/products"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
-var createProduct = operation{method: http.MethodPost, path: "/v1/products", success: http.StatusCreated}
+var (
+	createProduct       = operation{method: http.MethodPost, path: "/v1/products", success: http.StatusCreated}
+	loadMarketParameter = operation{method: http.MethodPost, path: "/v1/market-parameters", success: http.StatusAccepted}
+)
 
-// Maker-checker request kind of a product version publication (FR-18, TH-12) and the permission to request
-// and to approve it.
+// Maker-checker request kinds of a product version publication (FR-18, TH-12) and of a market parameter
+// load (FR-21), and the permission to request and to approve each one.
 const (
 	productPublishKind       = "products.publish"
 	productPublishPermission = "products.versions.publish"
+	marketLoadKind           = "products.market_parameter_load"
+	marketLoadPermission     = "products.market_parameters.load"
 )
 
 // ProductHandlers implements the contract's product operations (api/openapi.yaml).
@@ -32,11 +40,12 @@ type ProductHandlers struct {
 	reader    postgres.Querier
 }
 
-// NewProductHandlers creates the product handlers and registers in a the publication request kind, which
-// goes through maker-checker. keys stores the responses of the commands with Idempotency-Key; reader serves
-// the reads outside a transaction.
+// NewProductHandlers creates the product handlers and registers in a the request kinds of a product
+// publication and of a market parameter load, which go through maker-checker. keys stores the responses of
+// the commands with Idempotency-Key; reader serves the reads outside a transaction.
 func NewProductHandlers(p *products.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *ProductHandlers {
 	a.RegisterKind(productPublishKind, productPublishPermission, publishOnApproval(p))
+	a.RegisterKind(marketLoadKind, marketLoadPermission, loadMarketParameterOnApproval(p))
 	return &ProductHandlers{products: p, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
@@ -170,4 +179,105 @@ func toProductVersionJSON(v products.Version) gen.ProductVersion {
 		out.PublishedAt = &v.PublishedAt
 	}
 	return out
+}
+
+// marketLoadRequest is the payload of a market parameter load request: the value the checker approves.
+type marketLoadRequest struct {
+	Kind      products.MarketKind `json:"kind"`
+	Modality  string              `json:"modality,omitempty"`
+	ValidFrom openapi_types.Date  `json:"valid_from"`
+	ValidTo   openapi_types.Date  `json:"valid_to"`
+	Value     string              `json:"value"`
+}
+
+// parameter is the market parameter the request asks to load, or products.ErrInvalidMarketParameter. A
+// missing date (the generated code does not check required fields) is not year 1: it is rejected.
+func (r marketLoadRequest) parameter() (products.MarketParameter, error) {
+	if r.ValidFrom.IsZero() || r.ValidTo.IsZero() {
+		return products.MarketParameter{}, fmt.Errorf("%w: valid_from and valid_to are required", products.ErrInvalidMarketParameter)
+	}
+	value, err := products.ParseMarketValue(r.Value)
+	if err != nil {
+		return products.MarketParameter{}, err
+	}
+	return products.MarketParameter{
+		Kind: r.Kind, Modality: r.Modality, ValidFrom: calendarDate(r.ValidFrom.Time), ValidTo: calendarDate(r.ValidTo.Time), Value: value,
+	}, nil
+}
+
+// RequestMarketParameterLoad asks to load the value of a market parameter: it is checked now (valid and
+// without overlapping another period) and waits as a products.market_parameter_load request until someone
+// else approves it (FR-21), once per Idempotency-Key.
+func (h *ProductHandlers) RequestMarketParameterLoad(ctx context.Context, req gen.RequestMarketParameterLoadRequestObject) (gen.RequestMarketParameterLoadResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	payload := marketLoadRequest{
+		Kind: products.MarketKind(req.Body.Kind), Modality: deref(req.Body.Modality),
+		ValidFrom: req.Body.ValidFrom, ValidTo: req.Body.ValidTo, Value: req.Body.Value,
+	}
+	resp, err := h.commands.idempotent(ctx, p, loadMarketParameter, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		parameter, err := payload.parameter()
+		if err != nil {
+			return nil, err
+		}
+		if err := h.products.CheckMarketParameter(ctx, tx, parameter); err != nil {
+			return nil, err
+		}
+		requested, err := h.approvals.Request(ctx, tx, marketLoadKind, payload, p)
+		if err != nil {
+			return nil, err
+		}
+		return toApprovalJSON(requested), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// loadMarketParameterOnApproval is the Executor of marketLoadKind: it stores the value. If by then another
+// value holds in part of the period, the request is left failed. Its result is the loaded value.
+func loadMarketParameterOnApproval(svc *products.Service) approvals.Executor {
+	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, _ access.Principal) (json.RawMessage, error) {
+		var r marketLoadRequest
+		if err := json.Unmarshal(payload, &r); err != nil {
+			return nil, fmt.Errorf("market parameter load payload: %w", err)
+		}
+		parameter, err := r.parameter()
+		if err != nil {
+			return nil, asCommandRejection(err)
+		}
+		if err := svc.LoadMarketParameter(ctx, tx, parameter); err != nil {
+			return nil, asCommandRejection(err)
+		}
+		return payload, nil
+	}
+}
+
+// GetMarketParameter reads the value of a market parameter on a day; with no value for that day it is 404
+// no_market_parameter.
+func (h *ProductHandlers) GetMarketParameter(ctx context.Context, req gen.GetMarketParameterRequestObject) (gen.GetMarketParameterResponseObject, error) {
+	modality := deref(req.Params.Modality)
+	value, err := h.products.MarketParameter(ctx, h.reader, products.MarketKind(req.Params.Kind), modality, calendarDate(req.Params.On.Time))
+	if err != nil {
+		return nil, err
+	}
+	out := gen.MarketParameterValue{Kind: req.Params.Kind, On: req.Params.On, Value: value.String()}
+	if modality != "" {
+		out.Modality = &modality
+	}
+	return gen.GetMarketParameter200JSONResponse(out), nil
+}
+
+func calendarDate(t time.Time) calendar.Date {
+	return calendar.Date{Year: t.Year(), Month: t.Month(), Day: t.Day()}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

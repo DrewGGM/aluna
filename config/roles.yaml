@@ -22,6 +22,7 @@ operator:
     - products.versions.create
     - products.versions.read
     - products.versions.publish
+    - products.market_parameters.read
     - ledger.accounts.create
     - ledger.accounts.read
     - ledger.balances.read
@@ -32,14 +33,16 @@ operator:
     - ledger.holds.capture
     - ledger.holds.release
 
-# Finance: queries, accounting adjustments, reversals, product publications (rates and fees) and deciding
-# requests.
+# Finance: queries, accounting adjustments, reversals, product publications (rates and fees), market
+# parameters and deciding requests.
 finance:
   all:
     - approvals.read
     - approvals.decide
     - products.versions.read
     - products.versions.publish
+    - products.market_parameters.load
+    - products.market_parameters.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.post
@@ -54,6 +57,7 @@ compliance:
     - party.parties.read
     - party.kyc.change
     - products.versions.read
+    - products.market_parameters.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read
@@ -64,6 +68,7 @@ auditor:
     - approvals.read
     - party.parties.read
     - products.versions.read
+    - products.market_parameters.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read

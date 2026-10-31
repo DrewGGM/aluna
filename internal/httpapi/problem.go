@@ -164,6 +164,9 @@ var problems = []struct {
 	{products.ErrNotTheAuthor, Problem{Status: http.StatusForbidden, Code: "not_version_author", Title: "Only the author of the version asks for its publication"}},
 	{products.ErrNotPending, conflict("version_not_pending", "The version is not pending publication")},
 	{products.ErrSuperseded, conflict("version_superseded", "A later version of the product is in force")},
+	{products.ErrInvalidMarketParameter, unprocessable("invalid_market_parameter", "Invalid market parameter")},
+	{products.ErrMarketParameterOverlap, conflict("market_parameter_overlap", "Another value of the parameter holds in that period")},
+	{products.ErrNoMarketParameter, Problem{Status: http.StatusNotFound, Code: "no_market_parameter", Title: "No value of the parameter holds on that day"}},
 	// approvals
 	{approvals.ErrSelfApproval, Problem{
 		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "The requester cannot decide their own request",

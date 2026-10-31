@@ -61,6 +61,12 @@ func apiServerWith(t *testing.T, entity ids.ID, events ledger.Events) *httptest.
 // Reversals go through maker-checker as in aluna api.
 func apiServerAs(t *testing.T, entity ids.ID, events ledger.Events, subject string) *httptest.Server {
 	t.Helper()
+	return apiServerAsRole(t, entity, events, subject, testRole)
+}
+
+// apiServerAsRole is apiServerAs with role instead of operator.
+func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject, role string) *httptest.Server {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	uow, keys := postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool)
 	policy, err := access.ParsePolicy(config.Roles)
@@ -76,7 +82,7 @@ func apiServerAs(t *testing.T, entity ids.ID, events ledger.Events, subject stri
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},
-		Verifier:   entityVerifier{Subject: subject, LegalEntityID: entity, Roles: []string{testRole}},
+		Verifier:   entityVerifier{Subject: subject, LegalEntityID: entity, Roles: []string{role}},
 		Authorizer: testAuthorizer(t),
 	}
 	handler := NewServer(cfg, Routes(api, log), log).Handler

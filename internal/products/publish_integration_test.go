@@ -329,7 +329,7 @@ func TestConcurrentPublicationsAreSerialized(t *testing.T) {
 	go func() {
 		second <- try(t, func(tx postgres.Tx) error { _, err := w.svc.Publish(t.Context(), tx, w.entity, v2.ID); return err })
 	}()
-	waitForAdvisoryLockWait(t)
+	waitForLockWait(t, "advisory")
 	releaseOnce()
 
 	if err := cmp.Or(<-first, <-second); err != nil {
@@ -342,16 +342,19 @@ func TestConcurrentPublicationsAreSerialized(t *testing.T) {
 	}
 }
 
-// waitForAdvisoryLockWait waits, for less than lock_timeout (2 s), until a session of this test database is
-// waiting for an advisory lock: the second publication is blocked behind the first. Without the lock it
-// waits on the index of the version in force instead, and this fails.
-func waitForAdvisoryLockWait(t *testing.T) {
+// waitForLockWait waits, for less than lock_timeout (2 s), until a session waits for a lock of locktype
+// held by a session of this test database. A second publication waits for the first on the product's
+// "advisory" lock (without it, it would wait on the index of the version in force instead, and this
+// fails); a second overlapping load waits for the first one's transaction ("transactionid") on the
+// exclusion constraint.
+func waitForLockWait(t *testing.T, locktype string) {
 	t.Helper()
 	for deadline := time.Now().Add(1500 * time.Millisecond); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		var waiting int
-		err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM pg_locks
-			WHERE locktype = 'advisory' AND NOT granted
-				AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&waiting)
+		err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM pg_locks w
+			WHERE w.locktype = $1 AND NOT w.granted
+				AND EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = w.pid
+					AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database()))`, locktype).Scan(&waiting)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -359,7 +362,7 @@ func waitForAdvisoryLockWait(t *testing.T) {
 			return
 		}
 	}
-	t.Fatal("the second publication never waited for the first on the product lock")
+	t.Fatalf("no session waited on a %s lock", locktype)
 }
 
 // TestAnUnreadableStoredDefinitionIsAnInternalError: a stored definition the parser no longer reads (here,

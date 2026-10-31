@@ -470,6 +470,70 @@ paths:
         "404": {$ref: "#/components/responses/Problem"}
         "409": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/market-parameters:
+    post:
+      operationId: requestMarketParameterLoad
+      summary: Request the load of a market parameter
+      description: >-
+        Asks to load the value of a market parameter (FR-21) for a period, from `valid_from` (included) to
+        `valid_to` (excluded): the usury rate by credit modality and the IBR by tenor (fractions up to 1),
+        and the UVT, the SMMLV and the UVB in pesos (without modality). The parameters are the tenant's,
+        not a legal entity's. Creates a `products.market_parameter_load` maker-checker request and answers
+        202 with it; the value is stored when someone else with `products.market_parameters.load` approves
+        it. An invalid value is 422 `invalid_market_parameter`; a period that overlaps another value of the
+        same kind and modality is 409 `market_parameter_overlap` when requesting, and leaves the request
+        `failed` if it overlaps when approving. A value is never changed: a correction is another period.
+        Idempotent by `Idempotency-Key`.
+      x-aluna-permission: products.market_parameters.load
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoadMarketParameter"}
+      responses:
+        "202":
+          description: Load request created, pending approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+    get:
+      operationId: getMarketParameter
+      summary: Read the value of a market parameter on a day
+      description: >-
+        The value that holds on `on`. With no value for that day it is 404 `no_market_parameter`: whoever
+        needs it does not go on without it. An unknown kind, or a modality the kind does not take (or a
+        missing one for the usury rate and the IBR), is 422 `invalid_market_parameter`.
+      x-aluna-permission: products.market_parameters.read
+      parameters:
+        - name: kind
+          in: query
+          required: true
+          schema: {$ref: "#/components/schemas/MarketKind"}
+        - name: modality
+          in: query
+          required: false
+          description: Credit modality of the usury rate or tenor of the IBR; absent for the others.
+          schema: {type: string}
+        - name: "on"
+          in: query
+          required: true
+          schema: {type: string, format: date}
+      responses:
+        "200":
+          description: Value in force
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MarketParameterValue"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
 components:
   parameters:
     ID:
@@ -768,6 +832,37 @@ components:
         created_by: {type: string, description: sub of the author}
         created_at: {type: string, format: date-time}
         published_at: {type: string, format: date-time}
+    MarketKind:
+      type: string
+      enum: [usury_rate, uvt, smmlv, uvb, ibr]
+    LoadMarketParameter:
+      type: object
+      required: [kind, valid_from, valid_to, value]
+      properties:
+        kind: {$ref: "#/components/schemas/MarketKind"}
+        modality:
+          type: string
+          pattern: "^[a-z][a-z0-9_]{0,63}$"
+          description: >-
+            Credit modality of the usury rate or tenor of the IBR (lowercase letters, digits and _, starting
+            with a letter, up to 64 characters); absent for the others.
+        valid_from: {type: string, format: date, description: First day the value holds}
+        valid_to: {type: string, format: date, description: First day the value no longer holds}
+        value:
+          type: string
+          pattern: "^[0-9]+(\\.[0-9]{1,8})?$"
+          description: >-
+            Decimal with up to 8 decimals, as text so it is not read as a float: a rate as an effective
+            annual fraction (0.2531 is 25.31 % EA; the IBR is loaded in its effective annual form, not the
+            nominal one), the UVT, the SMMLV and the UVB in pesos.
+    MarketParameterValue:
+      type: object
+      required: [kind, "on", value]
+      properties:
+        kind: {$ref: "#/components/schemas/MarketKind"}
+        modality: {type: string}
+        "on": {type: string, format: date}
+        value: {type: string, description: Decimal as text}
     RequestKYCStatusChange:
       type: object
       required: [kyc_status]

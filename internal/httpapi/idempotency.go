@@ -100,6 +100,11 @@ func (r storedResponse) VisitRequestProductPublicationResponse(w http.ResponseWr
 	return r.write(w)
 }
 
+// VisitRequestMarketParameterLoadResponse writes the stored response of POST /v1/market-parameters.
+func (r storedResponse) VisitRequestMarketParameterLoadResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitRequestReversalResponse writes the stored response of POST /v1/transactions/{id}/reversal.
 func (r storedResponse) VisitRequestReversalResponse(w http.ResponseWriter) error { return r.write(w) }
 

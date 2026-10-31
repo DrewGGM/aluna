@@ -281,6 +281,13 @@ type RejectApproval struct {
 	Reason string `json:"reason"`
 }
 
+// RequestReversal defines model for RequestReversal.
+type RequestReversal struct {
+	// BusinessDate Fecha de negocio de la reversa; por defecto, la de la entidad al aprobarse.
+	BusinessDate *openapi_types.Date `json:"business_date,omitempty"`
+	Reason       string              `json:"reason"`
+}
+
 // Transaction defines model for Transaction.
 type Transaction struct {
 	BusinessDate openapi_types.Date `json:"business_date"`
@@ -338,6 +345,11 @@ type PostTransactionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// RequestReversalParams defines parameters for RequestReversal.
+type RequestReversalParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // RejectRequestJSONRequestBody defines body for RejectRequest for application/json ContentType.
 type RejectRequestJSONRequestBody = RejectApproval
 
@@ -352,6 +364,9 @@ type CreateLedgerAccountJSONRequestBody = CreateLedgerAccount
 
 // PostTransactionJSONRequestBody defines body for PostTransaction for application/json ContentType.
 type PostTransactionJSONRequestBody = PostTransaction
+
+// RequestReversalJSONRequestBody defines body for RequestReversal for application/json ContentType.
+type RequestReversalJSONRequestBody = RequestReversal
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -388,6 +403,9 @@ type ServerInterface interface {
 	// GetTransaction Leer una transacción
 	// (GET /v1/transactions/{id})
 	GetTransaction(w http.ResponseWriter, r *http.Request, id ID)
+	// RequestReversal Pedir la reversa de una transacción
+	// (POST /v1/transactions/{id}/reversal)
+	RequestReversal(w http.ResponseWriter, r *http.Request, id ID, params RequestReversalParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -831,6 +849,60 @@ func (siw *ServerInterfaceWrapper) GetTransaction(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// RequestReversal operation middleware
+func (siw *ServerInterfaceWrapper) RequestReversal(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RequestReversalParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestReversal(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -956,6 +1028,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/ledger-accounts/{id}/balance", wrapper.GetLedgerAccountBalance)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transactions", wrapper.PostTransaction)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/transactions/{id}", wrapper.GetTransaction)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transactions/{id}/reversal", wrapper.RequestReversal)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/holds", wrapper.PlaceHold)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/holds/{id}/capture", wrapper.CaptureHold)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/holds/{id}/release", wrapper.ReleaseHold)
@@ -1945,6 +2018,105 @@ func (response GetTransactiondefaultApplicationProblemPlusJSONResponse) VisitGet
 	return err
 }
 
+type RequestReversalRequestObject struct {
+	Id     ID `json:"id"`
+	Params RequestReversalParams
+	Body   *RequestReversalJSONRequestBody
+}
+
+type RequestReversalResponseObject interface {
+	VisitRequestReversalResponse(w http.ResponseWriter) error
+}
+
+type RequestReversal202JSONResponse Approval
+
+func (response RequestReversal202JSONResponse) VisitRequestReversalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestReversal400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RequestReversal400ApplicationProblemPlusJSONResponse) VisitRequestReversalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestReversal404ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestReversal404ApplicationProblemPlusJSONResponse) VisitRequestReversalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestReversal409ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestReversal409ApplicationProblemPlusJSONResponse) VisitRequestReversalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestReversal422ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestReversal422ApplicationProblemPlusJSONResponse) VisitRequestReversalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestReversaldefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RequestReversaldefaultApplicationProblemPlusJSONResponse) VisitRequestReversalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// ListApprovals Solicitudes de maker-checker de la entidad
@@ -1980,6 +2152,9 @@ type StrictServerInterface interface {
 	// GetTransaction Leer una transacción
 	// (GET /v1/transactions/{id})
 	GetTransaction(ctx context.Context, request GetTransactionRequestObject) (GetTransactionResponseObject, error)
+	// RequestReversal Pedir la reversa de una transacción
+	// (POST /v1/transactions/{id}/reversal)
+	RequestReversal(ctx context.Context, request RequestReversalRequestObject) (RequestReversalResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -2337,6 +2512,40 @@ func (sh *strictHandler) GetTransaction(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetTransactionResponseObject); ok {
 		if err := validResponse.VisitGetTransactionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RequestReversal operation middleware
+func (sh *strictHandler) RequestReversal(w http.ResponseWriter, r *http.Request, id ID, params RequestReversalParams) {
+	var request RequestReversalRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body RequestReversalJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestReversal(ctx, request.(RequestReversalRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestReversal")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestReversalResponseObject); ok {
+		if err := validResponse.VisitRequestReversalResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

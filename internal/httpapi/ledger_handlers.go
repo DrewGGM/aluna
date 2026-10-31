@@ -2,11 +2,17 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
+	"github.com/DrewGGM/aluna/internal/access"
+	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -24,18 +30,26 @@ const (
 	manualRuleVersion = "manual.v1"
 )
 
+// Tipo de solicitud de maker-checker de una reversa (FR-3, FR-39) y el permiso que exige aprobarla.
+const (
+	reversalKind       = "ledger.reversal"
+	reversalPermission = "ledger.transactions.reverse"
+)
+
 // LedgerHandlers implementa las operaciones del ledger del contrato (api/openapi.yaml).
 type LedgerHandlers struct {
-	ledger   *ledger.Service
-	commands commands
-	reader   postgres.Querier
+	ledger    *ledger.Service
+	approvals *approvals.Service
+	commands  commands
+	reader    postgres.Querier
 }
 
-// NewLedgerHandlers crea los handlers del ledger. keys guarda las respuestas de los comandos con
-// Idempotency-Key; reader sirve las lecturas fuera de transacción. La entidad legal de cada request es la
-// de su token (FR-41).
-func NewLedgerHandlers(l *ledger.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *LedgerHandlers {
-	return &LedgerHandlers{ledger: l, commands: commands{uow: uow, keys: keys}, reader: reader}
+// NewLedgerHandlers crea los handlers del ledger y registra en a el tipo de solicitud de la reversa, que
+// pasa por maker-checker. keys guarda las respuestas de los comandos con Idempotency-Key; reader sirve las
+// lecturas fuera de transacción. La entidad legal de cada request es la de su token (FR-41).
+func NewLedgerHandlers(l *ledger.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *LedgerHandlers {
+	a.RegisterKind(reversalKind, reversalPermission, reverseOnApproval(l))
+	return &LedgerHandlers{ledger: l, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
 // CreateLedgerAccount crea una cuenta de la entidad del token.
@@ -194,6 +208,81 @@ func (h *LedgerHandlers) GetTransaction(ctx context.Context, req gen.GetTransact
 	return gen.GetTransaction200JSONResponse(toTransactionJSON(tx)), nil
 }
 
+// reversalRequest es el payload de una solicitud de reversa: lo que el checker aprueba y lo que se asienta.
+type reversalRequest struct {
+	TransactionID ids.ID              `json:"transaction_id"`
+	Reason        string              `json:"reason"`
+	BusinessDate  *openapi_types.Date `json:"business_date,omitempty"`
+}
+
+// errReversalOfReversal es pedir la reversa de una transacción que ya es una reversa: aprobarla volvería a
+// aplicar la original sin que el checker lo viera en el payload.
+var errReversalOfReversal = errors.New("la transacción es una reversa: no se revierte")
+
+// RequestReversal pide la reversa de una transacción de la entidad del token: queda como solicitud
+// ledger.reversal hasta que otra persona la apruebe (FR-39), una sola vez por Idempotency-Key. La de una
+// reversa se rechaza: para volver a aplicar la original se asienta de nuevo.
+func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestReversalRequestObject) (gen.RequestReversalResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := ids.ID(req.Id)
+	op := resourceOperation("transactions", id, "reversal", http.StatusAccepted)
+	noteTargets(ctx, op.targets) // antes de validar el cuerpo: su rechazo también nombra la transacción
+	if strings.TrimSpace(req.Body.Reason) == "" {
+		return nil, fmt.Errorf("%w: falta el motivo de la reversa", ledger.ErrInvalidPosting)
+	}
+	payload := reversalRequest{TransactionID: id, Reason: req.Body.Reason, BusinessDate: req.Body.BusinessDate}
+	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		original, err := h.ledger.Transaction(ctx, tx, p.LegalEntityID, id)
+		if err != nil {
+			return nil, err
+		}
+		if original.ReversesID != (ids.ID{}) {
+			return nil, fmt.Errorf("%w: %s revierte a %s", errReversalOfReversal, id, original.ReversesID)
+		}
+		requested, err := h.approvals.Request(ctx, tx, reversalKind, payload, p)
+		if err != nil {
+			return nil, err
+		}
+		return toApprovalJSON(requested), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// reverseOnApproval es el Executor de reversalKind: asienta la reversa del payload en la entidad de quien
+// aprueba, que queda como su actor. Un rechazo del ledger (un 4xx de su tabla de problems: ya revertida,
+// periodo cerrado, fondos insuficientes) va envuelto en approvals.ErrCommandRejected y deja la solicitud
+// failed; cualquier otro error sube.
+func reverseOnApproval(l *ledger.Service) approvals.Executor {
+	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
+		var r reversalRequest
+		if err := json.Unmarshal(payload, &r); err != nil {
+			return nil, fmt.Errorf("payload de la reversa: %w", err)
+		}
+		in := ledger.ReverseInput{LegalEntityID: checker.LegalEntityID, TransactionID: r.TransactionID, Reason: r.Reason, Actor: checker.Subject}
+		if r.BusinessDate != nil {
+			in.BusinessDate = r.BusinessDate.Time
+		}
+		reversal, err := l.Reverse(ctx, tx, in)
+		if err != nil {
+			if p, known := problemFor(err); known && p.Status < http.StatusInternalServerError {
+				return nil, fmt.Errorf("%w: %w", approvals.ErrCommandRejected, err)
+			}
+			return nil, err
+		}
+		result, err := json.Marshal(toTransactionJSON(reversal))
+		if err != nil {
+			return nil, fmt.Errorf("resultado de la reversa: %w", err)
+		}
+		return result, nil
+	}
+}
+
 func toAccountJSON(a ledger.Account) gen.LedgerAccount {
 	return gen.LedgerAccount{
 		Id: [16]byte(a.ID), Code: a.Code, Kind: gen.AccountKind(a.Kind), Currency: a.Currency.Code(),
@@ -271,7 +360,7 @@ func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldReq
 	if err != nil {
 		return nil, err
 	}
-	op := holdOperation(ids.ID(req.Id), "capture")
+	op := resourceOperation("holds", ids.ID(req.Id), "capture", http.StatusOK)
 	noteTargets(ctx, op.targets) // antes de validar el cuerpo: su rechazo también nombra el hold
 	if err := requireBusinessDate(req.Body.BusinessDate); err != nil {
 		return nil, err
@@ -304,7 +393,7 @@ func (h *LedgerHandlers) ReleaseHold(ctx context.Context, req gen.ReleaseHoldReq
 		return nil, err
 	}
 	in := ledger.ReleaseInput{LegalEntityID: p.LegalEntityID, HoldID: ids.ID(req.Id)}
-	op := holdOperation(ids.ID(req.Id), "release")
+	op := resourceOperation("holds", ids.ID(req.Id), "release", http.StatusOK)
 	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, nil, func(tx postgres.Tx) (any, error) {
 		released, err := h.ledger.ReleaseHold(ctx, tx, in)
 		if err != nil {

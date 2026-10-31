@@ -88,8 +88,9 @@ func freeAddr(t *testing.T) string {
 func oidcIssuer(t *testing.T) string {
 	t.Helper()
 	s := &oidctest.Server{}
-	ts := httptest.NewServer(s)
+	ts := httptest.NewUnstartedServer(s) // la URL se fija antes de que el servidor atienda requests
+	s.SetIssuer("http://" + ts.Listener.Addr().String())
+	ts.Start()
 	t.Cleanup(ts.Close)
-	s.SetIssuer(ts.URL)
 	return ts.URL
 }

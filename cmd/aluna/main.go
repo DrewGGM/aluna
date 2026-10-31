@@ -258,9 +258,11 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	}
 	uow := postgres.NewUnitOfWork(pool)
 	keys := idempotency.NewStore(pool)
+	ledgerSvc := ledger.New(calendar.New(), events)
+	requests := approvals.New(authz.policy)
 	api := httpapi.API{
-		LedgerHandlers:   httpapi.NewLedgerHandlers(ledger.New(calendar.New(), events), uow, keys, pool),
-		ApprovalHandlers: httpapi.NewApprovalHandlers(approvals.New(authz.policy), uow, keys, pool),
+		LedgerHandlers:   httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
+		ApprovalHandlers: httpapi.NewApprovalHandlers(requests, uow, keys, pool),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)

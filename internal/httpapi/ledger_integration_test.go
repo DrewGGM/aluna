@@ -20,7 +20,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/DrewGGM/aluna/config"
 	"github.com/DrewGGM/aluna/internal/access"
+	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
@@ -47,16 +49,31 @@ func apiServer(t *testing.T, entity ids.ID) *httptest.Server {
 	return apiServerWith(t, entity, events)
 }
 
-// apiServerWith es apiServer con los eventos del ledger en events. Cada request lleva el token de prueba,
-// que entityVerifier acepta como un operador de la entidad: la verificación de tokens se prueba en
-// auth_test.go.
+// apiServerWith es apiServer con los eventos del ledger en events.
 func apiServerWith(t *testing.T, entity ids.ID, events ledger.Events) *httptest.Server {
 	t.Helper()
+	return apiServerAs(t, entity, events, testSubject)
+}
+
+// apiServerAs es la API completa con la sesión del operador subject de la entidad: cada request lleva el
+// token de prueba, que entityVerifier acepta como ese operador (la verificación de tokens se prueba en
+// auth_test.go). Las reversas pasan por maker-checker como en aluna api.
+func apiServerAs(t *testing.T, entity ids.ID, events ledger.Events, subject string) *httptest.Server {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	api := API{LedgerHandlers: NewLedgerHandlers(ledger.New(calendar.New(), events), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool)}
+	uow, keys := postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool)
+	policy, err := access.ParsePolicy(config.Roles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, requests := ledger.New(calendar.New(), events), approvals.New(policy)
+	api := API{
+		LedgerHandlers:   NewLedgerHandlers(l, requests, uow, keys, testPool),
+		ApprovalHandlers: NewApprovalHandlers(requests, uow, keys, testPool),
+	}
 	cfg := ServerConfig{
-		Audit:      &CommandAudit{Records: audit.New(), UoW: postgres.NewUnitOfWork(testPool)},
-		Verifier:   entityVerifier{Subject: testSubject, LegalEntityID: entity, Roles: []string{testRole}},
+		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},
+		Verifier:   entityVerifier{Subject: subject, LegalEntityID: entity, Roles: []string{testRole}},
 		Authorizer: testAuthorizer(t),
 	}
 	handler := NewServer(cfg, Routes(api, log), log).Handler

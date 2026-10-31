@@ -115,6 +115,7 @@ var problems = []struct {
 		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Idempotency-Key inválida",
 		Detail: fmt.Sprintf("La clave debe ser texto UTF-8 de hasta %d caracteres.", maxIdempotencyKey),
 	}},
+	{errReversalOfReversal, conflict("reversal_of_reversal", "La transacción ya es una reversa")},
 	{errInvalidApprovalStatus, Problem{
 		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Estado de solicitud desconocido",
 		Detail: "status es pending, approved, rejected, failed o expired.",
@@ -142,6 +143,7 @@ var problems = []struct {
 	{ledger.ErrInvalidHold, unprocessable("invalid_hold", "Datos del hold inválidos")},
 	{ledger.ErrTransactionNotFound, notFound},
 	{ledger.ErrPeriodClosed, conflict("period_closed", "El periodo contable de la fecha de negocio está cerrado")},
+	{ledger.ErrAlreadyReversed, conflict("already_reversed", "La transacción ya tiene reversa")},
 	// access
 	{access.ErrForbidden, forbidden},
 	// approvals

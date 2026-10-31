@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"net/http"
 
 	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
@@ -58,7 +59,7 @@ func (h *ApprovalHandlers) ApproveRequest(ctx context.Context, req gen.ApproveRe
 		return nil, err
 	}
 	id := ids.ID(req.Id)
-	resp, err := h.commands.idempotent(ctx, p, approvalOperation(id, "approval"), req.Params.IdempotencyKey, nil, func(tx postgres.Tx) (any, error) {
+	resp, err := h.commands.idempotent(ctx, p, resourceOperation("approvals", id, "approval", http.StatusOK), req.Params.IdempotencyKey, nil, func(tx postgres.Tx) (any, error) {
 		approved, err := h.approvals.Approve(ctx, tx, id, p)
 		if err != nil {
 			return nil, err
@@ -78,7 +79,7 @@ func (h *ApprovalHandlers) RejectRequest(ctx context.Context, req gen.RejectRequ
 		return nil, err
 	}
 	id := ids.ID(req.Id)
-	resp, err := h.commands.run(ctx, approvalOperation(id, "rejection"), func(tx postgres.Tx) (any, error) {
+	resp, err := h.commands.run(ctx, resourceOperation("approvals", id, "rejection", http.StatusOK), func(tx postgres.Tx) (any, error) {
 		rejected, err := h.approvals.Reject(ctx, tx, id, p, req.Body.Reason)
 		if err != nil {
 			return nil, err

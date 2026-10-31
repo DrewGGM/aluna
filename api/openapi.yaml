@@ -124,6 +124,36 @@ paths:
         "400": {$ref: "#/components/responses/Problem"}
         "404": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/transactions/{id}/reversal:
+    post:
+      operationId: requestReversal
+      summary: Pedir la reversa de una transacción
+      description: >-
+        Crea una solicitud `ledger.reversal` de maker-checker y responde 202 con ella. La reversa se asienta
+        (sus entries con el signo contrario) cuando otra persona con `ledger.transactions.reverse` la aprueba
+        en `POST /v1/approvals/{id}/approval`; si el ledger la rechaza entonces (ya revertida, periodo
+        cerrado, fondos insuficientes), la solicitud queda `failed`. La reversa de una reversa se rechaza
+        al pedirla (409 `reversal_of_reversal`). Idempotente por `Idempotency-Key`.
+      x-aluna-permission: ledger.transactions.reverse
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RequestReversal"}
+      responses:
+        "202":
+          description: Solicitud de reversa creada, pendiente de aprobación
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/holds:
     post:
       operationId: placeHold
@@ -473,3 +503,12 @@ components:
       required: [reason]
       properties:
         reason: {type: string, minLength: 1}
+    RequestReversal:
+      type: object
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1}
+        business_date:
+          type: string
+          format: date
+          description: Fecha de negocio de la reversa; por defecto, la de la entidad al aprobarse.

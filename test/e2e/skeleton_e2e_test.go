@@ -31,25 +31,10 @@ import (
 // TestSkeleton: una transacción balanceada de 100.000 COP viaja HTTP → ledger → PostgreSQL → HTTP
 // con el binario compilado, migrado por él mismo y conectado con el rol de la aplicación.
 func TestSkeleton(t *testing.T) {
-	bin := buildAluna(t)
-	dsn, cleanup, err := pgtest.StartEmpty(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup)
-	if out, err := alunaCmd(t, bin, []string{"ALUNA_DATABASE_URL=" + dsn}, "migrate", "up").CombinedOutput(); err != nil {
-		t.Fatalf("aluna migrate up: %v\n%s", err, out)
-	}
-	api := startAPI(t, bin, dsn)
+	api := newAPI(t)
 
 	cash, deposit := createAccount(t, api, "asset"), createAccount(t, api, "liability")
-	posting := fmt.Sprintf(`{"code":"deposito","value_date":"2026-10-26","business_date":"2026-10-26",
-		"source":"e2e","external_ref":%q,"entries":[
-		{"account_id":%q,"amount":{"amount":10000000,"currency":"COP"}},
-		{"account_id":%q,"amount":{"amount":-10000000,"currency":"COP"}}]}`, ids.New().String(), cash, deposit)
-	if status := call(t, api, http.MethodPost, "/v1/transactions", posting, nil); status != http.StatusCreated {
-		t.Fatalf("asentar = %d", status)
-	}
+	postTransaction(t, api, cash, deposit, 10_000_000)
 
 	for account, posted := range map[string]int64{cash: 10_000_000, deposit: -10_000_000} {
 		var b struct{ Posted, Natural struct{ Amount int64 } }
@@ -60,6 +45,35 @@ func TestSkeleton(t *testing.T) {
 			t.Errorf("saldo de %s = %+v, se esperaba con signo %d y natural 10.000.000 COP", account, b, posted)
 		}
 	}
+}
+
+// newAPI compila aluna, migra una base nueva con él y arranca aluna api sobre ella.
+func newAPI(t *testing.T) runningAPI {
+	t.Helper()
+	bin := buildAluna(t)
+	dsn, cleanup, err := pgtest.StartEmpty(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	if out, err := alunaCmd(t, bin, []string{"ALUNA_DATABASE_URL=" + dsn}, "migrate", "up").CombinedOutput(); err != nil {
+		t.Fatalf("aluna migrate up: %v\n%s", err, out)
+	}
+	return startAPI(t, bin, dsn)
+}
+
+// postTransaction asienta units de la cuenta debit contra la cuenta credit y devuelve el id de la transacción.
+func postTransaction(t *testing.T, a runningAPI, debit, credit string, units int64) string {
+	t.Helper()
+	posting := fmt.Sprintf(`{"code":"deposito","value_date":"2026-10-26","business_date":"2026-10-26",
+		"source":"e2e","external_ref":%q,"entries":[
+		{"account_id":%q,"amount":{"amount":%d,"currency":"COP"}},
+		{"account_id":%q,"amount":{"amount":%d,"currency":"COP"}}]}`, ids.New().String(), debit, units, credit, -units)
+	var posted struct{ ID string }
+	if status := call(t, a, http.MethodPost, "/v1/transactions", posting, &posted); status != http.StatusCreated {
+		t.Fatalf("asentar = %d", status)
+	}
+	return posted.ID
 }
 
 // buildAluna compila cmd/aluna en un directorio temporal.
@@ -83,8 +97,17 @@ func alunaCmd(t *testing.T, bin string, env []string, args ...string) *exec.Cmd 
 	return cmd
 }
 
-// runningAPI es una aluna api corriendo y el token con que se le habla.
-type runningAPI struct{ base, token string }
+// runningAPI es una aluna api corriendo, el token con que se le habla y el emisor que firma tokens de otros
+// operadores de la misma entidad.
+type runningAPI struct {
+	base, token string
+	sign        func(subject string) string
+}
+
+// as es la misma api con la sesión del operador subject.
+func (a runningAPI) as(subject string) runningAPI {
+	return runningAPI{base: a.base, token: a.sign(subject), sign: a.sign}
+}
 
 // startAPI arranca aluna api con el rol aluna_app y un emisor OIDC de prueba, espera /readyz y devuelve
 // su URL con un token de operador de una entidad nueva. El proceso muere al terminar la prueba; si falla,
@@ -96,7 +119,7 @@ func startAPI(t *testing.T, bin, dsn string) runningAPI {
 		t.Fatal(err)
 	}
 	addr := freeAddr(t)
-	issuer, token := oidcIssuer(t)
+	issuer, sign := oidcIssuer(t)
 	cmd := alunaCmd(t, bin, []string{
 		"ALUNA_HTTP_ADDR=" + addr, "ALUNA_DATABASE_URL=" + appDSN, "ALUNA_OIDC_ISSUER=" + issuer, "ALUNA_OIDC_AUDIENCE=" + audience,
 	}, "api")
@@ -113,32 +136,44 @@ func startAPI(t *testing.T, bin, dsn string) runningAPI {
 	})
 	base := "http://" + addr
 	waitReady(t, base+"/readyz")
-	return runningAPI{base: base, token: token}
+	return runningAPI{base: base, token: sign("operador-e2e"), sign: sign}
 }
 
 const audience = "aluna-api"
 
-// oidcIssuer es un emisor OIDC de prueba y un token suyo, con la vida máxima de 15 min, de un operador
-// de una entidad nueva.
-func oidcIssuer(t *testing.T) (issuer, token string) {
+// oidcIssuer es un emisor OIDC de prueba y una función que firma, con la vida máxima de 15 min, el token
+// del operador subject; todos los operadores comparten una entidad nueva.
+func oidcIssuer(t *testing.T) (issuer string, sign func(subject string) string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := &oidctest.Server{PublicKeys: []oidctest.PublicKey{{PublicKey: key.Public(), KeyID: "k1", Algorithm: oidc.RS256}}}
-	ts := httptest.NewServer(s)
-	t.Cleanup(ts.Close)
-	s.SetIssuer(ts.URL)
-	now := time.Now()
-	claims, err := json.Marshal(map[string]any{
-		"iss": ts.URL, "aud": audience, "sub": "operador-e2e", "iat": now.Unix(), "exp": now.Add(15 * time.Minute).Unix(),
-		"legal_entity_id": ids.New().String(), "roles": []string{"operator"},
-	})
-	if err != nil {
-		t.Fatal(err)
+	ts := serveIssuer(t, s)
+	entity := ids.New().String()
+	return ts.URL, func(subject string) string {
+		now := time.Now()
+		claims, err := json.Marshal(map[string]any{
+			"iss": ts.URL, "aud": audience, "sub": subject, "iat": now.Unix(), "exp": now.Add(15 * time.Minute).Unix(),
+			"legal_entity_id": entity, "roles": []string{"operator"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return oidctest.SignIDToken(key, "k1", oidc.RS256, string(claims))
 	}
-	return ts.URL, oidctest.SignIDToken(key, "k1", oidc.RS256, string(claims))
+}
+
+// serveIssuer sirve s con su URL como emisor. La URL se fija antes de arrancar el servidor: después, los
+// requests la leerían desde otra goroutine mientras se escribe.
+func serveIssuer(t *testing.T, s *oidctest.Server) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(s)
+	s.SetIssuer("http://" + ts.Listener.Addr().String())
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts
 }
 
 // waitReady sondea url hasta que responde 200; mientras el proceso arranca, la conexión falla.

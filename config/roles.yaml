@@ -20,11 +20,12 @@ operator:
     - ledger.balances.read
     - ledger.transactions.post
     - ledger.transactions.read
+    - ledger.transactions.reverse
     - ledger.holds.place
     - ledger.holds.capture
     - ledger.holds.release
 
-# Finanzas: consulta, ajustes contables y decisión de solicitudes.
+# Finanzas: consulta, ajustes contables, reversas y decisión de solicitudes.
 finance:
   all:
     - approvals.read
@@ -33,6 +34,7 @@ finance:
     - ledger.balances.read
     - ledger.transactions.post
     - ledger.transactions.read
+    - ledger.transactions.reverse
 
 # Cumplimiento: consulta y decisión de solicitudes.
 compliance:

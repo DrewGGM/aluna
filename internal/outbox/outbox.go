@@ -120,9 +120,13 @@ type publishWorker struct {
 
 // Work delivers the event to each consumer subscribed to its type, each in its own transaction, and marks
 // it published. A failing consumer does not stop the others: the job is retried and those that already
-// processed it skip it.
+// processed it skip it. An event that no longer exists was published and purged (the purge is the only
+// delete, and it takes only published events): there is nothing left to do.
 func (w *publishWorker) Work(ctx context.Context, job *river.Job[publishArgs]) error {
 	e, err := w.o.load(ctx, job.Args.EventID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}

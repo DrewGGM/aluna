@@ -382,6 +382,25 @@ func TestPurgeDeletesOnlyPublishedEvents(t *testing.T) {
 	}
 }
 
+// TestAJobOfAPurgedEventIsDone: an event is only deleted by the purge, which only takes published ones, so
+// a publication job that no longer finds its event (published and purged before the job ran again) has
+// nothing left to do and does not fail.
+func TestAJobOfAPurgedEventIsDone(t *testing.T) {
+	o := newOutbox(t, newRecorder())
+	e := event()
+	emit(t, o, e)
+	if err := publish(t, o, e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.Purge(t.Context(), time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := publish(t, o, e.ID); err != nil {
+		t.Fatalf("publish a purged event = %v, want nothing to do", err)
+	}
+}
+
 // TestPurgeDeletesMoreThanOneBatch: with more old published events than one batch, the purge keeps going
 // until it deletes them all.
 func TestPurgeDeletesMoreThanOneBatch(t *testing.T) {

@@ -54,10 +54,16 @@ type world struct {
 
 func newWorld(t *testing.T) world {
 	t.Helper()
+	return newWorldOn(t, "2026-03-02")
+}
+
+// newWorldOn is a world whose business date is day.
+func newWorldOn(t *testing.T, day string) world {
+	t.Helper()
 	w := world{entity: ids.New(), events: &recorder{}}
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
-			VALUES ($1, 'Entity', '2026-03-02', 'COP')`, w.entity)
+			VALUES ($1, 'Entity', $2, 'COP')`, w.entity, day)
 		return err
 	})
 	w.ledger, w.parties, w.products = ledger.New(calendar.New(), w.events), party.New(w.events), products.New(w.events)
@@ -99,13 +105,26 @@ func (w world) party(t *testing.T, kyc party.KYCStatus) ids.ID {
 // if publish, publishes it.
 func (w world) product(t *testing.T, file string, publish bool) (products.Product, products.Version) {
 	t.Helper()
+	return w.productOf(t, fixture(t, file), publish)
+}
+
+// fixture is the definition of a products testdata file.
+func fixture(t *testing.T, file string) []byte {
+	t.Helper()
 	definition, err := os.ReadFile(filepath.Join("..", "products", "internal", "domain", "testdata", file)) //nolint:gosec // products' test fixtures
 	if err != nil {
 		t.Fatal(err)
 	}
+	return definition
+}
+
+// productOf is product with definition.
+func (w world) productOf(t *testing.T, definition []byte, publish bool) (products.Product, products.Version) {
+	t.Helper()
 	var p products.Product
 	var v products.Version
 	inTx(t, func(tx postgres.Tx) error {
+		var err error
 		if p, err = w.products.CreateProduct(t.Context(), tx, w.entity, "p"+strings.ReplaceAll(ids.New().String(), "-", ""), "Product"); err != nil {
 			return err
 		}
@@ -373,7 +392,7 @@ func TestTheDatabaseGuardsTheAccounts(t *testing.T) {
 	if err := w.change(t, closed.ID, deposits.Closed); err != nil {
 		t.Fatal(err)
 	}
-	cases := []struct{ name, sql, message string }{
+	expectProhibited(t, []prohibited{
 		{"delete", `DELETE FROM deposits.accounts WHERE id = '` + open.ID.String() + `'`, "never deleted"},
 		{"change the party", `UPDATE deposits.accounts SET party_id = gen_random_uuid() WHERE id = '` + open.ID.String() + `'`, "only the status"},
 		{"change the product version", `UPDATE deposits.accounts SET product_version_id = gen_random_uuid() WHERE id = '` + open.ID.String() + `'`, "only the status"},
@@ -384,7 +403,16 @@ func TestTheDatabaseGuardsTheAccounts(t *testing.T) {
 		{"reopen", `UPDATE deposits.accounts SET status = 'active' WHERE id = '` + closed.ID.String() + `'`, "is closed"},
 		{"erase the history", `DELETE FROM deposits.status_changes WHERE account_id = '` + closed.ID.String() + `'`, "never updated, deleted or truncated"},
 		{"rewrite the history", `UPDATE deposits.status_changes SET actor = 'other' WHERE account_id = '` + closed.ID.String() + `'`, "never updated, deleted or truncated"},
-	}
+	})
+}
+
+// prohibited is a statement the database must reject, even from the tables' owner, with its message.
+type prohibited struct{ name, sql, message string }
+
+// expectProhibited runs each statement as the tables' owner, under a savepoint, and checks that it fails with
+// prohibited_sql_statement_attempted and its message.
+func expectProhibited(t *testing.T, cases []prohibited) {
+	t.Helper()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var err error

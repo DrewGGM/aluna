@@ -169,12 +169,15 @@ var problems = []struct {
 	{products.ErrMarketParameterOverlap, conflict("market_parameter_overlap", "Another value of the parameter holds in that period")},
 	{products.ErrNoMarketParameter, Problem{Status: http.StatusNotFound, Code: "no_market_parameter", Title: "No value of the parameter holds on that day"}},
 	{products.ErrNoPublishedVersion, conflict("no_published_version", "The product has no published version")},
-	// deposits; deposits.ErrProductAccountMissing has no problem on purpose: a misconfigured product is a 500,
-	// which is not stored with the Idempotency-Key, so the request can be retried once the account exists
+	// deposits; deposits.ErrProductAccountMissing, ErrMinimumWageMissing, ErrMinimumWageTooLow and
+	// ErrSMMLVOutsideCOP have no problem on purpose: a misconfigured product or market parameter is a 500, which
+	// is not stored with the Idempotency-Key. A missing account or wage can be fixed and the request retried; a
+	// version with limits in SMMLV outside COP cannot change, so its accounts need another version
 	{deposits.ErrAccountNotFound, notFound},
 	{deposits.ErrAccountNotActive, conflict("account_not_active", "Only an active account moves money")},
 	{deposits.ErrKYCNotSatisfied, unprocessable("kyc_not_satisfied", "The party's KYC status does not allow the product")},
 	{deposits.ErrInvalidMovement, unprocessable("invalid_movement", "The amount must be positive and the accounts different")},
+	{deposits.ErrLimitExceeded, unprocessable("limit_exceeded", "The movement exceeds a limit of the product")},
 	// approvals
 	{approvals.ErrSelfApproval, Problem{
 		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "The requester cannot decide their own request",
@@ -188,8 +191,18 @@ var problems = []struct {
 func problemFor(err error) (Problem, bool) {
 	for _, m := range problems {
 		if errors.Is(err, m.err) {
-			return m.p, true
+			return withDetail(m.p, err), true
 		}
 	}
 	return Problem{}, false
+}
+
+// withDetail adds to p what the client needs to know from err and that its code alone does not say: the limit
+// a movement exceeds (FR-24).
+func withDetail(p Problem, err error) Problem {
+	var limit *deposits.LimitError
+	if errors.As(err, &limit) {
+		p.Detail = fmt.Sprintf("The movement exceeds the product's %s limit of %d minor units.", limit.Name, limit.Units)
+	}
+	return p
 }

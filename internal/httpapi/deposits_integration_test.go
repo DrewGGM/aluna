@@ -85,13 +85,40 @@ func (w depositWorld) party(t *testing.T, kyc party.KYCStatus) string {
 	return p.ID.String()
 }
 
-// savings creates a savings product (the definition of products' testdata) and, if publish, publishes it.
-func (w depositWorld) savings(t *testing.T, publish bool) string {
+// savingsDefinition is the definition of the savings product of products' testdata.
+func savingsDefinition(t *testing.T) []byte {
 	t.Helper()
 	definition, err := os.ReadFile(filepath.Join("..", "products", "internal", "domain", "testdata", "valid-savings.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	return definition
+}
+
+// savings creates a savings product and, if publish, publishes it.
+func (w depositWorld) savings(t *testing.T, publish bool) string {
+	t.Helper()
+	return w.product(t, savingsDefinition(t), publish)
+}
+
+// limitedSavings creates and publishes the savings product with limits (a JSON object) instead of its own.
+func (w depositWorld) limitedSavings(t *testing.T, limits string) string {
+	t.Helper()
+	var definition map[string]json.RawMessage
+	if err := json.Unmarshal(savingsDefinition(t), &definition); err != nil {
+		t.Fatal(err)
+	}
+	definition["limits"] = json.RawMessage(limits)
+	document, err := json.Marshal(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w.product(t, document, true)
+}
+
+// product creates a product with definition and, if publish, publishes it.
+func (w depositWorld) product(t *testing.T, definition []byte, publish bool) string {
+	t.Helper()
 	var p products.Product
 	w.do(t, func(tx postgres.Tx) error {
 		var err error
@@ -273,5 +300,20 @@ func TestARejectedMovementNamesItsAccounts(t *testing.T) {
 				t.Fatalf("response %d %s; record %+v, want the rejection with targets %v", resp.status, resp.body, got.Record, c.targets)
 			}
 		})
+	}
+}
+
+// TestALimitIsAProblemThatNamesIt (FR-24): a movement over a limit of the product is 422 limit_exceeded with
+// the limit in the detail, and moves nothing.
+func TestALimitIsAProblemThatNamesIt(t *testing.T) {
+	w := newDepositWorld(t)
+	a := w.opened(t, w.party(t, party.KYCApproved), w.limitedSavings(t, `{"per_operation": {"units": 1000}}`))
+
+	r := w.move(t, a.Id.String(), "deposits", amountBody(1001))
+
+	var p Problem
+	if err := json.Unmarshal(r.body, &p); err != nil || r.status != http.StatusUnprocessableEntity || p.Code != "limit_exceeded" ||
+		p.Detail != "The movement exceeds the product's per_operation limit of 1000 minor units." || w.natural(t, a) != 0 {
+		t.Fatalf("deposit over the limit = %d %s (%v), balance %d; want 422 limit_exceeded naming per_operation and 0", r.status, r.body, err, w.natural(t, a))
 	}
 }

@@ -1,5 +1,5 @@
-// Package postgres stores deposit accounts in deposits.accounts and their status changes in
-// deposits.status_changes.
+// Package postgres stores deposit accounts in deposits.accounts, their status changes in
+// deposits.status_changes and what they moved per day and month in deposits.counters.
 package postgres
 
 import (
@@ -72,6 +72,35 @@ func (s Store) RecordActivity(ctx context.Context, id ids.ID, on calendar.Date) 
 		return fmt.Errorf("record the activity of deposit account %s: %w", id, err)
 	}
 	return nil
+}
+
+// Debits reads the debits of account id on day on and in its month, 0 for a period without movements.
+func (s Store) Debits(ctx context.Context, id ids.ID, on calendar.Date) (daily, monthly int64, err error) {
+	day, month := periods(on)
+	err = s.q.QueryRow(ctx, `SELECT coalesce(sum(debits) FILTER (WHERE period = $2), 0), coalesce(sum(debits) FILTER (WHERE period = $3), 0)
+		FROM deposits.counters WHERE account_id = $1 AND period IN ($2, $3)`, id, day, month).Scan(&daily, &monthly)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read the counters of deposit account %s: %w", id, err)
+	}
+	return daily, monthly, nil
+}
+
+// Count adds debits and credits to the counters of account id of day on and of its month.
+func (s Store) Count(ctx context.Context, id ids.ID, on calendar.Date, debits, credits int64) error {
+	day, month := periods(on)
+	_, err := s.q.Exec(ctx, `INSERT INTO deposits.counters (account_id, period, debits, credits) VALUES ($1, $2, $4, $5), ($1, $3, $4, $5)
+		ON CONFLICT (account_id, period) DO UPDATE SET debits = counters.debits + EXCLUDED.debits, credits = counters.credits + EXCLUDED.credits`,
+		id, day, month, debits, credits)
+	if err != nil {
+		return fmt.Errorf("count a movement of deposit account %s: %w", id, err)
+	}
+	return nil
+}
+
+// periods are the counters' periods of day on: the day (2026-03-02) and its month (2026-03).
+func periods(on calendar.Date) (day, month string) {
+	t := dateOf(on)
+	return t.Format(time.DateOnly), t.Format("2006-01")
 }
 
 func scan(id ids.ID, row pgx.Row) (domain.Account, error) {

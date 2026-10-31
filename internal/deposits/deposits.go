@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
 	pg "github.com/DrewGGM/aluna/internal/deposits/internal/adapters/postgres"
@@ -32,6 +33,8 @@ type (
 	CashInput = app.CashInput
 	// TransferInput moves money between two deposit accounts of an entity.
 	TransferInput = app.TransferInput
+	// LimitError names the limit a movement exceeds.
+	LimitError = domain.LimitError
 )
 
 // Statuses of a deposit account.
@@ -61,6 +64,14 @@ var (
 	// ErrProductAccountMissing means the entity has no ledger account with the code the product names, in the
 	// account's currency.
 	ErrProductAccountMissing = app.ErrProductAccountMissing
+	// ErrLimitExceeded means a movement over a limit of the product (FR-24); the error is a *LimitError.
+	ErrLimitExceeded = domain.ErrLimitExceeded
+	// ErrMinimumWageMissing means a product with limits in SMMLV and no minimum wage in force.
+	ErrMinimumWageMissing = app.ErrMinimumWageMissing
+	// ErrSMMLVOutsideCOP means a product with a limit in SMMLV on an account that is not in COP.
+	ErrSMMLVOutsideCOP = domain.ErrSMMLVOutsideCOP
+	// ErrMinimumWageTooLow means a minimum wage that makes a limit in SMMLV less than one minor unit.
+	ErrMinimumWageTooLow = domain.ErrMinimumWageTooLow
 )
 
 // typeOpened is the event of an opened account (architecture §8).
@@ -124,24 +135,61 @@ func (s *Service) ChangeStatus(ctx context.Context, tx postgres.Tx, entity, acco
 }
 
 // Deposit posts, within tx, cash into an active account of the entity from its product's cash account and
-// returns the ledger transaction: ErrAccountNotFound if the entity has no such account, ErrAccountNotActive
-// if it is not active, ErrInvalidMovement if the amount is not positive, ledger.ErrCurrencyMismatch if it is
-// not in the account's currency, ledger.ErrDuplicateExternalRef if in.ExternalRef was already posted, and
-// ErrProductAccountMissing if the entity lacks the cash account its product names.
+// returns the ledger transaction. A rejection leaves nothing in tx: ErrAccountNotFound if the entity has no
+// such account, ErrAccountNotActive if it is not active, ErrInvalidMovement if the amount is not positive,
+// ledger.ErrCurrencyMismatch if it is not in the account's currency, ErrLimitExceeded (a *LimitError) if it
+// exceeds a limit of the product (FR-24), ledger.ErrDuplicateExternalRef if in.ExternalRef was already posted,
+// ErrProductAccountMissing if the entity lacks the cash account its product names, and ErrMinimumWageMissing,
+// ErrMinimumWageTooLow or ErrSMMLVOutsideCOP if its limits in SMMLV cannot be converted (the minimum wage is
+// not in force or is wrong, or the account is not in COP).
 func (s *Service) Deposit(ctx context.Context, tx postgres.Tx, in CashInput) (ledger.Transaction, error) {
-	return app.Deposit(ctx, s.movements(tx), in)
+	m := s.movements(tx)
+	return atomically(ctx, tx, func() (ledger.Transaction, error) { return app.Deposit(ctx, m, m, in) })
 }
 
 // Withdraw posts, within tx, cash out of an active account of the entity to its product's cash account, as
 // Deposit; without funds it is ledger.ErrInsufficientFunds.
 func (s *Service) Withdraw(ctx context.Context, tx postgres.Tx, in CashInput) (ledger.Transaction, error) {
-	return app.Withdraw(ctx, s.movements(tx), in)
+	m := s.movements(tx)
+	return atomically(ctx, tx, func() (ledger.Transaction, error) { return app.Withdraw(ctx, m, m, in) })
 }
 
-// Transfer moves, within tx, money between two active accounts of the entity, as Withdraw; a transfer to
-// the same account is ErrInvalidMovement.
+// Transfer moves, within tx, money between two active accounts of the entity, as Withdraw, within the limits
+// of both; a transfer to the same account is ErrInvalidMovement.
 func (s *Service) Transfer(ctx context.Context, tx postgres.Tx, in TransferInput) (ledger.Transaction, error) {
-	return app.Transfer(ctx, s.movements(tx), in)
+	m := s.movements(tx)
+	return atomically(ctx, tx, func() (ledger.Transaction, error) { return app.Transfer(ctx, m, m, in) })
+}
+
+// undoTimeout bounds undoing a failed movement, which runs even if the request was canceled.
+const undoTimeout = 5 * time.Second
+
+// atomically runs move under a savepoint of tx and undoes it if move fails: a rejected movement leaves nothing
+// in tx, as a rejected ledger posting does, although its limits are checked after posting.
+func atomically(ctx context.Context, tx postgres.Tx, move func() (ledger.Transaction, error)) (ledger.Transaction, error) {
+	if _, err := tx.Exec(ctx, "SAVEPOINT deposit_movement"); err != nil {
+		return ledger.Transaction{}, fmt.Errorf("movement savepoint: %w", err)
+	}
+	posted, err := move()
+	if err != nil {
+		return ledger.Transaction{}, undo(ctx, tx, err)
+	}
+	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT deposit_movement"); err != nil {
+		return ledger.Transaction{}, fmt.Errorf("release the movement savepoint: %w", err)
+	}
+	return posted, nil
+}
+
+// undo rolls tx back to the movement's savepoint, which failed with err, and releases it, so many rejected
+// movements in one transaction do not pile up savepoints. If it cannot, it returns that error and not err:
+// the movement may still be in tx, so it must not pass for a clean rejection.
+func undo(ctx context.Context, tx postgres.Tx, err error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
+	defer cancel()
+	if _, undoErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT deposit_movement; RELEASE SAVEPOINT deposit_movement"); undoErr != nil {
+		return fmt.Errorf("undo the movement that failed with %v: %w", err, undoErr) //nolint:errorlint // err must not match: the movement may not be undone
+	}
+	return err
 }
 
 // Account returns deposit account id of the entity, or ErrAccountNotFound. q can be the pool or a Tx.
@@ -197,20 +245,35 @@ func (c statusChanges) KYCStatus(ctx context.Context, entity, partyID ids.ID) (p
 }
 
 func (s *Service) movements(tx postgres.Tx) movements {
-	return movements{Store: pg.NewStore(tx), s: s, tx: tx}
+	return movements{Store: pg.NewStore(tx), s: s, tx: tx, versions: map[ids.ID]products.Version{}}
 }
 
-// movements is app.Movements over tx; the store gives LockAccount and RecordActivity.
+// movements is app.Movements and app.Limiting over tx, for one movement; the store gives LockAccount,
+// RecordActivity and Count. It reads each product version once: the cash account and the limits come from
+// the same one.
 type movements struct {
 	pg.Store
-	s  *Service
-	tx postgres.Tx
+	s        *Service
+	tx       postgres.Tx
+	versions map[ids.ID]products.Version
+}
+
+func (m movements) version(ctx context.Context, id ids.ID) (products.Version, error) {
+	if v, ok := m.versions[id]; ok {
+		return v, nil
+	}
+	v, err := m.s.products.Version(ctx, m.tx, id)
+	if err != nil {
+		return products.Version{}, err
+	}
+	m.versions[id] = v
+	return v, nil
 }
 
 // CashAccount reads the product and the ledger in the adapter, which keeps the port at five methods: the
 // cash account of the product of versionID, of the entity and in currency c.
 func (m movements) CashAccount(ctx context.Context, entity, versionID ids.ID, c money.Currency) (ids.ID, error) {
-	v, err := m.s.products.Version(ctx, m.tx, versionID)
+	v, err := m.version(ctx, versionID)
 	if err != nil {
 		return ids.ID{}, err
 	}
@@ -234,4 +297,43 @@ func (m movements) BusinessDate(ctx context.Context, entity ids.ID) (calendar.Da
 
 func (m movements) Post(ctx context.Context, in ledger.PostInput) (ledger.Transaction, error) {
 	return m.s.ledger.Post(ctx, m.tx, in)
+}
+
+// Limits maps the limits of the product's definition to the deposits domain, which does not import products.
+func (m movements) Limits(ctx context.Context, versionID ids.ID) (domain.Limits, error) {
+	v, err := m.version(ctx, versionID)
+	if err != nil {
+		return domain.Limits{}, err
+	}
+	l := v.Definition.Limits
+	return domain.Limits{
+		PerOperation:  domain.Limit{Units: l.PerOperation.Units, SMMLV: l.PerOperation.SMMLV},
+		DailyDebits:   domain.Limit{Units: l.DailyDebits.Units, SMMLV: l.DailyDebits.SMMLV},
+		MonthlyDebits: domain.Limit{Units: l.MonthlyDebits.Units, SMMLV: l.MonthlyDebits.SMMLV},
+		MaxBalance:    domain.Limit{Units: l.MaxBalance.Units, SMMLV: l.MaxBalance.SMMLV},
+	}, nil
+}
+
+// SMMLV is the minimum wage in force on day on; without one it is ErrMinimumWageMissing, which has no problem
+// (a 500 the client can retry once it is loaded), and not products.ErrNoMarketParameter, which is a 404.
+func (m movements) SMMLV(ctx context.Context, on calendar.Date) (money.Precise, error) {
+	wage, err := m.s.products.MarketParameter(ctx, m.tx, products.SMMLV, "", on)
+	if errors.Is(err, products.ErrNoMarketParameter) {
+		return money.Precise{}, fmt.Errorf("%w: %d-%02d-%02d", ErrMinimumWageMissing, on.Year, on.Month, on.Day)
+	}
+	return wage, err
+}
+
+// Used combines the account's counters with its ledger balance: what it debited on day on and in its month,
+// and what it holds (the natural balance of its liability ledger account).
+func (m movements) Used(ctx context.Context, a domain.Account, on calendar.Date) (domain.Usage, error) {
+	daily, monthly, err := m.Debits(ctx, a.ID, on)
+	if err != nil {
+		return domain.Usage{}, err
+	}
+	b, err := m.s.ledger.Balance(ctx, m.tx, a.LedgerAccountID)
+	if err != nil {
+		return domain.Usage{}, err
+	}
+	return domain.Usage{DailyDebits: daily, MonthlyDebits: monthly, Balance: ledger.NaturalBalance(ledger.KindLiability, b.Posted)}, nil
 }

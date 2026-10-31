@@ -585,7 +585,8 @@ paths:
       summary: Deposit cash into an account
       description: >-
         Posts the amount from the product's cash account into the account, on the entity's business date
-        (FR-23). Only an `active` account moves money (409 `account_not_active`). Idempotent by
+        (FR-23). Only an `active` account moves money (409 `account_not_active`), within the limits of its
+        product (FR-24: 422 `limit_exceeded`, with the limit in `detail`; nothing is credited in part). Idempotent by
         `Idempotency-Key`; once the key expires (7 days), the same key is 409 `duplicate_external_ref` and
         moves nothing.
       x-aluna-permission: deposits.deposits.post
@@ -616,7 +617,8 @@ paths:
       description: >-
         Posts the amount from the account to the product's cash account, like a deposit (an `active` account,
         the business date); without funds it is
-        422 `insufficient_funds`. Idempotent by `Idempotency-Key`, like a deposit.
+        422 `insufficient_funds`, and over a limit of its product it is 422 `limit_exceeded` (with the limit in
+        `detail`). Idempotent by `Idempotency-Key`, like a deposit.
       x-aluna-permission: deposits.withdrawals.post
       parameters:
         - $ref: "#/components/parameters/ID"
@@ -644,7 +646,8 @@ paths:
       summary: Transfer between two deposit accounts
       description: >-
         Moves the amount between two `active` deposit accounts of the entity (FR-23, US-5), on its business
-        date: 409 `account_not_active` if either is not, 422 `insufficient_funds` without funds and 422
+        date: 409 `account_not_active` if either is not, 422 `insufficient_funds` without funds, 422
+        `limit_exceeded` over a limit of the origin (a debit) or of the destination (a credit), and 422
         `invalid_movement` to the same account. Idempotent by `Idempotency-Key`, like a deposit.
       x-aluna-permission: deposits.transfers.post
       parameters:

@@ -28,7 +28,7 @@ func (s *Service) Accrue(ctx context.Context, uow *postgres.UnitOfWork, batch in
 	var entities []ids.ID
 	if err := uow.Do(ctx, func(tx postgres.Tx) error {
 		var err error
-		entities, err = pg.NewStore(tx).EntitiesToAccrue(ctx)
+		entities, err = pg.NewStore(tx).OpenEntities(ctx)
 		return err
 	}); err != nil {
 		return 0, err
@@ -64,7 +64,7 @@ func (s *Service) accrueEntity(ctx context.Context, uow *postgres.UnitOfWork, en
 		n, err := s.accrueDay(ctx, uow, entity, day, batch)
 		accrued += n
 		if err != nil {
-			return accrued, fmt.Errorf("accrue %s: %w", time.Date(day.Year, day.Month, day.Day, 0, 0, 0, 0, time.UTC).Format(time.DateOnly), err)
+			return accrued, fmt.Errorf("accrue %s: %w", isoDate(day), err)
 		}
 	}
 	return accrued, nil
@@ -93,6 +93,11 @@ func (s *Service) accrueDay(ctx context.Context, uow *postgres.UnitOfWork, entit
 			return accrued, nil
 		}
 	}
+}
+
+// isoDate is d as YYYY-MM-DD, as the events and the errors write a date.
+func isoDate(d calendar.Date) string {
+	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC).Format(time.DateOnly)
 }
 
 // accruals is app.Accruals and app.Capitalizing over tx; the store gives Due and InsertAccruals.
@@ -140,7 +145,7 @@ func (a accruals) EmitCapitalized(ctx context.Context, entity ids.ID, e app.Capi
 		Type: typeCapitalized, Subject: "deposit-accounts/" + e.AccountID.String(), LegalEntityID: entity, SchemaVersion: 1,
 		Data: capitalizedPayload{
 			AccountID: e.AccountID, Period: e.Period, TransactionID: e.TransactionID,
-			ValueDate: time.Date(e.ValueDate.Year, e.ValueDate.Month, e.ValueDate.Day, 0, 0, 0, 0, time.UTC).Format(time.DateOnly),
+			ValueDate: isoDate(e.ValueDate),
 			Amount:    e.Amount.Units(), Currency: e.Amount.Currency().Code(),
 		},
 	})

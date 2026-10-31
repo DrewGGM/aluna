@@ -179,7 +179,7 @@ func TestTheWorkerRunsEveryJob(t *testing.T) {
 
 	waitFor(t, startWorker(t, deps),
 		"ledger.holds.expire", "ledger.balances.aggregate", "idempotency.purge", "outbox.purge", "outbox.publish", "audit.seal",
-		"deposits.interest.accrue")
+		"deposits.interest.accrue", "deposits.accounts.mark_dormant")
 
 	var block *int64
 	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil || block == nil {

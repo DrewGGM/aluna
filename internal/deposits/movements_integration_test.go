@@ -16,6 +16,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/products"
 )
 
 // vault creates, in COP, the internal accounts the products of the testdata post against: the cash account
@@ -59,9 +60,9 @@ func (w world) active(t *testing.T) deposits.Account {
 	return a
 }
 
-// openWith opens an active account of the savings product with the given fields of its definition replaced
-// (each a JSON value).
-func (w world) openWith(t *testing.T, fields map[string]string) deposits.Account {
+// productWith publishes a savings product with the given fields of its definition replaced (each a JSON
+// value).
+func (w world) productWith(t *testing.T, fields map[string]string) products.Product {
 	t.Helper()
 	var definition map[string]json.RawMessage
 	if err := json.Unmarshal(fixture(t, "valid-savings.json"), &definition); err != nil {
@@ -75,11 +76,23 @@ func (w world) openWith(t *testing.T, fields map[string]string) deposits.Account
 		t.Fatal(err)
 	}
 	p, _ := w.productOf(t, document, true)
+	return p
+}
+
+// openOf opens an active account of product p for a new party with KYC approved.
+func (w world) openOf(t *testing.T, p products.Product) deposits.Account {
+	t.Helper()
 	a, err := w.open(t, w.party(t, party.KYCApproved), p.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return a
+}
+
+// openWith opens an active account of the savings product with the given fields of its definition replaced.
+func (w world) openWith(t *testing.T, fields map[string]string) deposits.Account {
+	t.Helper()
+	return w.openOf(t, w.productWith(t, fields))
 }
 
 // cashIn is a movement of units of c on account id, with a new reference.

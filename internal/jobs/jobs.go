@@ -44,6 +44,14 @@ const (
 	accrualTimeout = 30 * time.Minute
 )
 
+// The dormancy (FR-27) also locks accounts batch by batch, for less time per batch: each account only changes
+// its status and emits. Its first run after going live, or after importing a portfolio, marks every account already past its
+// days, which can take longer than River's default minute.
+const (
+	dormancyBatch   = 50
+	dormancyTimeout = 30 * time.Minute
+)
+
 // Sealing (ADR-0012) closes blocks of at most auditBlockSize records, sealRounds per run so it finishes
 // before the job's time limit; whatever is left goes to the next run.
 const (
@@ -112,6 +120,10 @@ func Register(w *river.Workers, deps Deps) {
 		_, err := deps.Deposits.Accrue(ctx, deps.UnitOfWork, accrualBatch)
 		return err
 	}})
+	river.AddWorker(w, &task[markDormant]{timeout: dormancyTimeout, run: func(ctx context.Context) error {
+		_, err := deps.Deposits.MarkDormant(ctx, deps.UnitOfWork, dormancyBatch)
+		return err
+	}})
 	deps.Outbox.AddWorkers(w)
 }
 
@@ -126,6 +138,7 @@ func Periodic() []*river.PeriodicJob {
 		every(24*time.Hour, purgeOutbox{}),
 		every(time.Minute, sealAudit{}),
 		every(5*time.Minute, accrueInterest{}),
+		every(time.Hour, markDormant{}),
 	}
 }
 
@@ -181,3 +194,10 @@ type accrueInterest struct{}
 
 func (accrueInterest) Kind() string                 { return "deposits.interest.accrue" }
 func (accrueInterest) InsertOpts() river.InsertOpts { return insertOpts(QueueInterest) }
+
+// markDormant marks dormant the inactive accounts (FR-27). Dormancy counts days back from the business date,
+// which changes once a day; running it every hour only shortens the wait after a rollover.
+type markDormant struct{}
+
+func (markDormant) Kind() string                 { return "deposits.accounts.mark_dormant" }
+func (markDormant) InsertOpts() river.InsertOpts { return insertOpts(river.QueueDefault) }

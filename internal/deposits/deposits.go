@@ -243,6 +243,10 @@ func (c statusChanges) Balance(ctx context.Context, ledgerAccountID ids.ID) (led
 	return c.s.ledger.Balance(ctx, c.tx, ledgerAccountID)
 }
 
+func (c statusChanges) BusinessDate(ctx context.Context, entity ids.ID) (calendar.Date, error) {
+	return c.s.calendar.BusinessDate(ctx, c.tx, entity)
+}
+
 func (c statusChanges) KYCStatus(ctx context.Context, entity, partyID ids.ID) (party.KYCStatus, error) {
 	return c.s.kycStatus(ctx, c.tx, entity, partyID)
 }

@@ -87,12 +87,16 @@ type StatusChanges interface {
 	LockAccount(ctx context.Context, entity, id ids.ID) (domain.Account, error)
 	Balance(ctx context.Context, ledgerAccountID ids.ID) (ledger.Balance, error)
 	KYCStatus(ctx context.Context, entity, partyID ids.ID) (party.KYCStatus, error)
+	BusinessDate(ctx context.Context, entity ids.ID) (calendar.Date, error)
+	// SetStatus moves account a to status to, with a's last customer activity, and records the change with
+	// its actor.
 	SetStatus(ctx context.Context, a domain.Account, to domain.Status, actor string) error
 }
 
 // ChangeStatus moves account id of the entity to status to, recording actor as who did it, if the diagram
 // allows it (else domain.ErrInvalidTransition). Activating a pending account needs its party's KYC
-// approved (else ErrKYCNotSatisfied); closing it needs no pending holds and a posted balance of 0.
+// approved (else ErrKYCNotSatisfied); closing it needs no pending holds and a posted balance of 0. Moving it
+// to active records the business date as its last customer activity.
 //
 // The close reads the ledger balance under the account's lock, not the balance's: it holds only if every
 // movement of the account's money (postings, holds, captures) first locks the account the same way, checks
@@ -103,6 +107,22 @@ func ChangeStatus(ctx context.Context, s StatusChanges, entity, id ids.ID, to do
 	if err != nil {
 		return err
 	}
+	if err := checkChange(ctx, s, a, to); err != nil {
+		return err
+	}
+	if to == domain.Active {
+		// the inactivity restarts: otherwise the dormancy job would take an account just reactivated, or
+		// unfrozen after a long freeze, back to dormant before its customer could move it (FR-27)
+		if a.LastCustomerActivityOn, err = s.BusinessDate(ctx, a.LegalEntityID); err != nil {
+			return err
+		}
+	}
+	return s.SetStatus(ctx, a, to, actor)
+}
+
+// checkChange reports whether account a can go to status to: the diagram, an approved KYC to activate a
+// pending account, and no balance or pending holds to close.
+func checkChange(ctx context.Context, s StatusChanges, a domain.Account, to domain.Status) error {
 	if err := domain.CheckTransition(a.Status, to); err != nil {
 		return err
 	}
@@ -120,9 +140,7 @@ func ChangeStatus(ctx context.Context, s StatusChanges, entity, id ids.ID, to do
 		if err != nil {
 			return err
 		}
-		if err := domain.CheckClosable(b); err != nil {
-			return err
-		}
+		return domain.CheckClosable(b)
 	}
-	return s.SetStatus(ctx, a, to, actor)
+	return nil
 }

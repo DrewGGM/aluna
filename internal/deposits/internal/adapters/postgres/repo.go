@@ -54,9 +54,11 @@ func (s Store) LockAccount(ctx context.Context, entity, id ids.ID) (domain.Accou
 	return scan(id, s.q.QueryRow(ctx, selectAccount+` WHERE id = $1 AND legal_entity_id = $2 FOR UPDATE`, id, entity))
 }
 
-// SetStatus moves account a to status to and records the change with its actor.
+// SetStatus moves account a to status to, with a's last customer activity, and records the change with its
+// actor.
 func (s Store) SetStatus(ctx context.Context, a domain.Account, to domain.Status, actor string) error {
-	if _, err := s.q.Exec(ctx, `UPDATE deposits.accounts SET status = $2 WHERE id = $1`, a.ID, to); err != nil {
+	if _, err := s.q.Exec(ctx, `UPDATE deposits.accounts SET status = $2, last_customer_activity_on = $3 WHERE id = $1`,
+		a.ID, to, dateOf(a.LastCustomerActivityOn)); err != nil {
 		return fmt.Errorf("move deposit account %s to %s: %w", a.ID, to, err)
 	}
 	_, err := s.q.Exec(ctx, `INSERT INTO deposits.status_changes (account_id, from_status, to_status, actor) VALUES ($1, $2, $3, $4)`,
@@ -98,8 +100,9 @@ func (s Store) Count(ctx context.Context, id ids.ID, on calendar.Date, debits, c
 	return nil
 }
 
-// EntitiesToAccrue are the legal entities with deposit accounts that are not closed, in id order.
-func (s Store) EntitiesToAccrue(ctx context.Context) ([]ids.ID, error) {
+// OpenEntities are the legal entities with deposit accounts that are not closed, in id order: those the
+// jobs of the accounts (accrual, dormancy) go through.
+func (s Store) OpenEntities(ctx context.Context) ([]ids.ID, error) {
 	rows, err := s.q.Query(ctx, `SELECT DISTINCT legal_entity_id FROM deposits.accounts WHERE status <> 'closed' ORDER BY legal_entity_id`)
 	if err != nil {
 		return nil, fmt.Errorf("read the entities with deposit accounts: %w", err)
@@ -182,6 +185,37 @@ func (s Store) InsertAccruals(ctx context.Context, day calendar.Date, rows []app
 		return fmt.Errorf("store the accruals of %s: %w", dateOf(day).Format(time.DateOnly), err)
 	}
 	return nil
+}
+
+// VersionsInUse are the product versions of the entity's active accounts, in id order.
+func (s Store) VersionsInUse(ctx context.Context, entity ids.ID) ([]ids.ID, error) {
+	rows, err := s.q.Query(ctx, `SELECT DISTINCT product_version_id FROM deposits.accounts WHERE legal_entity_id = $1 AND status = 'active'
+		ORDER BY product_version_id`, entity)
+	if err != nil {
+		return nil, fmt.Errorf("read the product versions in use: %w", err)
+	}
+	versions, err := pgx.CollectRows(rows, pgx.RowTo[ids.ID])
+	if err != nil {
+		return nil, fmt.Errorf("read the product versions in use: %w", err)
+	}
+	return versions, nil
+}
+
+// Inactive locks, in id order after after and skipping those locked, up to batch active accounts of the entity
+// with product version versionID whose last customer activity is before before (app.Dormancy).
+func (s Store) Inactive(ctx context.Context, entity, versionID ids.ID, before calendar.Date, after ids.ID, batch int) ([]domain.Account, error) {
+	rows, err := s.q.Query(ctx, selectAccount+` WHERE legal_entity_id = $1 AND product_version_id = $2 AND status = 'active'
+			AND last_customer_activity_on < $3 AND id > $4
+		ORDER BY id LIMIT $5
+		FOR UPDATE SKIP LOCKED`, entity, versionID, dateOf(before), after, batch)
+	if err != nil {
+		return nil, fmt.Errorf("read the inactive accounts: %w", err)
+	}
+	inactive, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Account, error) { return scan(ids.ID{}, row) })
+	if err != nil {
+		return nil, fmt.Errorf("read the inactive accounts: %w", err)
+	}
+	return inactive, nil
 }
 
 // periods are the counters' periods of day on: the day (2026-03-02) and its month (2026-03).

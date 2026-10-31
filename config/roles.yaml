@@ -29,6 +29,7 @@ operator:
     - deposits.deposits.post
     - deposits.withdrawals.post
     - deposits.transfers.post
+    - pricing.quotes.create
     - ledger.accounts.create
     - ledger.accounts.read
     - ledger.balances.read

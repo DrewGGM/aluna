@@ -18,6 +18,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/party"
+	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
 )
 
@@ -178,6 +179,9 @@ var problems = []struct {
 	{deposits.ErrKYCNotSatisfied, unprocessable("kyc_not_satisfied", "The party's KYC status does not allow the product")},
 	{deposits.ErrInvalidMovement, unprocessable("invalid_movement", "The amount must be positive and the accounts different")},
 	{deposits.ErrLimitExceeded, unprocessable("limit_exceeded", "The movement exceeds a limit of the product")},
+	// pricing
+	{pricing.ErrInvalidQuote, unprocessable("invalid_quote", "The operation is not priced, or the amount is not positive or not in the account's currency")},
+	{pricing.ErrQuoteUnavailable, conflict("quote_unavailable", "The quote does not exist for this operation, or was already used or expired")},
 	// approvals
 	{approvals.ErrSelfApproval, Problem{
 		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "The requester cannot decide their own request",

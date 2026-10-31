@@ -640,6 +640,32 @@ paths:
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/quotes:
+    post:
+      operationId: createQuote
+      summary: Quote what an operation costs
+      description: >-
+        Quotes a withdrawal or a transfer from a deposit account of the entity before it is done (FR-28,
+        US-7): the fees of its product for the operation, with their exemptions decided on the account
+        (its party, its balance and the quotes it used this month), valid for 5 minutes. An amount that is
+        not positive or not in the account's currency is 422 `invalid_quote`.
+      x-aluna-permission: pricing.quotes.create
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateQuote"}
+      responses:
+        "201":
+          description: Quote
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Quote"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/transfers:
     post:
       operationId: createTransfer
@@ -1031,6 +1057,35 @@ components:
         from_account_id: {type: string, format: uuid, description: Deposit account the money leaves}
         to_account_id: {type: string, format: uuid, description: Deposit account that receives it}
         amount: {$ref: "#/components/schemas/Money", description: "Positive, in the accounts' currency"}
+    QuoteOperation:
+      type: string
+      enum: [withdrawal, transfer]
+    CreateQuote:
+      type: object
+      required: [account_id, operation, amount]
+      properties:
+        account_id: {type: string, format: uuid, description: Deposit account the operation is done on}
+        operation: {$ref: "#/components/schemas/QuoteOperation"}
+        amount: {$ref: "#/components/schemas/Money", description: "Positive, in the account's currency"}
+    QuotedFee:
+      type: object
+      required: [code, amount]
+      properties:
+        code: {type: string, description: The fee's code in the product}
+        amount: {$ref: "#/components/schemas/Money"}
+    Quote:
+      type: object
+      required: [id, account_id, operation, amount, fees, total_fees, expires_at]
+      properties:
+        id: {type: string, format: uuid}
+        account_id: {type: string, format: uuid}
+        operation: {$ref: "#/components/schemas/QuoteOperation"}
+        amount: {$ref: "#/components/schemas/Money"}
+        fees:
+          type: array
+          items: {$ref: "#/components/schemas/QuotedFee"}
+        total_fees: {$ref: "#/components/schemas/Money", description: What the fees add up to}
+        expires_at: {type: string, format: date-time}
     RequestKYCStatusChange:
       type: object
       required: [kyc_status]

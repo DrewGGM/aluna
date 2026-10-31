@@ -234,6 +234,24 @@ func (e ProductVersionStatus) Valid() bool {
 	}
 }
 
+// Defines values for QuoteOperation.
+const (
+	Transfer   QuoteOperation = "transfer"
+	Withdrawal QuoteOperation = "withdrawal"
+)
+
+// Valid indicates whether the value is a known member of the QuoteOperation enum.
+func (e QuoteOperation) Valid() bool {
+	switch e {
+	case Transfer:
+		return true
+	case Withdrawal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RiskLevel.
 const (
 	High   RiskLevel = "high"
@@ -355,6 +373,16 @@ type CreateProduct struct {
 type CreateProductVersion struct {
 	// Definition The definition, following deposit-product.v1.json.
 	Definition json.RawMessage `json:"definition"`
+}
+
+// CreateQuote defines model for CreateQuote.
+type CreateQuote struct {
+	// AccountId Deposit account the operation is done on
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// Amount Positive, in the account's currency
+	Amount    Money          `json:"amount"`
+	Operation QuoteOperation `json:"operation"`
 }
 
 // CreateTransfer defines model for CreateTransfer.
@@ -558,6 +586,30 @@ type ProductVersion struct {
 // ProductVersionStatus defines model for ProductVersionStatus.
 type ProductVersionStatus string
 
+// Quote defines model for Quote.
+type Quote struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+	Amount    Money              `json:"amount"`
+	ExpiresAt time.Time          `json:"expires_at"`
+	Fees      []QuotedFee        `json:"fees"`
+	Id        openapi_types.UUID `json:"id"`
+	Operation QuoteOperation     `json:"operation"`
+
+	// TotalFees What the fees add up to
+	TotalFees Money `json:"total_fees"`
+}
+
+// QuoteOperation defines model for QuoteOperation.
+type QuoteOperation string
+
+// QuotedFee defines model for QuotedFee.
+type QuotedFee struct {
+	Amount Money `json:"amount"`
+
+	// Code The fee's code in the product
+	Code string `json:"code"`
+}
+
 // RegisterParty defines model for RegisterParty.
 type RegisterParty struct {
 	// Consents Consent by name (for example, personal_data): lowercase letters, digits and underscores, starting with a letter, up to 64 characters.
@@ -741,6 +793,9 @@ type CreateProductJSONRequestBody = CreateProduct
 // CreateProductVersionJSONRequestBody defines body for CreateProductVersion for application/json ContentType.
 type CreateProductVersionJSONRequestBody = CreateProductVersion
 
+// CreateQuoteJSONRequestBody defines body for CreateQuote for application/json ContentType.
+type CreateQuoteJSONRequestBody = CreateQuote
+
 // PostTransactionJSONRequestBody defines body for PostTransaction for application/json ContentType.
 type PostTransactionJSONRequestBody = PostTransaction
 
@@ -818,6 +873,9 @@ type ServerInterface interface {
 	// CreateProductVersion Create a product version
 	// (POST /v1/products/{id}/versions)
 	CreateProductVersion(w http.ResponseWriter, r *http.Request, id ID, params CreateProductVersionParams)
+	// CreateQuote Quote what an operation costs
+	// (POST /v1/quotes)
+	CreateQuote(w http.ResponseWriter, r *http.Request)
 	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(w http.ResponseWriter, r *http.Request, params PostTransactionParams)
@@ -1727,6 +1785,20 @@ func (siw *ServerInterfaceWrapper) CreateProductVersion(w http.ResponseWriter, r
 	handler.ServeHTTP(w, r)
 }
 
+// CreateQuote operation middleware
+func (siw *ServerInterfaceWrapper) CreateQuote(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateQuote(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PostTransaction operation middleware
 func (siw *ServerInterfaceWrapper) PostTransaction(w http.ResponseWriter, r *http.Request) {
 
@@ -2042,6 +2114,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/deposit-accounts/{id}", wrapper.GetDepositAccount)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/deposits", wrapper.CreateDeposit)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/withdrawals", wrapper.CreateWithdrawal)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transfers", wrapper.CreateTransfer)
 
 	return m
@@ -3977,6 +4050,103 @@ func (response CreateProductVersiondefaultApplicationProblemPlusJSONResponse) Vi
 	return err
 }
 
+type CreateQuoteRequestObject struct {
+	Body *CreateQuoteJSONRequestBody
+}
+
+type CreateQuoteResponseObject interface {
+	VisitCreateQuoteResponse(w http.ResponseWriter) error
+}
+
+type CreateQuote201JSONResponse Quote
+
+func (response CreateQuote201JSONResponse) VisitCreateQuoteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuote400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateQuote400ApplicationProblemPlusJSONResponse) VisitCreateQuoteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuote404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateQuote404ApplicationProblemPlusJSONResponse) VisitCreateQuoteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuote413ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateQuote413ApplicationProblemPlusJSONResponse) VisitCreateQuoteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuote422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateQuote422ApplicationProblemPlusJSONResponse) VisitCreateQuoteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuotedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreateQuotedefaultApplicationProblemPlusJSONResponse) VisitCreateQuoteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PostTransactionRequestObject struct {
 	Params PostTransactionParams
 	Body   *PostTransactionJSONRequestBody
@@ -4437,6 +4607,9 @@ type StrictServerInterface interface {
 	// CreateProductVersion Create a product version
 	// (POST /v1/products/{id}/versions)
 	CreateProductVersion(ctx context.Context, request CreateProductVersionRequestObject) (CreateProductVersionResponseObject, error)
+	// CreateQuote Quote what an operation costs
+	// (POST /v1/quotes)
+	CreateQuote(ctx context.Context, request CreateQuoteRequestObject) (CreateQuoteResponseObject, error)
 	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(ctx context.Context, request PostTransactionRequestObject) (PostTransactionResponseObject, error)
@@ -5142,6 +5315,37 @@ func (sh *strictHandler) CreateProductVersion(w http.ResponseWriter, r *http.Req
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateProductVersionResponseObject); ok {
 		if err := validResponse.VisitCreateProductVersionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateQuote operation middleware
+func (sh *strictHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
+	var request CreateQuoteRequestObject
+
+	var body CreateQuoteJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateQuote(ctx, request.(CreateQuoteRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateQuote")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateQuoteResponseObject); ok {
+		if err := validResponse.VisitCreateQuoteResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

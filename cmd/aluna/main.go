@@ -35,6 +35,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
 	"github.com/DrewGGM/aluna/internal/telemetry"
 )
@@ -266,13 +267,15 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	ledgerSvc := ledger.New(calendarSvc, events)
 	partySvc := party.New(events)
 	productSvc := products.New(events)
+	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, events)
 	requests := approvals.New(authz.policy)
 	api := httpapi.API{
 		LedgerHandlers:   httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
 		ApprovalHandlers: httpapi.NewApprovalHandlers(requests, uow, keys, pool),
 		PartyHandlers:    httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
 		ProductHandlers:  httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
-		DepositHandlers:  httpapi.NewDepositHandlers(deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, events), uow, keys, pool),
+		DepositHandlers:  httpapi.NewDepositHandlers(depositSvc, uow, keys, pool),
+		PricingHandlers:  httpapi.NewPricingHandlers(pricing.New(productSvc), depositSvc, partySvc, ledgerSvc, uow),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)

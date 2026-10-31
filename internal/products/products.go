@@ -34,6 +34,10 @@ type (
 	MarketKind = app.MarketKind
 	// MarketParameter is the value of a market parameter in a period.
 	MarketParameter = app.MarketParameter
+	// FeeRule is a fee of a product.
+	FeeRule = domain.FeeRule
+	// RuleVars are the facts a product rule reads.
+	RuleVars = app.RuleVars
 )
 
 // Day count conventions.
@@ -174,6 +178,18 @@ func (s *Service) LoadMarketParameter(ctx context.Context, tx postgres.Tx, p Mar
 // ErrInvalidMarketParameter. q can be the pool or a Tx.
 func (s *Service) MarketParameter(ctx context.Context, q postgres.Querier, kind MarketKind, modality string, on calendar.Date) (money.Precise, error) {
 	return app.MarketValue(ctx, pg.NewStore(q), kind, modality, on)
+}
+
+// Satisfies reports whether the rule named name of version v holds for vars (ADR-0008), such as a fee
+// exemption. A rule the version does not have, or one that cannot be compiled or decided, does not hold: an
+// exemption that cannot be decided is not granted (FR-20).
+func (s *Service) Satisfies(v Version, name string, vars RuleVars) bool {
+	expr, ok := v.Definition.Rules[name]
+	if !ok {
+		return false
+	}
+	rule, err := app.CompileRule(expr)
+	return err == nil && rule.Eval(vars)
 }
 
 // CurrentVersion returns the published version of product productID, the one new accounts are opened with,

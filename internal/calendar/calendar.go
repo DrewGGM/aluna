@@ -63,6 +63,10 @@ func (s *Service) Rollover(ctx context.Context, tx postgres.Tx, legalEntity ids.
 	return app.Rollover(ctx, pg.NewStore(tx), legalEntity, expected)
 }
 
+// AdjustDate moves d to the business day that convention c dictates (a business day stays): a product's
+// capitalization date, for example. The holidays are Colombia's, the entities' calendar.
+func (s *Service) AdjustDate(d Date, c Convention) Date { return app.AdjustDate(d, c) }
+
 // PeriodStatus is the status of the entity's accounting period for d (FR-15). A month the close has not
 // touched is open. q can be the pool or a Tx.
 func (s *Service) PeriodStatus(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d Date) (PeriodStatus, error) {

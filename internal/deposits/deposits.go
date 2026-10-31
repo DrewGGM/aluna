@@ -74,8 +74,11 @@ var (
 	ErrMinimumWageTooLow = domain.ErrMinimumWageTooLow
 )
 
-// typeOpened is the event of an opened account (architecture §8).
-const typeOpened = "aluna.deposits.account.opened.v1"
+// Events of deposit accounts (architecture §8): an opened account and a capitalization posted.
+const (
+	typeOpened      = "aluna.deposits.account.opened.v1"
+	typeCapitalized = "aluna.deposits.interest.capitalized.v1"
+)
 
 // Events publishes deposit events; outbox.Outbox implements it.
 type Events interface {
@@ -277,16 +280,21 @@ func (m movements) CashAccount(ctx context.Context, entity, versionID ids.ID, c 
 	if err != nil {
 		return ids.ID{}, err
 	}
-	code := v.Definition.Accounts.Cash
-	a, err := m.s.ledger.AccountByCode(ctx, m.tx, entity, code)
+	return m.s.productAccount(ctx, m.tx, entity, "cash", v.Definition.Accounts.Cash, c)
+}
+
+// productAccount is the entity's ledger account with the code a product names for role (its cash, its
+// interest expense), in currency c: anything else is ErrProductAccountMissing, a misconfigured product.
+func (s *Service) productAccount(ctx context.Context, q postgres.Querier, entity ids.ID, role, code string, c money.Currency) (ids.ID, error) {
+	a, err := s.ledger.AccountByCode(ctx, q, entity, code)
 	if errors.Is(err, ledger.ErrAccountNotFound) {
-		return ids.ID{}, fmt.Errorf("%w: cash account %q of product version %s", ErrProductAccountMissing, code, versionID)
+		return ids.ID{}, fmt.Errorf("%w: %s account %q", ErrProductAccountMissing, role, code)
 	}
 	if err != nil {
 		return ids.ID{}, err
 	}
 	if a.Currency != c {
-		return ids.ID{}, fmt.Errorf("%w: cash account %q is in %s, not %s", ErrProductAccountMissing, code, a.Currency.Code(), c.Code())
+		return ids.ID{}, fmt.Errorf("%w: %s account %q is in %s, not %s", ErrProductAccountMissing, role, code, a.Currency.Code(), c.Code())
 	}
 	return a.ID, nil
 }

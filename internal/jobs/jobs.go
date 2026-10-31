@@ -33,10 +33,14 @@ const (
 )
 
 // The accrual (FR-25) locks accounts batch by batch, so a batch also bounds how long a movement on one of
-// them waits. A run catches up every closed day, which after a long stop can take longer than River's
-// default limit of a minute; its batches commit as they go, so a run cut short only leaves work for the next.
+// them waits, and it must stay under the pool's lock_timeout (2 s) or that movement fails: on a
+// capitalization day (FR-26) each account also posts and emits, and 50 accounts take about a quarter of a
+// second.
+//
+// A run catches up every closed day, which after a long stop can take longer than River's default limit of
+// a minute; its batches commit as they go, so a run cut short only leaves work for the next.
 const (
-	accrualBatch   = 500
+	accrualBatch   = 50
 	accrualTimeout = 30 * time.Minute
 )
 

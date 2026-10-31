@@ -133,26 +133,30 @@ func (s Store) DaysToAccrue(ctx context.Context, entity ids.ID, today calendar.D
 	return days, nil
 }
 
-// Due locks, in id order and skipping those locked, up to batch accounts of the entity that are not closed
-// and are due to accrue day, with their state at the end of the day before (app.Accruals).
-func (s Store) Due(ctx context.Context, entity ids.ID, day calendar.Date, batch int) ([]app.DueAccount, error) {
-	rows, err := s.q.Query(ctx, `SELECT a.id, a.ledger_account_id, a.product_version_id, coalesce(p.accrued_precise, 0)::text, coalesce(p.posted_units, 0)
+// Due locks, in id order after after and skipping those locked, up to batch accounts of the entity that are
+// not closed and are due to accrue day, with their state at the end of the day before (app.Accruals).
+func (s Store) Due(ctx context.Context, entity ids.ID, day calendar.Date, after ids.ID, batch int) ([]app.DueAccount, error) {
+	rows, err := s.q.Query(ctx, `SELECT a.id, a.ledger_account_id, a.product_version_id, a.currency, coalesce(p.accrued_precise, 0)::text,
+			coalesce(p.posted_units, 0)
 		FROM deposits.accounts a
 		LEFT JOIN deposits.accruals p ON p.account_id = a.id AND p.value_date = $2::date - 1
-		WHERE a.legal_entity_id = $1 AND a.status <> 'closed' AND (p.account_id IS NOT NULL OR a.opened_on = $2)
+		WHERE a.legal_entity_id = $1 AND a.id > $4 AND a.status <> 'closed' AND (p.account_id IS NOT NULL OR a.opened_on = $2)
 			AND NOT EXISTS (SELECT 1 FROM deposits.accruals r WHERE r.account_id = a.id AND r.value_date = $2)
 		ORDER BY a.id LIMIT $3
-		FOR UPDATE OF a SKIP LOCKED`, entity, dateOf(day), batch)
+		FOR UPDATE OF a SKIP LOCKED`, entity, dateOf(day), batch, after)
 	if err != nil {
 		return nil, fmt.Errorf("read the accounts due to accrue %s: %w", dateOf(day).Format(time.DateOnly), err)
 	}
 	due, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (app.DueAccount, error) {
 		var a app.DueAccount
-		var accrued string
-		if err := row.Scan(&a.ID, &a.LedgerAccountID, &a.ProductVersionID, &accrued, &a.State.PostedUnits); err != nil {
+		var currency, accrued string
+		if err := row.Scan(&a.ID, &a.LedgerAccountID, &a.ProductVersionID, &currency, &accrued, &a.State.PostedUnits); err != nil {
 			return app.DueAccount{}, err
 		}
 		var err error
+		if a.Currency, err = money.CurrencyOf(currency); err != nil {
+			return app.DueAccount{}, err
+		}
 		a.State.AccruedPrecise, err = money.ParsePrecise(accrued)
 		return a, err
 	})

@@ -3,6 +3,7 @@
 package deposits_test
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -17,8 +18,8 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// vault creates the cash account the products of the testdata name (A.CASH.VAULT), in COP, which cannot go
-// below 0.
+// vault creates, in COP, the internal accounts the products of the testdata post against: the cash account
+// (A.CASH.VAULT), which cannot go below 0 and whose id it returns, and their interest expense accounts.
 func (w world) vault(t *testing.T) ids.ID {
 	t.Helper()
 	return w.vaultIn(t, copOf(t))
@@ -27,15 +28,24 @@ func (w world) vault(t *testing.T) ids.ID {
 // vaultIn is vault in currency c.
 func (w world) vaultIn(t *testing.T, c money.Currency) ids.ID {
 	t.Helper()
-	var a ledger.Account
+	var cash ledger.Account
 	inTx(t, func(tx postgres.Tx) error {
 		var err error
-		a, err = w.ledger.CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
+		if cash, err = w.ledger.CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
 			LegalEntityID: w.entity, Code: "A.CASH.VAULT", Kind: ledger.KindAsset, Currency: c, Mode: ledger.BalanceModeSync,
-		})
-		return err
+		}); err != nil {
+			return err
+		}
+		for _, code := range []string{"E.INTEREST.SAVINGS", "E.INTEREST.SIMPLIFIED"} {
+			if _, err := w.ledger.CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
+				LegalEntityID: w.entity, Code: code, Kind: ledger.KindExpense, Currency: c, Mode: ledger.BalanceModeSync,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
-	return a.ID
+	return cash.ID
 }
 
 // active opens an active savings account for a new party with KYC approved.
@@ -43,6 +53,29 @@ func (w world) active(t *testing.T) deposits.Account {
 	t.Helper()
 	savings, _ := w.product(t, "valid-savings.json", true)
 	a, err := w.open(t, w.party(t, party.KYCApproved), savings.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// openWith opens an active account of the savings product with the given fields of its definition replaced
+// (each a JSON value).
+func (w world) openWith(t *testing.T, fields map[string]string) deposits.Account {
+	t.Helper()
+	var definition map[string]json.RawMessage
+	if err := json.Unmarshal(fixture(t, "valid-savings.json"), &definition); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range fields {
+		definition[name] = json.RawMessage(value)
+	}
+	document, err := json.Marshal(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := w.productOf(t, document, true)
+	a, err := w.open(t, w.party(t, party.KYCApproved), p.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

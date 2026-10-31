@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/deposits/internal/domain"
@@ -272,7 +271,7 @@ func lockActive(ctx context.Context, s Movements, entity, id ids.ID) (domain.Acc
 // post posts entries on today, the entity's business date, as value date too, and records it as the last
 // activity of customer account a.
 func post(ctx context.Context, s Movements, a domain.Account, today calendar.Date, h header, entries []ledger.EntryInput) (ledger.Transaction, error) {
-	day := time.Date(today.Year, today.Month, today.Day, 0, 0, 0, 0, time.UTC)
+	day := dateTime(today)
 	posted, err := s.Post(ctx, ledger.PostInput{
 		LegalEntityID: a.LegalEntityID, Code: h.code, ValueDate: day, BusinessDate: day,
 		Source: movementSource, ExternalRef: h.externalRef, Actor: h.actor, Channel: h.channel,

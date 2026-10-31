@@ -100,13 +100,21 @@ func (w world) expected(t *testing.T, a deposits.Account, days ...dayBalance) []
 
 func march(day int) calendar.Date { return calendar.Date{Year: 2026, Month: time.March, Day: day} }
 
+// uncapitalized opens an active account of the savings product with an unadjusted capitalization date: its
+// February ends on Saturday the 28th, so no day of March up to the 30th capitalizes (with the product's
+// following convention, Monday March 2 would capitalize February).
+func (w world) uncapitalized(t *testing.T) deposits.Account {
+	t.Helper()
+	return w.openWith(t, map[string]string{"date_convention": `"unadjusted"`})
+}
+
 // TestEachClosedDayAccruesOnItsClosingBalance (FR-25): after two rollovers, the account accrues the two closed
 // days, each on the posted balance at the close of its value date (a deposit of the second day does not
 // count for the first), with the domain's interest and the state carried from the previous day.
 func TestEachClosedDayAccruesOnItsClosingBalance(t *testing.T) {
 	w := newWorld(t)
 	w.vault(t)
-	a := w.active(t)
+	a := w.uncapitalized(t)
 	steps(t,
 		func() error { return w.deposit(t, a.ID, 10000000) },
 		func() error { w.rollover(t, march(2)); return w.deposit(t, a.ID, 5000000) },
@@ -225,7 +233,7 @@ func TestADayWaitsForTheDayBefore(t *testing.T) {
 		var got []app.DueAccount
 		inTx(t, func(tx postgres.Tx) error {
 			var err error
-			got, err = pg.NewStore(tx).Due(t.Context(), w.entity, day, accrualBatch)
+			got, err = pg.NewStore(tx).Due(t.Context(), w.entity, day, ids.ID{}, accrualBatch)
 			return err
 		})
 		return got
@@ -293,6 +301,27 @@ func (w world) insertAccounts(t *testing.T, partyID, versionID ids.ID, n int) []
 	return ledgerAccounts
 }
 
+// fund credits units to each of the ledger accounts from vault, in postings of 500 accounts: short
+// transactions, because in CI the server is shared with other packages and the ledger's aggregation waits for
+// the oldest transaction in progress on it.
+func (w world) fund(t *testing.T, vault ids.ID, accounts []ids.ID, units int64) {
+	t.Helper()
+	cop, today := copOf(t), time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)
+	for part := range slices.Chunk(accounts, 500) {
+		entries := []ledger.EntryInput{{AccountID: vault, Amount: money.New(units*int64(len(part)), cop)}}
+		for _, id := range part {
+			entries = append(entries, ledger.EntryInput{AccountID: id, Amount: money.New(-units, cop)})
+		}
+		inTx(t, func(tx postgres.Tx) error {
+			_, err := w.ledger.Post(t.Context(), tx, ledger.PostInput{
+				LegalEntityID: w.entity, Code: "funding", ValueDate: today, BusinessDate: today, Source: "test", ExternalRef: ids.New().String(),
+				Actor: "tester", Channel: "test", RuleVersion: "v1", Entries: entries,
+			})
+			return err
+		})
+	}
+}
+
 // TestAFailingEntityDoesNotStopTheOthers: an entity whose accrual fails (here, a product version whose stored
 // definition no longer reads) comes back as an error that names it, and the other entities still accrue.
 func TestAFailingEntityDoesNotStopTheOthers(t *testing.T) {
@@ -330,32 +359,22 @@ func TestAFailingEntityDoesNotStopTheOthers(t *testing.T) {
 }
 
 // TestTenThousandAccountsAccrueInAMinute (FR-25, TH-13): a closed day of 10,000 funded accounts accrues in less
-// than 60 s, one row each with its interest, in the batches of the worker's job (500).
+// than 60 s, one row each with its interest, in the batches of the worker's job (50, accrualBatch in
+// internal/jobs/jobs.go).
 func TestTenThousandAccountsAccrueInAMinute(t *testing.T) {
 	w := newWorld(t)
 	vault := w.vault(t)
-	sample := w.active(t)
+	sample := w.uncapitalized(t) // what is measured is the accrual, not a capitalization of every account
 	const n = 10000
-	held := w.insertAccounts(t, sample.PartyID, sample.ProductVersionID, n)
-	cop, today := copOf(t), time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)
-	entries := []ledger.EntryInput{{AccountID: vault, Amount: money.New(n*1000000, cop)}}
-	for _, id := range held {
-		entries = append(entries, ledger.EntryInput{AccountID: id, Amount: money.New(-1000000, cop)})
-	}
+	accounts := w.insertAccounts(t, sample.PartyID, sample.ProductVersionID, n)
 	if err := w.deposit(t, sample.ID, 1000000); err != nil {
 		t.Fatal(err)
 	}
-	inTx(t, func(tx postgres.Tx) error { // every account funded with 10,000 COP, so its interest is computed
-		_, err := w.ledger.Post(t.Context(), tx, ledger.PostInput{
-			LegalEntityID: w.entity, Code: "funding", ValueDate: today, BusinessDate: today, Source: "test", ExternalRef: ids.New().String(),
-			Actor: "tester", Channel: "test", RuleVersion: "v1", Entries: entries,
-		})
-		return err
-	})
+	w.fund(t, vault, accounts, 1000000) // every account funded with 10,000 COP, so its interest is computed
 	w.rollover(t, march(2))
 
 	start := time.Now()
-	w.accrueIn(t, 500) // it also accrues whatever other tests of the package's database left: count this entity's rows
+	w.accrueIn(t, 50) // the job's batch; it also accrues what other tests of the package's database left: count this entity's rows
 	took := time.Since(start)
 
 	var rows int

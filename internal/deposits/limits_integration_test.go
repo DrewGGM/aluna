@@ -3,7 +3,6 @@
 package deposits_test
 
 import (
-	"encoding/json"
 	"errors"
 	"maps"
 	"testing"
@@ -62,21 +61,7 @@ func (w world) limited(t *testing.T, limits string) deposits.Account {
 // limitedIn is limited with the product in currency.
 func (w world) limitedIn(t *testing.T, currency, limits string) deposits.Account {
 	t.Helper()
-	var definition map[string]json.RawMessage
-	if err := json.Unmarshal(fixture(t, "valid-savings.json"), &definition); err != nil {
-		t.Fatal(err)
-	}
-	definition["limits"], definition["currency"] = json.RawMessage(limits), json.RawMessage(`"`+currency+`"`)
-	document, err := json.Marshal(definition)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, _ := w.productOf(t, document, true)
-	a, err := w.open(t, w.party(t, party.KYCApproved), p.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return a
+	return w.openWith(t, map[string]string{"limits": limits, "currency": `"` + currency + `"`})
 }
 
 // moved is what an account moved in a period.

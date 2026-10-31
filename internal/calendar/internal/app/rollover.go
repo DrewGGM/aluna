@@ -55,6 +55,11 @@ func dayAfter(d domain.Date) domain.Date {
 	return domain.Date{Year: t.Year(), Month: t.Month(), Day: t.Day()}
 }
 
+// AdjustDate moves d to the business day that c dictates, on the entities' holiday calendar.
+func AdjustDate(d domain.Date, c domain.Convention) domain.Date {
+	return domain.Adjust(d, c, isColombianHoliday)
+}
+
 // isColombianHoliday is the entities' holiday calendar: all of them are Colombian for now.
 func isColombianHoliday(d domain.Date) bool {
 	return slices.Contains(domain.ColombianHolidays(d.Year), d)

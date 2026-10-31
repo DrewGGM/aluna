@@ -11,6 +11,8 @@ import (
 	"github.com/DrewGGM/aluna/internal/deposits/internal/app"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
+	"github.com/DrewGGM/aluna/internal/money"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
@@ -68,28 +70,32 @@ func (s *Service) accrueEntity(ctx context.Context, uow *postgres.UnitOfWork, en
 	return accrued, nil
 }
 
-// accrueDay accrues day for the entity's due accounts in batches, each in its own transaction, until one
-// comes out incomplete.
+// accrueDay accrues day for the entity's due accounts in batches, in id order, each in its own transaction,
+// until one comes out incomplete; each batch starts after the last account of the one before, so a day reads
+// each account once.
 func (s *Service) accrueDay(ctx context.Context, uow *postgres.UnitOfWork, entity ids.ID, day calendar.Date, batch int) (int, error) {
 	accrued := 0
+	var after ids.ID
 	for {
 		var n int
-		err := uow.Do(ctx, func(tx postgres.Tx) error {
+		var last ids.ID
+		err := uow.Do(ctx, func(tx postgres.Tx) error { // a retried batch starts again from the same after
 			var err error
-			n, err = app.AccrueBatch(ctx, accruals{Store: pg.NewStore(tx), s: s, tx: tx}, entity, day, batch)
+			a := accruals{Store: pg.NewStore(tx), s: s, tx: tx}
+			n, last, err = app.AccrueBatch(ctx, a, a, entity, day, after, batch)
 			return err
 		})
 		if err != nil {
 			return accrued, err
 		}
-		accrued += n
+		accrued, after = accrued+n, last
 		if n < batch {
 			return accrued, nil
 		}
 	}
 }
 
-// accruals is app.Accruals over tx; the store gives Due and InsertAccruals.
+// accruals is app.Accruals and app.Capitalizing over tx; the store gives Due and InsertAccruals.
 type accruals struct {
 	pg.Store
 	s  *Service
@@ -110,5 +116,41 @@ func (a accruals) Terms(ctx context.Context, versionID ids.ID) (app.InterestTerm
 	if err != nil {
 		return app.InterestTerms{}, err
 	}
-	return app.InterestTerms{Tiers: v.Definition.RateEA, DayCount: v.Definition.DayCount}, nil
+	d := v.Definition
+	return app.InterestTerms{
+		Tiers: d.RateEA, DayCount: d.DayCount, Frequency: string(d.CapitalizationFrequency), Convention: d.DateConvention,
+		ExpenseCode: d.Accounts.InterestExpense,
+	}, nil
+}
+
+func (a accruals) AdjustDate(d calendar.Date, c calendar.Convention) calendar.Date {
+	return a.s.calendar.AdjustDate(d, c)
+}
+
+func (a accruals) ExpenseAccount(ctx context.Context, entity ids.ID, code string, c money.Currency) (ids.ID, error) {
+	return a.s.productAccount(ctx, a.tx, entity, "interest expense", code, c)
+}
+
+func (a accruals) Post(ctx context.Context, in ledger.PostInput) (ledger.Transaction, error) {
+	return a.s.ledger.Post(ctx, a.tx, in)
+}
+
+func (a accruals) EmitCapitalized(ctx context.Context, entity ids.ID, e app.Capitalized) error {
+	return a.s.events.Emit(ctx, a.tx, outbox.Event{
+		Type: typeCapitalized, Subject: "deposit-accounts/" + e.AccountID.String(), LegalEntityID: entity, SchemaVersion: 1,
+		Data: capitalizedPayload{
+			AccountID: e.AccountID, Period: e.Period, TransactionID: e.TransactionID,
+			ValueDate: time.Date(e.ValueDate.Year, e.ValueDate.Month, e.ValueDate.Day, 0, 0, 0, 0, time.UTC).Format(time.DateOnly),
+			Amount:    e.Amount.Units(), Currency: e.Amount.Currency().Code(),
+		},
+	})
+}
+
+type capitalizedPayload struct {
+	AccountID     ids.ID `json:"account_id"`
+	Period        string `json:"period"`
+	TransactionID ids.ID `json:"transaction_id"`
+	ValueDate     string `json:"value_date"`
+	Amount        int64  `json:"amount"`
+	Currency      string `json:"currency"`
 }

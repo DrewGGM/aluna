@@ -1,0 +1,55 @@
+{
+  "currency": "COP",
+  "day_count": "ACT/360",
+  "rate_tiers": [
+    {
+      "from_units": 0,
+      "rate_ea": "0.01"
+    },
+    {
+      "from_units": 1000000000,
+      "rate_ea": "0.045"
+    },
+    {
+      "from_units": 1000000000,
+      "rate_ea": "0.0625"
+    }
+  ],
+  "capitalization_frequency": "quarterly",
+  "date_convention": "modified_following",
+  "fees": [
+    {
+      "code": "withdrawal_fee",
+      "trigger": "withdrawal",
+      "amount_units": 450000,
+      "exempt_rule": "first_withdrawals_free"
+    },
+    {
+      "code": "transfer_fee",
+      "trigger": "transfer",
+      "amount_units": 300000
+    }
+  ],
+  "limits": {
+    "per_operation": {
+      "units": 2000000000
+    },
+    "daily_debits": {
+      "units": 5000000000
+    }
+  },
+  "dormancy_days": 180,
+  "allowed_kyc": [
+    "approved"
+  ],
+  "gmf_exempt_eligible": false,
+  "accounts": {
+    "cash": "A.CASH.VAULT",
+    "interest_expense": "E.INTEREST.TIERED",
+    "fee_income": "I.FEES.TIERED",
+    "gmf_payable": "L.TAX.GMF"
+  },
+  "rules": {
+    "first_withdrawals_free": "month_tx_count < 3"
+  }
+}

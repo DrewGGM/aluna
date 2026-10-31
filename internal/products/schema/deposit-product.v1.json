@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DrewGGM/aluna/internal/products/schema/deposit-product.v1.json",
+  "title": "Deposit product version, v1",
+  "description": "Definition of a version of a deposit product (ADR-0008). Amounts are integers in minor units of the product currency, written without a decimal point. No field admits null and no key is repeated. Besides this schema, the parser checks what a schema cannot express: the currency is supported, the tiers go up from 0, fee codes are unique and an exempt_rule names a rule.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "currency",
+    "day_count",
+    "rate_tiers",
+    "capitalization_frequency",
+    "date_convention",
+    "dormancy_days",
+    "allowed_kyc",
+    "gmf_exempt_eligible",
+    "accounts"
+  ],
+  "properties": {
+    "currency": {
+      "description": "ISO 4217 code.",
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "day_count": {
+      "description": "Day count convention of the interest; ACT/ACT is the ISDA one.",
+      "enum": ["ACT/365F", "ACT/360", "30E/360", "ACT/ACT"]
+    },
+    "rate_tiers": {
+      "description": "Effective annual rate by balance slab: each tier applies from its from_units up to the next tier's. The first starts at 0 and each one starts above the previous one.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/rateTier" }
+    },
+    "capitalization_frequency": {
+      "description": "How often the accrued interest is posted to the account.",
+      "enum": ["monthly", "quarterly", "semiannual", "annual"]
+    },
+    "date_convention": {
+      "description": "How a capitalization date that falls on a non-business day is moved.",
+      "enum": ["following", "modified_following", "preceding", "unadjusted"]
+    },
+    "fees": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/fee" }
+    },
+    "limits": { "$ref": "#/$defs/limits" },
+    "dormancy_days": {
+      "description": "Days without customer activity after which an active account is dormant.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3650
+    },
+    "allowed_kyc": {
+      "description": "KYC statuses of the party with which an account can be opened.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["pending", "approved", "rejected", "suspended"] }
+    },
+    "gmf_exempt_eligible": {
+      "description": "Whether an account of the product can be marked exempt from the GMF.",
+      "type": "boolean"
+    },
+    "accounts": { "$ref": "#/$defs/accounts" },
+    "rules": {
+      "description": "Named CEL predicates, such as fee exemptions.",
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 4096 }
+    }
+  },
+  "$defs": {
+    "rateTier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from_units", "rate_ea"],
+      "properties": {
+        "from_units": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "rate_ea": {
+          "description": "Effective annual rate as a fraction from 0 to 1 with up to 8 decimals: 0.0425 is 4.25 %.",
+          "type": "string",
+          "pattern": "^(0(\\.[0-9]{1,8})?|1(\\.0{1,8})?)$"
+        }
+      }
+    },
+    "fee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "trigger", "amount_units"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "trigger": {
+          "description": "The operation that is charged.",
+          "enum": ["withdrawal", "transfer"]
+        },
+        "amount_units": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+        "exempt_rule": {
+          "description": "Name of the rule that, when satisfied, exempts the operation from the fee.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        }
+      }
+    },
+    "limits": {
+      "description": "Limits of the product; an absent one does not apply. daily_debits and monthly_debits add up the debits of the day and of the month.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "per_operation": { "$ref": "#/$defs/limit" },
+        "daily_debits": { "$ref": "#/$defs/limit" },
+        "monthly_debits": { "$ref": "#/$defs/limit" },
+        "max_balance": { "$ref": "#/$defs/limit" }
+      }
+    },
+    "limit": {
+      "description": "An amount in minor units or a number of SMMLV (monthly minimum wages), converted with the market parameter in force.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "units": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+        "smmlv": { "type": "integer", "minimum": 1, "maximum": 1000 }
+      }
+    },
+    "accounts": {
+      "description": "Codes of the internal ledger accounts the product posts against.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cash", "interest_expense", "fee_income", "gmf_payable"],
+      "properties": {
+        "cash": { "$ref": "#/$defs/accountCode" },
+        "interest_expense": { "$ref": "#/$defs/accountCode" },
+        "fee_income": { "$ref": "#/$defs/accountCode" },
+        "gmf_payable": { "$ref": "#/$defs/accountCode" }
+      }
+    },
+    "accountCode": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[A-Z][A-Z0-9]*(\\.[A-Z0-9_]+)*$"
+    }
+  }
+}

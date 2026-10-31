@@ -15,6 +15,17 @@ import (
 // Date is a calendar day, with no time or zone.
 type Date = domain.Date
 
+// Convention is how a date that falls on a non-business day is moved.
+type Convention = domain.Convention
+
+// Business day adjustment conventions.
+const (
+	Following         = domain.Following
+	ModifiedFollowing = domain.ModifiedFollowing
+	Preceding         = domain.Preceding
+	Unadjusted        = domain.Unadjusted
+)
+
 // PeriodStatus is the status of an accounting period.
 type PeriodStatus = app.PeriodStatus
 

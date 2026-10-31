@@ -1,0 +1,23 @@
+{
+  "currency": "COP",
+  "day_count": "ACT/365F",
+  "rate_tiers": [
+    {
+      "from_units": 0,
+      "rate_ea": "0.015"
+    }
+  ],
+  "capitalization_frequency": "monthly",
+  "date_convention": "following",
+  "dormancy_days": "365",
+  "allowed_kyc": [
+    "approved"
+  ],
+  "gmf_exempt_eligible": true,
+  "accounts": {
+    "cash": "A.CASH.VAULT",
+    "interest_expense": "E.INTEREST.SAVINGS",
+    "fee_income": "I.FEES.SAVINGS",
+    "gmf_payable": "L.TAX.GMF"
+  }
+}

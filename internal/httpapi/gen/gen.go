@@ -114,6 +114,69 @@ func (e HoldStatus) Valid() bool {
 	}
 }
 
+// Defines values for KYCStatus.
+const (
+	KYCStatusApproved  KYCStatus = "approved"
+	KYCStatusPending   KYCStatus = "pending"
+	KYCStatusRejected  KYCStatus = "rejected"
+	KYCStatusSuspended KYCStatus = "suspended"
+)
+
+// Valid indicates whether the value is a known member of the KYCStatus enum.
+func (e KYCStatus) Valid() bool {
+	switch e {
+	case KYCStatusApproved:
+		return true
+	case KYCStatusPending:
+		return true
+	case KYCStatusRejected:
+		return true
+	case KYCStatusSuspended:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PartyKind.
+const (
+	Legal   PartyKind = "legal"
+	Natural PartyKind = "natural"
+)
+
+// Valid indicates whether the value is a known member of the PartyKind enum.
+func (e PartyKind) Valid() bool {
+	switch e {
+	case Legal:
+		return true
+	case Natural:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RiskLevel.
+const (
+	High   RiskLevel = "high"
+	Low    RiskLevel = "low"
+	Medium RiskLevel = "medium"
+)
+
+// Valid indicates whether the value is a known member of the RiskLevel enum.
+func (e RiskLevel) Valid() bool {
+	switch e {
+	case High:
+		return true
+	case Low:
+		return true
+	case Medium:
+		return true
+	default:
+		return false
+	}
+}
+
 // AccountKind defines model for AccountKind.
 type AccountKind string
 
@@ -225,6 +288,9 @@ type HoldCapture struct {
 // HoldStatus defines model for HoldStatus.
 type HoldStatus string
 
+// KYCStatus defines model for KYCStatus.
+type KYCStatus string
+
 // LedgerAccount defines model for LedgerAccount.
 type LedgerAccount struct {
 	BalanceMode BalanceMode        `json:"balance_mode"`
@@ -241,6 +307,27 @@ type Money struct {
 	Amount   int64  `json:"amount"`
 	Currency string `json:"currency"`
 }
+
+// Party defines model for Party.
+type Party struct {
+	Consents    map[string]bool    `json:"consents"`
+	CreatedAt   time.Time          `json:"created_at"`
+	ExternalRef string             `json:"external_ref"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// Kind Natural or legal person.
+	Kind      PartyKind `json:"kind"`
+	KycStatus KYCStatus `json:"kyc_status"`
+	Pep       bool      `json:"pep"`
+	RiskLevel RiskLevel `json:"risk_level"`
+	ValidFrom time.Time `json:"valid_from"`
+
+	// Version Current version; every change adds one
+	Version int `json:"version"`
+}
+
+// PartyKind Natural or legal person.
+type PartyKind string
 
 // PlaceHold defines model for PlaceHold.
 type PlaceHold struct {
@@ -276,6 +363,22 @@ type Problem struct {
 	Type    string  `json:"type"`
 }
 
+// RegisterParty defines model for RegisterParty.
+type RegisterParty struct {
+	// Consents Consent by name (for example, personal_data): lowercase letters, digits and underscores, starting with a letter, up to 64 characters.
+	Consents *map[string]bool `json:"consents,omitempty"`
+
+	// ExternalRef Reference in the onboarding system
+	ExternalRef string `json:"external_ref"`
+
+	// Kind Natural or legal person.
+	Kind PartyKind `json:"kind"`
+
+	// Pep Politically exposed person. Required; a missing or null value is rejected, never read as false.
+	Pep       *bool     `json:"pep"`
+	RiskLevel RiskLevel `json:"risk_level"`
+}
+
 // RejectApproval defines model for RejectApproval.
 type RejectApproval struct {
 	Reason string `json:"reason"`
@@ -287,6 +390,9 @@ type RequestReversal struct {
 	BusinessDate *openapi_types.Date `json:"business_date,omitempty"`
 	Reason       string              `json:"reason"`
 }
+
+// RiskLevel defines model for RiskLevel.
+type RiskLevel string
 
 // Transaction defines model for Transaction.
 type Transaction struct {
@@ -362,6 +468,9 @@ type CaptureHoldJSONRequestBody = CaptureHold
 // CreateLedgerAccountJSONRequestBody defines body for CreateLedgerAccount for application/json ContentType.
 type CreateLedgerAccountJSONRequestBody = CreateLedgerAccount
 
+// RegisterPartyJSONRequestBody defines body for RegisterParty for application/json ContentType.
+type RegisterPartyJSONRequestBody = RegisterParty
+
 // PostTransactionJSONRequestBody defines body for PostTransaction for application/json ContentType.
 type PostTransactionJSONRequestBody = PostTransaction
 
@@ -397,6 +506,12 @@ type ServerInterface interface {
 	// GetLedgerAccountBalance Leer el saldo de una cuenta
 	// (GET /v1/ledger-accounts/{id}/balance)
 	GetLedgerAccountBalance(w http.ResponseWriter, r *http.Request, id ID, params GetLedgerAccountBalanceParams)
+	// RegisterParty Register a party
+	// (POST /v1/parties)
+	RegisterParty(w http.ResponseWriter, r *http.Request)
+	// GetParty Read a party
+	// (GET /v1/parties/{id})
+	GetParty(w http.ResponseWriter, r *http.Request, id ID)
 	// PostTransaction Asentar una transacción balanceada
 	// (POST /v1/transactions)
 	PostTransaction(w http.ResponseWriter, r *http.Request, params PostTransactionParams)
@@ -778,6 +893,46 @@ func (siw *ServerInterfaceWrapper) GetLedgerAccountBalance(w http.ResponseWriter
 	handler.ServeHTTP(w, r)
 }
 
+// RegisterParty operation middleware
+func (siw *ServerInterfaceWrapper) RegisterParty(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegisterParty(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetParty operation middleware
+func (siw *ServerInterfaceWrapper) GetParty(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetParty(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PostTransaction operation middleware
 func (siw *ServerInterfaceWrapper) PostTransaction(w http.ResponseWriter, r *http.Request) {
 
@@ -1035,6 +1190,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/approvals", wrapper.ListApprovals)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/approvals/{id}/approval", wrapper.ApproveRequest)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/approvals/{id}/rejection", wrapper.RejectRequest)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/parties", wrapper.RegisterParty)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/parties/{id}", wrapper.GetParty)
 
 	return m
 }
@@ -1837,6 +1994,144 @@ func (response GetLedgerAccountBalancedefaultApplicationProblemPlusJSONResponse)
 	return err
 }
 
+type RegisterPartyRequestObject struct {
+	Body *RegisterPartyJSONRequestBody
+}
+
+type RegisterPartyResponseObject interface {
+	VisitRegisterPartyResponse(w http.ResponseWriter) error
+}
+
+type RegisterParty201JSONResponse Party
+
+func (response RegisterParty201JSONResponse) VisitRegisterPartyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterParty400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RegisterParty400ApplicationProblemPlusJSONResponse) VisitRegisterPartyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterParty409ApplicationProblemPlusJSONResponse Problem
+
+func (response RegisterParty409ApplicationProblemPlusJSONResponse) VisitRegisterPartyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterParty422ApplicationProblemPlusJSONResponse Problem
+
+func (response RegisterParty422ApplicationProblemPlusJSONResponse) VisitRegisterPartyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterPartydefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RegisterPartydefaultApplicationProblemPlusJSONResponse) VisitRegisterPartyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPartyRequestObject struct {
+	Id ID `json:"id"`
+}
+
+type GetPartyResponseObject interface {
+	VisitGetPartyResponse(w http.ResponseWriter) error
+}
+
+type GetParty200JSONResponse Party
+
+func (response GetParty200JSONResponse) VisitGetPartyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetParty404ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetParty404ApplicationProblemPlusJSONResponse) VisitGetPartyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPartydefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetPartydefaultApplicationProblemPlusJSONResponse) VisitGetPartyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PostTransactionRequestObject struct {
 	Params PostTransactionParams
 	Body   *PostTransactionJSONRequestBody
@@ -2146,6 +2441,12 @@ type StrictServerInterface interface {
 	// GetLedgerAccountBalance Leer el saldo de una cuenta
 	// (GET /v1/ledger-accounts/{id}/balance)
 	GetLedgerAccountBalance(ctx context.Context, request GetLedgerAccountBalanceRequestObject) (GetLedgerAccountBalanceResponseObject, error)
+	// RegisterParty Register a party
+	// (POST /v1/parties)
+	RegisterParty(ctx context.Context, request RegisterPartyRequestObject) (RegisterPartyResponseObject, error)
+	// GetParty Read a party
+	// (GET /v1/parties/{id})
+	GetParty(ctx context.Context, request GetPartyRequestObject) (GetPartyResponseObject, error)
 	// PostTransaction Asentar una transacción balanceada
 	// (POST /v1/transactions)
 	PostTransaction(ctx context.Context, request PostTransactionRequestObject) (PostTransactionResponseObject, error)
@@ -2453,6 +2754,63 @@ func (sh *strictHandler) GetLedgerAccountBalance(w http.ResponseWriter, r *http.
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetLedgerAccountBalanceResponseObject); ok {
 		if err := validResponse.VisitGetLedgerAccountBalanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RegisterParty operation middleware
+func (sh *strictHandler) RegisterParty(w http.ResponseWriter, r *http.Request) {
+	var request RegisterPartyRequestObject
+
+	var body RegisterPartyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RegisterParty(ctx, request.(RegisterPartyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RegisterParty")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RegisterPartyResponseObject); ok {
+		if err := validResponse.VisitRegisterPartyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetParty operation middleware
+func (sh *strictHandler) GetParty(w http.ResponseWriter, r *http.Request, id ID) {
+	var request GetPartyRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetParty(ctx, request.(GetPartyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetParty")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPartyResponseObject); ok {
+		if err := validResponse.VisitGetPartyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

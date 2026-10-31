@@ -16,6 +16,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
+	"github.com/DrewGGM/aluna/internal/party"
 )
 
 // Problem es un error RFC 9457. Code es estable y para máquinas; Title y Detail son para personas y
@@ -146,6 +147,10 @@ var problems = []struct {
 	{ledger.ErrAlreadyReversed, conflict("already_reversed", "La transacción ya tiene reversa")},
 	// access
 	{access.ErrForbidden, forbidden},
+	// party
+	{party.ErrInvalidParty, unprocessable("invalid_party", "Invalid party data")},
+	{party.ErrAlreadyRegistered, conflict("party_already_registered", "The entity already registered that external_ref")},
+	{party.ErrNotFound, notFound},
 	// approvals
 	{approvals.ErrSelfApproval, Problem{
 		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "Quien pide no puede decidir su propia solicitud",

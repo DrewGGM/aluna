@@ -18,6 +18,7 @@ import (
 type API struct {
 	*LedgerHandlers
 	*ApprovalHandlers
+	*PartyHandlers
 }
 
 var _ gen.StrictServerInterface = API{}

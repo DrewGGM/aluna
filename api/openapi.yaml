@@ -300,6 +300,47 @@ paths:
         "409": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/parties:
+    post:
+      operationId: registerParty
+      summary: Register a party
+      description: >-
+        Registers the reference data of a natural or legal person (FR-16) with its first version, in KYC
+        `pending`: the KYC status only changes through maker-checker. The core keeps no names or
+        documents: `external_ref` points to the onboarding system and is unique within the entity (409
+        `party_already_registered`).
+      x-aluna-permission: party.parties.create
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RegisterParty"}
+      responses:
+        "201":
+          description: Registered party
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Party"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/parties/{id}:
+    get:
+      operationId: getParty
+      summary: Read a party
+      description: The party with its current version.
+      x-aluna-permission: party.parties.read
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Party
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Party"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
 components:
   parameters:
     ID:
@@ -512,3 +553,48 @@ components:
           type: string
           format: date
           description: Fecha de negocio de la reversa; por defecto, la de la entidad al aprobarse.
+    PartyKind:
+      type: string
+      enum: [natural, legal]
+      description: Natural or legal person.
+    KYCStatus:
+      type: string
+      enum: [pending, approved, rejected, suspended]
+    RiskLevel:
+      type: string
+      enum: [low, medium, high]
+    RegisterParty:
+      type: object
+      required: [kind, external_ref, risk_level, pep]
+      properties:
+        kind: {$ref: "#/components/schemas/PartyKind"}
+        external_ref: {type: string, minLength: 1, maxLength: 255, description: Reference in the onboarding system}
+        risk_level: {$ref: "#/components/schemas/RiskLevel"}
+        pep:
+          type: boolean
+          description: Politically exposed person. Required; a missing or null value is rejected, never read as false.
+          x-go-type: "*bool"
+        consents:
+          type: object
+          additionalProperties: {type: boolean}
+          propertyNames: {pattern: "^[a-z][a-z0-9_]{0,63}$"}
+          maxProperties: 32
+          description: >-
+            Consent by name (for example, personal_data): lowercase letters, digits and underscores, starting
+            with a letter, up to 64 characters.
+    Party:
+      type: object
+      required: [id, kind, external_ref, created_at, version, kyc_status, risk_level, pep, consents, valid_from]
+      properties:
+        id: {type: string, format: uuid}
+        kind: {$ref: "#/components/schemas/PartyKind"}
+        external_ref: {type: string}
+        created_at: {type: string, format: date-time}
+        version: {type: integer, description: Current version; every change adds one}
+        kyc_status: {$ref: "#/components/schemas/KYCStatus"}
+        risk_level: {$ref: "#/components/schemas/RiskLevel"}
+        pep: {type: boolean}
+        consents:
+          type: object
+          additionalProperties: {type: boolean}
+        valid_from: {type: string, format: date-time}

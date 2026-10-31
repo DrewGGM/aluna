@@ -9,12 +9,14 @@ channel:
     - ledger.accounts.read
     - ledger.balances.read
 
-# Operaciones del día: cuentas, asientos manuales y holds, y decidir solicitudes de maker-checker (el
-# permiso del tipo de cada solicitud se exige aparte).
+# Operaciones del día: parties, cuentas, asientos manuales y holds, y decidir solicitudes de
+# maker-checker (el permiso del tipo de cada solicitud se exige aparte).
 operator:
   all:
     - approvals.read
     - approvals.decide
+    - party.parties.create
+    - party.parties.read
     - ledger.accounts.create
     - ledger.accounts.read
     - ledger.balances.read
@@ -41,6 +43,7 @@ compliance:
   all:
     - approvals.read
     - approvals.decide
+    - party.parties.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read
@@ -49,6 +52,7 @@ compliance:
 auditor:
   all:
     - approvals.read
+    - party.parties.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read

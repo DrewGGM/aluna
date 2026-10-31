@@ -78,6 +78,9 @@ func (r storedResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error { 
 // VisitReleaseHoldResponse escribe la respuesta guardada de POST /v1/holds/{id}/release.
 func (r storedResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error { return r.write(w) }
 
+// VisitRegisterPartyResponse writes the response of POST /v1/parties.
+func (r storedResponse) VisitRegisterPartyResponse(w http.ResponseWriter) error { return r.write(w) }
+
 // VisitRequestReversalResponse escribe la respuesta guardada de POST /v1/transactions/{id}/reversal.
 func (r storedResponse) VisitRequestReversalResponse(w http.ResponseWriter) error { return r.write(w) }
 

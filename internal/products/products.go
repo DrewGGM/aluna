@@ -26,10 +26,20 @@ type (
 	Status = app.Status
 	// DepositProduct is the definition of a version of a deposit product.
 	DepositProduct = domain.DepositProduct
+	// DayCount is the day count convention of a product's interest.
+	DayCount = domain.DayCount
 	// MarketKind is the kind of a market parameter.
 	MarketKind = app.MarketKind
 	// MarketParameter is the value of a market parameter in a period.
 	MarketParameter = app.MarketParameter
+)
+
+// Day count conventions.
+const (
+	ACT365F = domain.ACT365F
+	ACT360  = domain.ACT360
+	E30360  = domain.E30360
+	ACTACT  = domain.ACTACT
 )
 
 // Kinds of market parameter.

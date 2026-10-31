@@ -89,4 +89,6 @@ func quotient(a, b, scale int) (money.Precise, error) {
 	return pa.Quo(pb, scale, money.HalfEven)
 }
 
-func integer(n int) (money.Precise, error) { return money.ParsePrecise(strconv.Itoa(n)) }
+func integer(n int) (money.Precise, error) { return precise64(int64(n)) }
+
+func precise64(n int64) (money.Precise, error) { return money.ParsePrecise(strconv.FormatInt(n, 10)) }

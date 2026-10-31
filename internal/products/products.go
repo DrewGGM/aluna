@@ -28,6 +28,8 @@ type (
 	DepositProduct = domain.DepositProduct
 	// DayCount is the day count convention of a product's interest.
 	DayCount = domain.DayCount
+	// RateTier is the effective annual rate of a balance slab of a product.
+	RateTier = domain.RateTier
 	// MarketKind is the kind of a market parameter.
 	MarketKind = app.MarketKind
 	// MarketParameter is the value of a market parameter in a period.

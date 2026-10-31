@@ -16,8 +16,8 @@ import (
 
 const internalPrefix = modulePath + "/internal/"
 
-// goPackage es la parte de la salida de `go list -json` que usa la prueba. Solo se leen los imports
-// de producción: una prueba puede montar varios módulos para preparar un escenario.
+// goPackage is the part of the `go list -json` output the test uses. Only production imports are read:
+// a test may wire several modules together to set up a scenario.
 type goPackage struct {
 	ImportPath string
 	Imports    []string
@@ -42,8 +42,8 @@ func TestArchitecture(t *testing.T) {
 	}
 }
 
-// TestArchViolationFixture prueba con una salida de `go list` simulada que cada import prohibido se
-// rechaza y que los permitidos pasan.
+// TestArchViolationFixture checks, against a simulated `go list` output, that every forbidden import is
+// rejected and the allowed ones pass.
 func TestArchViolationFixture(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("testdata", "violations.json"))
 	if err != nil {
@@ -51,12 +51,12 @@ func TestArchViolationFixture(t *testing.T) {
 	}
 	const in = internalPrefix
 	want := []violation{
-		{in + "ledger", in + "deposits", "arista fuera del DAG"},
-		{in + "ledger", in + "loans", "importa un paquete no declarado en dag_test.go"},
-		{in + "deposits/internal/app", in + "httpapi", "nadie importa un adaptador de entrada"},
-		{in + "money", in + "ledger", "un paquete base no importa módulos"},
-		{in + "jobs", in + "httpapi", "nadie importa un adaptador de entrada"},
-		{in + "loans", "", "paquete no declarado en dag_test.go"},
+		{in + "ledger", in + "deposits", "edge outside the DAG"},
+		{in + "ledger", in + "loans", "imports a package not declared in dag_test.go"},
+		{in + "deposits/internal/app", in + "httpapi", "nobody imports an inbound adapter"},
+		{in + "money", in + "ledger", "a foundation package does not import modules"},
+		{in + "jobs", in + "httpapi", "nobody imports an inbound adapter"},
+		{in + "loans", "", "package not declared in dag_test.go"},
 		{in + "ledger/internal/domain", "github.com/jackc/pgx/v5", domainRule},
 		{in + "ledger/internal/domain", in + "postgres", domainRule},
 	}
@@ -64,7 +64,7 @@ func TestArchViolationFixture(t *testing.T) {
 	got := checkArchitecture(decodePackages(t, fixture))
 
 	if !slices.Equal(got, want) {
-		t.Errorf("violaciones =\n%v\nse esperaba\n%v", got, want)
+		t.Errorf("violations =\n%v\nwant\n%v", got, want)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestDAGIsAcyclic(t *testing.T) {
 	visit = func(module string, path []string) {
 		switch state[module] {
 		case visiting:
-			t.Errorf("ciclo: %s", strings.Join(append(path, module), " → "))
+			t.Errorf("cycle: %s", strings.Join(append(path, module), " → "))
 			return
 		case done:
 			return
@@ -86,7 +86,7 @@ func TestDAGIsAcyclic(t *testing.T) {
 		state[module] = visiting
 		for _, dep := range moduleDeps[module] {
 			if _, ok := moduleDeps[dep]; !ok {
-				t.Errorf("%s depende de %s, que no es un módulo declarado", module, dep)
+				t.Errorf("%s depends on %s, which is not a declared module", module, dep)
 			}
 			visit(dep, append(path, module))
 		}
@@ -101,11 +101,11 @@ func checkArchitecture(pkgs []goPackage) []violation {
 	var found []violation
 	for _, p := range pkgs {
 		owner, ok := internalOwner(p.ImportPath)
-		if !ok || owner == "archtest" { // archtest solo tiene pruebas y no se declara.
+		if !ok || owner == "archtest" { // archtest only has tests and is not declared.
 			continue
 		}
 		if !declared(owner) {
-			found = append(found, violation{p.ImportPath, "", "paquete no declarado en dag_test.go"})
+			found = append(found, violation{p.ImportPath, "", "package not declared in dag_test.go"})
 			continue
 		}
 		found = append(found, checkImports(p, owner)...)
@@ -132,7 +132,7 @@ func checkImports(p goPackage, owner string) []violation {
 	return found
 }
 
-// internalOwner devuelve el paquete de primer nivel bajo internal/ al que pertenece importPath.
+// internalOwner returns the top-level package under internal/ that importPath belongs to.
 func internalOwner(importPath string) (string, bool) {
 	rest, ok := strings.CutPrefix(importPath, internalPrefix)
 	if !ok {
@@ -142,26 +142,26 @@ func internalOwner(importPath string) (string, bool) {
 	return owner, true
 }
 
-// edgeProblem dice por qué el paquete declarado from no puede importar a to, o "" si puede.
+// edgeProblem says why the declared package from cannot import to, or "" if it can.
 func edgeProblem(from, to string) string {
 	switch {
 	case !declared(to):
-		return "importa un paquete no declarado en dag_test.go"
+		return "imports a package not declared in dag_test.go"
 	case slices.Contains(entrypoints, to):
-		return "nadie importa un adaptador de entrada"
+		return "nobody imports an inbound adapter"
 	case slices.Contains(foundation, to), slices.Contains(entrypoints, from):
 		return ""
 	case slices.Contains(foundation, from):
-		return "un paquete base no importa módulos"
+		return "a foundation package does not import modules"
 	case !slices.Contains(moduleDeps[from], to):
-		return "arista fuera del DAG"
+		return "edge outside the DAG"
 	}
 	return ""
 }
 
-const domainRule = "el dominio solo importa stdlib, money, ids, clock, su propio domain y fachadas del DAG"
+const domainRule = "the domain only imports stdlib, money, ids, clock, its own domain and DAG facades"
 
-// domainMayImport aplica la enmienda de ADR-0001 a un import de producción de un paquete domain.
+// domainMayImport applies the ADR-0001 amendment to a production import of a domain package.
 func domainMayImport(owner, imp string) bool {
 	first, _, _ := strings.Cut(imp, "/")
 	if !strings.Contains(first, ".") { // stdlib
@@ -171,13 +171,13 @@ func domainMayImport(owner, imp string) bool {
 		return true
 	}
 	to, ok := internalOwner(imp)
-	if !ok || imp != internalPrefix+to { // solo la fachada raíz, nunca sus internals
+	if !ok || imp != internalPrefix+to { // only the root facade, never its internals
 		return false
 	}
 	return slices.Contains(kernel, to) || slices.Contains(moduleDeps[owner], to)
 }
 
-// isDomain dice si importPath es un paquete domain o uno de sus subpaquetes.
+// isDomain reports whether importPath is a domain package or one of its subpackages.
 func isDomain(importPath string) bool {
 	return strings.HasSuffix(importPath, "/internal/domain") || strings.Contains(importPath, "/internal/domain/")
 }
@@ -198,7 +198,7 @@ func decodePackages(t *testing.T, data []byte) []goPackage {
 			return pkgs
 		}
 		if err != nil {
-			t.Fatalf("salida de go list: %v", err)
+			t.Fatalf("go list output: %v", err)
 		}
 		pkgs = append(pkgs, p)
 	}

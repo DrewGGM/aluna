@@ -28,11 +28,11 @@ const (
 	requestIDChars  = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
 )
 
-// middleware envuelve mux con la cadena común, del más externo al más interno. Un middleware nuevo se
-// agrega en esta lista con la forma func(http.Handler) http.Handler. La auditoría va antes de la
-// autenticación, para registrar también un comando rechazado sin token, y antes de la recuperación, para
-// ver como 500 un comando que hizo panic. La autorización va pegada a la autenticación: una no se monta
-// sin la otra. Sin cfg.Audit ni cfg.Verifier, el servidor solo tiene probes.
+// middleware wraps mux with the common chain, from outermost to innermost. A new middleware is added to
+// this list with the shape func(http.Handler) http.Handler. Auditing goes before authentication, to also
+// record a command rejected without a token, and before recovery, to see a command that panicked as a 500.
+// Authorization sits right after authentication: one is never mounted without the other. Without cfg.Audit
+// or cfg.Verifier, the server only has probes.
 func middleware(log *slog.Logger, mux *http.ServeMux, cfg ServerConfig) http.Handler {
 	chain := []func(http.Handler) http.Handler{withRequestID, withObservability(log)}
 	if cfg.Audit != nil {
@@ -56,8 +56,8 @@ func requestIDFrom(ctx context.Context) string {
 	return id
 }
 
-// withRequestID conserva el X-Request-Id del cliente solo si es seguro de escribir en un log; si no,
-// genera uno.
+// withRequestID keeps the client's X-Request-Id only if it is safe to write to a log; otherwise, it
+// generates one.
 func withRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(headerRequestID)
@@ -73,7 +73,7 @@ func validRequestID(id string) bool {
 	return id != "" && len(id) <= maxRequestIDLen && strings.Trim(id, requestIDChars) == ""
 }
 
-// statusRecorder recuerda el status de la respuesta; 0 significa que todavía no se escribió nada.
+// statusRecorder remembers the response status; 0 means nothing has been written yet.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -95,15 +95,15 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 
 func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
-// Flush mantiene http.Flusher y marca la respuesta como enviada: tras un flush ya no cabe un 500.
+// Flush keeps http.Flusher and marks the response as sent: after a flush a 500 no longer fits.
 func (s *statusRecorder) Flush() {
 	if s.status == 0 {
 		s.status = http.StatusOK
 	}
-	http.NewResponseController(s.ResponseWriter).Flush() //nolint:errcheck,gosec // Flusher no tiene cómo devolver el error; el siguiente Write lo verá
+	http.NewResponseController(s.ResponseWriter).Flush() //nolint:errcheck,gosec // Flusher has no way to return the error; the next Write will see it
 }
 
-// code es el status que vio el cliente: un handler que no escribe nada responde 200.
+// code is the status the client saw: a handler that writes nothing answers 200.
 func (s *statusRecorder) code() int {
 	if s.status == 0 {
 		return http.StatusOK
@@ -111,16 +111,16 @@ func (s *statusRecorder) code() int {
 	return s.status
 }
 
-// instrumentation nombra el origen de las trazas y métricas HTTP.
+// instrumentation names the source of the HTTP traces and metrics.
 const instrumentation = "github.com/DrewGGM/aluna/internal/httpapi"
 
-// durationBuckets son los límites (en segundos) que recomiendan las convenciones semánticas para
+// durationBuckets are the boundaries (in seconds) that the semantic conventions recommend for
 // http.server.request.duration.
 var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10}
 
-// observability mide cada request una sola vez, también si termina en un panic que aborta la
-// conexión: un span de servidor que continúa el traceparent del cliente, el histograma
-// http.server.request.duration y la línea del log de acceso, con el mismo status y la misma duración.
+// observability measures each request once, also if it ends in a panic that aborts the connection: a
+// server span that continues the client's traceparent, the http.server.request.duration histogram and the
+// access log line, with the same status and the same duration.
 type observability struct {
 	log      *slog.Logger
 	tracer   trace.Tracer
@@ -129,7 +129,7 @@ type observability struct {
 
 func withObservability(log *slog.Logger) func(http.Handler) http.Handler {
 	duration, err := otel.Meter(instrumentation).Float64Histogram("http.server.request.duration",
-		metric.WithUnit("s"), metric.WithDescription("Duración de los requests HTTP."),
+		metric.WithUnit("s"), metric.WithDescription("Duration of HTTP requests."),
 		metric.WithExplicitBucketBoundaries(durationBuckets...))
 	if err != nil {
 		otel.Handle(err)
@@ -151,10 +151,10 @@ func (o observability) serve(next http.Handler, w http.ResponseWriter, r *http.R
 	next.ServeHTTP(rec, r)
 }
 
-// finish cierra el span, registra la duración y escribe el log de acceso. route es el patrón del mux
-// sin el método, no la URL, para que los ids no multipliquen las series; vacía si el mux no encontró
-// ruta (404, 405). El log registra la ruta sin el query string, que puede traer datos personales, y
-// los probes van en Debug porque el orquestador los llama cada pocos segundos.
+// finish ends the span, records the duration and writes the access log. route is the mux pattern without
+// the method, not the URL, so that ids do not multiply the series; empty if the mux found no route (404,
+// 405). The log records the path without the query string, which can carry personal data, and probes go at
+// Debug because the orchestrator calls them every few seconds.
 func (o observability) finish(span trace.Span, r *http.Request, route string, status int, elapsed time.Duration) {
 	method := methodOf(r)
 	attrs := []attribute.KeyValue{
@@ -184,11 +184,11 @@ func (o observability) finish(span trace.Span, r *http.Request, route string, st
 	)
 }
 
-// routeKey guarda en el contexto dónde withRoute deja el patrón que eligió el mux.
+// routeKey stores in the context where withRoute leaves the pattern the mux chose.
 type routeKey struct{}
 
-// withRoute va justo antes del mux: el mux escribe r.Pattern en el request que recibe, y los
-// middlewares de afuera pueden haber reemplazado el suyo con r.WithContext.
+// withRoute goes right before the mux: the mux writes r.Pattern on the request it receives, and the outer
+// middlewares may have replaced theirs with r.WithContext.
 func withRoute(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -200,11 +200,11 @@ func withRoute(next http.Handler) http.Handler {
 	})
 }
 
-// methodOther agrupa los métodos que no están en el estándar HTTP.
+// methodOther groups the methods that are not in the HTTP standard.
 const methodOther = "_OTHER"
 
-// methodOf acota el método a los conocidos: cualquier otro es _OTHER, para que un cliente no cree
-// series nuevas con métodos inventados.
+// methodOf limits the method to the known ones: any other is _OTHER, so that a client cannot create new
+// series with made-up methods.
 func methodOf(r *http.Request) string {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
@@ -215,7 +215,7 @@ func methodOf(r *http.Request) string {
 	}
 }
 
-// spanName es "{método} {ruta}"; un método desconocido se nombra HTTP, como piden las convenciones.
+// spanName is "{method} {route}"; an unknown method is named HTTP, as the conventions require.
 func spanName(method, route string) string {
 	if method == methodOther {
 		method = "HTTP"
@@ -233,7 +233,7 @@ func schemeOf(r *http.Request) string {
 	return "http"
 }
 
-// routeOf quita el método del patrón del mux: "GET /v1/transactions/{id}" es "/v1/transactions/{id}".
+// routeOf strips the method from the mux pattern: "GET /v1/transactions/{id}" is "/v1/transactions/{id}".
 func routeOf(pattern string) string {
 	if _, route, ok := strings.Cut(pattern, " "); ok {
 		return route
@@ -241,7 +241,7 @@ func routeOf(pattern string) string {
 	return pattern
 }
 
-// withRecovery convierte un panic en un 500 problem+json. El stack va al log, nunca a la respuesta.
+// withRecovery turns a panic into a 500 problem+json. The stack goes to the log, never to the response.
 func withRecovery(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -252,14 +252,14 @@ func withRecovery(log *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// recoverPanic se difiere directamente para que recover() atrape el panic del handler.
+// recoverPanic is deferred directly so that recover() catches the handler's panic.
 func recoverPanic(log *slog.Logger, rec *statusRecorder, r *http.Request) {
 	v := recover()
 	if v == nil {
 		return
 	}
 	if err, ok := v.(error); ok && errors.Is(err, http.ErrAbortHandler) {
-		panic(v) //nolint:forbidigo // net/http usa ErrAbortHandler para cortar la conexión a propósito
+		panic(v) //nolint:forbidigo // net/http uses ErrAbortHandler to cut the connection on purpose
 	}
 	log.LogAttrs(r.Context(), slog.LevelError, "panic",
 		slog.String("value", fmt.Sprint(v)),
@@ -267,27 +267,26 @@ func recoverPanic(log *slog.Logger, rec *statusRecorder, r *http.Request) {
 		slog.String("request_id", requestIDFrom(r.Context())),
 	)
 	if rec.status != 0 {
-		// Las cabeceras ya salieron: se corta la conexión para que el cliente no tome como completa
-		// una respuesta truncada.
-		panic(http.ErrAbortHandler) //nolint:forbidigo // así net/http aborta la respuesta en curso
+		// The headers already went out: the connection is cut so the client does not take a truncated
+		// response as complete.
+		panic(http.ErrAbortHandler) //nolint:forbidigo // this is how net/http aborts the response in progress
 	}
-	// Las cabeceras que dejó el handler (Set-Cookie, Content-Length, Location) no aplican al 500.
+	// The headers the handler left (Set-Cookie, Content-Length, Location) do not apply to the 500.
 	header := rec.Header()
 	requestID := header.Get(headerRequestID)
 	clear(header)
 	header.Set(headerRequestID, requestID)
-	WriteProblem(rec, r, Problem{Title: "Error interno", Code: "internal_error", Status: http.StatusInternalServerError})
+	WriteProblem(rec, r, Problem{Title: "Internal error", Code: "internal_error", Status: http.StatusInternalServerError})
 }
 
-// withBodyLimit rechaza con 413 un cuerpo declarado de más de maxBodyBytes. Un cuerpo sin
-// Content-Length se corta en ese mismo límite y el handler recibe *http.MaxBytesError, que
-// requestError convierte en 413.
+// withBodyLimit rejects with 413 a declared body over maxBodyBytes. A body without Content-Length is cut at
+// that same limit and the handler receives *http.MaxBytesError, which requestError turns into 413.
 func withBodyLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength > maxBodyBytes {
 			WriteProblem(w, r, Problem{
-				Title: "Cuerpo demasiado grande", Code: "body_too_large", Status: http.StatusRequestEntityTooLarge,
-				Detail: fmt.Sprintf("El cuerpo supera %d bytes.", maxBodyBytes),
+				Title: "Body too large", Code: "body_too_large", Status: http.StatusRequestEntityTooLarge,
+				Detail: fmt.Sprintf("The body exceeds %d bytes.", maxBodyBytes),
 			})
 			return
 		}
@@ -296,9 +295,9 @@ func withBodyLimit(next http.Handler) http.Handler {
 	})
 }
 
-// withProblemForUnrouted convierte en problem+json los 404 y 405 en texto plano que responde
-// http.ServeMux cuando la ruta o el método no existen. Los handlers propios ya responden problem+json,
-// así que no se tocan.
+// withProblemForUnrouted turns into problem+json the plain-text 404 and 405 that http.ServeMux answers when
+// the path or the method does not exist. Our own handlers already answer problem+json, so they are left
+// alone.
 func withProblemForUnrouted(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(&unroutedWriter{ResponseWriter: w, r: r}, r)
@@ -318,15 +317,15 @@ func (u *unroutedWriter) WriteHeader(code int) {
 		return
 	}
 	u.replaced = true
-	p := Problem{Title: "Ruta no encontrada", Code: "not_found", Status: code}
+	p := Problem{Title: "Route not found", Code: "not_found", Status: code}
 	if code == http.StatusMethodNotAllowed {
-		p.Title, p.Code = "Método no permitido", "method_not_allowed"
+		p.Title, p.Code = "Method not allowed", "method_not_allowed"
 	}
 	WriteProblem(u.ResponseWriter, u.r, p)
 }
 
 func (u *unroutedWriter) Write(b []byte) (int, error) {
-	if u.replaced { // el cuerpo de texto de ServeMux se descarta: ya se escribió el problem
+	if u.replaced { // ServeMux's text body is discarded: the problem was already written
 		return len(b), nil
 	}
 	return u.ResponseWriter.Write(b)
@@ -334,7 +333,7 @@ func (u *unroutedWriter) Write(b []byte) (int, error) {
 
 func (u *unroutedWriter) Unwrap() http.ResponseWriter { return u.ResponseWriter }
 
-// Flush mantiene http.Flusher para los handlers que escriben por partes.
+// Flush keeps http.Flusher for handlers that write in chunks.
 func (u *unroutedWriter) Flush() {
-	http.NewResponseController(u.ResponseWriter).Flush() //nolint:errcheck,gosec // Flusher no tiene cómo devolver el error; el siguiente Write lo verá
+	http.NewResponseController(u.ResponseWriter).Flush() //nolint:errcheck,gosec // Flusher has no way to return the error; the next Write will see it
 }

@@ -3,17 +3,17 @@ info:
   title: Aluna API
   version: 0.1.0
   description: >-
-    Core bancario. Dinero siempre como {"amount": <entero en unidades menores>, "currency": "<ISO 4217>"},
-    nunca decimales. Errores RFC 9457 (application/problem+json) con un `code` estable. Cada operación
-    declara el permiso que exige en `x-aluna-permission`. Los montos son enteros de 64 bits: un
-    cliente JavaScript debe leerlos como BigInt, porque pasan de 2^53.
+    Core banking. Money is always {"amount": <integer in minor units>, "currency": "<ISO 4217>"}, never
+    decimals. Errors are RFC 9457 (application/problem+json) with a stable `code`. Every operation
+    declares the permission it requires in `x-aluna-permission`. Amounts are 64-bit integers: a
+    JavaScript client must read them as BigInt, because they exceed 2^53.
 servers:
   - url: /
 paths:
   /v1/ledger-accounts:
     post:
       operationId: createLedgerAccount
-      summary: Crear una cuenta del ledger
+      summary: Create a ledger account
       x-aluna-permission: ledger.accounts.create
       requestBody:
         required: true
@@ -22,7 +22,7 @@ paths:
             schema: {$ref: "#/components/schemas/CreateLedgerAccount"}
       responses:
         "201":
-          description: Cuenta creada
+          description: Account created
           content:
             application/json:
               schema: {$ref: "#/components/schemas/LedgerAccount"}
@@ -33,13 +33,13 @@ paths:
   /v1/ledger-accounts/{id}:
     get:
       operationId: getLedgerAccount
-      summary: Leer una cuenta del ledger
+      summary: Read a ledger account
       x-aluna-permission: ledger.accounts.read
       parameters:
         - $ref: "#/components/parameters/ID"
       responses:
         "200":
-          description: Cuenta
+          description: Account
           content:
             application/json:
               schema: {$ref: "#/components/schemas/LedgerAccount"}
@@ -49,30 +49,31 @@ paths:
   /v1/ledger-accounts/{id}/balance:
     get:
       operationId: getLedgerAccountBalance
-      summary: Leer el saldo de una cuenta
+      summary: Read an account balance
       description: >-
-        Sin parámetros, el saldo materializado, con los pendientes de los holds. Con `as_of_value_date`
-        o `as_known_at`, el saldo bitemporal (FR-8): la suma de los entries con fecha valor hasta
-        `as_of_value_date` y asentados hasta `as_known_at`, sin pendientes; el corte que falta no filtra.
-        En una cuenta async el materializado puede ir atrasado y el bitemporal no.
+        Without parameters, the materialized balance, with the pending amounts of the holds. With
+        `as_of_value_date` or `as_known_at`, the bitemporal balance (FR-8): the sum of the entries with a
+        value date up to `as_of_value_date` and posted up to `as_known_at`, without pending amounts; a
+        missing cutoff does not filter. On an async account the materialized balance may lag behind and the
+        bitemporal one does not.
       x-aluna-permission: ledger.balances.read
       parameters:
         - $ref: "#/components/parameters/ID"
         - name: as_of_value_date
           in: query
-          description: Fecha valor de corte (inclusive). Vacío (o 0001-01-01) cuenta como ausente.
+          description: Value date cutoff (inclusive). Empty (or 0001-01-01) counts as absent.
           schema: {type: string, format: date}
         - name: as_known_at
           in: query
           description: >-
-            Saldo como se conocía en este instante RFC 3339 (posted_at hasta él, inclusive; se aplica en
-            UTC y en microsegundos, y así se devuelve). posted_at es la hora de inserción y no la del
-            commit, así que el corte es definitivo solo para instantes anteriores a la transacción en
-            curso más larga. Vacío (o el instante cero) cuenta como ausente.
+            Balance as it was known at this RFC 3339 instant (posted_at up to it, inclusive; it applies
+            in UTC and in microseconds, and is returned that way). posted_at is the insertion time and not
+            the commit time, so the cutoff is final only for instants before the longest transaction in
+            progress. Empty (or the zero instant) counts as absent.
           schema: {type: string, format: date-time}
       responses:
         "200":
-          description: Saldo
+          description: Balance
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Balance"}
@@ -82,12 +83,12 @@ paths:
   /v1/transactions:
     post:
       operationId: postTransaction
-      summary: Asentar una transacción balanceada
+      summary: Post a balanced transaction
       description: >-
-        Idempotente por `Idempotency-Key` (7 días): el mismo payload con la misma clave recibe la
-        respuesta original (también un 4xx de negocio) sin asentar otra vez; otro payload es 422
-        `idempotency_key_reused` y una solicitud que no ha terminado, 409 `request_in_progress`. Un
-        5xx no se guarda: se puede reintentar con la misma clave.
+        Idempotent by `Idempotency-Key` (7 days): the same payload with the same key receives the
+        original response (also a business 4xx) without posting again; another payload is 422
+        `idempotency_key_reused` and a request that has not finished, 409 `request_in_progress`. A 5xx is
+        not stored: it can be retried with the same key.
       x-aluna-permission: ledger.transactions.post
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -98,7 +99,7 @@ paths:
             schema: {$ref: "#/components/schemas/PostTransaction"}
       responses:
         "201":
-          description: Transacción asentada
+          description: Transaction posted
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Transaction"}
@@ -111,13 +112,13 @@ paths:
   /v1/transactions/{id}:
     get:
       operationId: getTransaction
-      summary: Leer una transacción
+      summary: Read a transaction
       x-aluna-permission: ledger.transactions.read
       parameters:
         - $ref: "#/components/parameters/ID"
       responses:
         "200":
-          description: Transacción
+          description: Transaction
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Transaction"}
@@ -127,13 +128,14 @@ paths:
   /v1/transactions/{id}/reversal:
     post:
       operationId: requestReversal
-      summary: Pedir la reversa de una transacción
+      summary: Request the reversal of a transaction
       description: >-
-        Crea una solicitud `ledger.reversal` de maker-checker y responde 202 con ella. La reversa se asienta
-        (sus entries con el signo contrario) cuando otra persona con `ledger.transactions.reverse` la aprueba
-        en `POST /v1/approvals/{id}/approval`; si el ledger la rechaza entonces (ya revertida, periodo
-        cerrado, fondos insuficientes), la solicitud queda `failed`. La reversa de una reversa se rechaza
-        al pedirla (409 `reversal_of_reversal`). Idempotente por `Idempotency-Key`.
+        Creates a maker-checker `ledger.reversal` request and answers 202 with it. The reversal is posted
+        (its entries with the opposite sign) when another person with `ledger.transactions.reverse`
+        approves it in `POST /v1/approvals/{id}/approval`; if the ledger rejects it then (already
+        reversed, period closed, insufficient funds), the request ends up `failed`. The reversal of a
+        reversal is rejected when requested (409 `reversal_of_reversal`). Idempotent by
+        `Idempotency-Key`.
       x-aluna-permission: ledger.transactions.reverse
       parameters:
         - $ref: "#/components/parameters/ID"
@@ -145,7 +147,7 @@ paths:
             schema: {$ref: "#/components/schemas/RequestReversal"}
       responses:
         "202":
-          description: Solicitud de reversa creada, pendiente de aprobación
+          description: Reversal request created, pending approval
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Approval"}
@@ -157,10 +159,10 @@ paths:
   /v1/holds:
     post:
       operationId: placeHold
-      summary: Retener fondos de una cuenta
+      summary: Hold funds of an account
       description: >-
-        Crea un hold pending sobre una cuenta sync: el importe deja de estar disponible hasta que se
-        captura, se libera o vence. Idempotente por `Idempotency-Key`, como `POST /v1/transactions`.
+        Creates a pending hold on a sync account: the amount stops being available until it is captured,
+        released or expires. Idempotent by `Idempotency-Key`, like `POST /v1/transactions`.
       x-aluna-permission: ledger.holds.place
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -171,7 +173,7 @@ paths:
             schema: {$ref: "#/components/schemas/PlaceHold"}
       responses:
         "201":
-          description: Hold creado
+          description: Hold created
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Hold"}
@@ -184,11 +186,11 @@ paths:
   /v1/holds/{id}/capture:
     post:
       operationId: captureHold
-      summary: Asentar un hold, total o parcialmente
+      summary: Capture a hold, fully or partially
       description: >-
-        Asienta el importe pedido de la cuenta del hold a su contrapartida y libera el resto. Un hold
-        que ya no está pending responde 409 `hold_not_pending`; uno vencido, 409 `hold_expired`; un
-        importe mayor que el retenido, 422 `amount_exceeds_hold`.
+        Posts the requested amount from the hold's account to its counterpart and releases the rest. A hold
+        that is no longer pending answers 409 `hold_not_pending`; an expired one, 409 `hold_expired`; an
+        amount larger than the held one, 422 `amount_exceeds_hold`.
       x-aluna-permission: ledger.holds.capture
       parameters:
         - $ref: "#/components/parameters/ID"
@@ -200,7 +202,7 @@ paths:
             schema: {$ref: "#/components/schemas/CaptureHold"}
       responses:
         "200":
-          description: Hold capturado y su transacción
+          description: Captured hold and its transaction
           content:
             application/json:
               schema: {$ref: "#/components/schemas/HoldCapture"}
@@ -213,14 +215,14 @@ paths:
   /v1/holds/{id}/release:
     post:
       operationId: releaseHold
-      summary: Liberar un hold
+      summary: Release a hold
       x-aluna-permission: ledger.holds.release
       parameters:
         - $ref: "#/components/parameters/ID"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
-          description: Hold liberado
+          description: Hold released
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Hold"}
@@ -231,10 +233,10 @@ paths:
   /v1/approvals:
     get:
       operationId: listApprovals
-      summary: Solicitudes de maker-checker de la entidad
+      summary: Maker-checker requests of the entity
       description: >-
-        Las 100 más recientes, de la más nueva a la más vieja. Con `status`, solo las de ese estado;
-        `expired` es una pendiente que pasó sus 7 días.
+        The 100 most recent, from newest to oldest. With `status`, only those in that status; `expired` is
+        a pending one that passed its 7 days.
       x-aluna-permission: approvals.read
       parameters:
         - name: status
@@ -243,7 +245,7 @@ paths:
           schema: {$ref: "#/components/schemas/ApprovalStatus"}
       responses:
         "200":
-          description: Solicitudes
+          description: Requests
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ApprovalList"}
@@ -252,19 +254,19 @@ paths:
   /v1/approvals/{id}/approval:
     post:
       operationId: approveRequest
-      summary: Aprobar una solicitud
+      summary: Approve a request
       description: >-
-        Corre el comando pedido con su payload original, en la misma transacción que marca la solicitud
-        `approved`. Quien aprueba no puede ser quien pidió (403 `self_approval_forbidden`) y necesita el
-        permiso del tipo de solicitud. Si el comando falla, la solicitud queda `failed` y se responde 200
-        con ese estado. Idempotente por `Idempotency-Key`.
+        Runs the requested command with its original payload, in the same transaction that marks the
+        request `approved`. The approver cannot be the requester (403 `self_approval_forbidden`) and needs
+        the permission of the request kind. If the command fails, the request ends up `failed` and the
+        answer is 200 with that status. Idempotent by `Idempotency-Key`.
       x-aluna-permission: approvals.decide
       parameters:
         - $ref: "#/components/parameters/ID"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
-          description: Solicitud decidida (approved o failed)
+          description: Request decided (approved or failed)
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Approval"}
@@ -276,10 +278,10 @@ paths:
   /v1/approvals/{id}/rejection:
     post:
       operationId: rejectRequest
-      summary: Rechazar una solicitud
+      summary: Reject a request
       description: >-
-        El comando no corre. Quien rechaza no puede ser quien pidió (403 `self_approval_forbidden`) y
-        necesita el permiso del tipo de solicitud.
+        The command does not run. The rejecter cannot be the requester (403 `self_approval_forbidden`) and
+        needs the permission of the request kind.
       x-aluna-permission: approvals.decide
       parameters:
         - $ref: "#/components/parameters/ID"
@@ -290,7 +292,7 @@ paths:
             schema: {$ref: "#/components/schemas/RejectApproval"}
       responses:
         "200":
-          description: Solicitud rechazada
+          description: Request rejected
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Approval"}
@@ -355,7 +357,7 @@ components:
       schema: {type: string, minLength: 1, maxLength: 255}
   responses:
     Problem:
-      description: Error RFC 9457
+      description: RFC 9457 error
       content:
         application/problem+json:
           schema: {$ref: "#/components/schemas/Problem"}
@@ -367,7 +369,7 @@ components:
         amount:
           type: integer
           format: int64
-          description: Unidades menores de la moneda (COP 100.000 = 10000000).
+          description: Minor units of the currency (COP 100,000 = 10000000).
         currency:
           type: string
           pattern: "^[A-Z]{3}$"
@@ -383,7 +385,7 @@ components:
         instance: {type: string}
         trace_id:
           type: string
-          description: Traza del request (W3C), para buscarla en los logs y en el backend de trazas.
+          description: Trace of the request (W3C), to look it up in the logs and the tracing backend.
     AccountKind:
       type: string
       enum: [asset, liability, equity, income, expense]
@@ -401,7 +403,7 @@ components:
         lower_limit:
           type: integer
           format: int64
-          description: Límite inferior del saldo natural, en unidades menores (0 por defecto).
+          description: Lower limit of the natural balance, in minor units (0 by default).
     LedgerAccount:
       type: object
       required: [id, code, kind, currency, balance_mode, lower_limit]
@@ -420,27 +422,27 @@ components:
         as_of_value_date:
           type: string
           format: date
-          description: Corte de fecha valor del saldo bitemporal; no viene en el materializado.
+          description: Value date cutoff of the bitemporal balance; absent in the materialized one.
         as_known_at:
           type: string
           format: date-time
-          description: Corte de conocimiento del saldo bitemporal; no viene en el materializado.
+          description: Knowledge cutoff of the bitemporal balance; absent in the materialized one.
         posted:
           $ref: "#/components/schemas/Money"
-          description: Saldo con signo (débito positivo, crédito negativo).
+          description: Signed balance (debit positive, credit negative).
         natural:
           $ref: "#/components/schemas/Money"
-          description: Saldo en la naturaleza de la cuenta (un depósito de cliente es positivo).
+          description: Balance in the account's natural sign (a customer deposit is positive).
         pending_debits:
           $ref: "#/components/schemas/Money"
-          description: Holds de débito pendientes (importe no negativo). Solo en el materializado.
+          description: Pending debit holds (non-negative amount). Only in the materialized balance.
         pending_credits:
           $ref: "#/components/schemas/Money"
-          description: Holds de crédito pendientes (importe no negativo). Solo en el materializado.
+          description: Pending credit holds (non-negative amount). Only in the materialized balance.
         version:
           type: integer
           format: int64
-          description: Versión del saldo materializado. Solo en el materializado.
+          description: Version of the materialized balance. Only in the materialized balance.
     Entry:
       type: object
       required: [account_id, amount]
@@ -448,7 +450,7 @@ components:
         account_id: {type: string, format: uuid}
         amount:
           $ref: "#/components/schemas/Money"
-          description: Con signo, débito positivo y crédito negativo.
+          description: Signed, debit positive and credit negative.
     PostTransaction:
       type: object
       required: [code, value_date, business_date, source, external_ref, entries]
@@ -480,8 +482,8 @@ components:
       type: object
       required: [account_id, counter_account_id, amount, expires_at]
       properties:
-        account_id: {type: string, format: uuid, description: Cuenta cuyos fondos se retienen}
-        counter_account_id: {type: string, format: uuid, description: Cuenta que recibe lo capturado}
+        account_id: {type: string, format: uuid, description: Account whose funds are held}
+        counter_account_id: {type: string, format: uuid, description: Account that receives the captured amount}
         amount: {$ref: "#/components/schemas/Money"}
         expires_at: {type: string, format: date-time}
     CaptureHold:
@@ -518,16 +520,16 @@ components:
       required: [id, kind, status, payload, maker, created_at, expires_at]
       properties:
         id: {type: string, format: uuid}
-        kind: {type: string, description: Tipo de solicitud; cada módulo registra los suyos}
+        kind: {type: string, description: "Request kind; each module registers its own"}
         status: {$ref: "#/components/schemas/ApprovalStatus"}
         payload:
-          description: El comando pedido, tal como se ejecutará al aprobarse.
+          description: The requested command, as it will run when approved.
           x-go-type: json.RawMessage
-        maker: {type: string, description: sub de quien pidió}
-        checker: {type: string, description: sub de quien decidió}
-        reason: {type: string, description: Motivo del rechazo}
+        maker: {type: string, description: sub of the requester}
+        checker: {type: string, description: sub of the decider}
+        reason: {type: string, description: Rejection reason}
         result:
-          description: Lo que devolvió el comando aprobado.
+          description: What the approved command returned.
           x-go-type: json.RawMessage
         created_at: {type: string, format: date-time}
         expires_at: {type: string, format: date-time}
@@ -552,7 +554,7 @@ components:
         business_date:
           type: string
           format: date
-          description: Fecha de negocio de la reversa; por defecto, la de la entidad al aprobarse.
+          description: Business date of the reversal; by default, the entity's when approved.
     PartyKind:
       type: string
       enum: [natural, legal]

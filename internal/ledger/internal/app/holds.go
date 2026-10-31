@@ -11,48 +11,48 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 )
 
-// ErrHoldNotFound indica un hold que no existe o que es de otra entidad legal.
-var ErrHoldNotFound = errors.New("hold no encontrado")
+// ErrHoldNotFound means a hold that does not exist or belongs to another legal entity.
+var ErrHoldNotFound = errors.New("hold not found")
 
-// Cabecera de la transacción que asienta un capture. La referencia externa es el hold: un hold se
-// asienta a lo sumo una vez.
+// Header of the transaction that posts a capture. The external reference is the hold: a hold is posted at
+// most once.
 const (
 	holdSource             = "ledger.hold"
 	holdCaptureCode        = "hold_capture"
 	holdCaptureRuleVersion = "hold-capture.v1"
 )
 
-// Hold es un hold con su contrapartida, la cuenta que recibe lo capturado. Solo se lee: sus
-// transiciones las hacen los casos de uso, que las guardan.
+// Hold is a hold with its counterpart, the account that receives what is captured. It is read-only: its
+// transitions are made by the use cases, which store them.
 type Hold struct {
 	hold             domain.Hold
 	counterAccountID ids.ID
 }
 
-// RestoredHold arma un Hold leído de la base.
+// RestoredHold builds a Hold read from the database.
 func RestoredHold(h domain.Hold, counterAccountID ids.ID) Hold {
 	return Hold{hold: h, counterAccountID: counterAccountID}
 }
 
-// ID es el identificador del hold.
+// ID is the hold's identifier.
 func (h Hold) ID() ids.ID { return h.hold.ID() }
 
-// AccountID es la cuenta cuyos fondos retiene.
+// AccountID is the account whose funds it reserves.
 func (h Hold) AccountID() ids.ID { return h.hold.AccountID() }
 
-// CounterAccountID es la cuenta que recibe lo capturado.
+// CounterAccountID is the account that receives what is captured.
 func (h Hold) CounterAccountID() ids.ID { return h.counterAccountID }
 
-// Amount es lo retenido.
+// Amount is what is held.
 func (h Hold) Amount() money.Amount { return h.hold.Amount() }
 
-// Captured es lo asentado al capturarlo; cero si no se capturó.
+// Captured is what was posted on capture; zero if it was not captured.
 func (h Hold) Captured() money.Amount { return h.hold.Captured() }
 
-// Status es el estado del hold.
+// Status is the hold's status.
 func (h Hold) Status() domain.HoldStatus { return h.hold.Status() }
 
-// ExpiresAt es el vencimiento.
+// ExpiresAt is the expiry.
 func (h Hold) ExpiresAt() time.Time { return h.hold.ExpiresAt() }
 
 func (h Hold) with(next domain.Hold) Hold {
@@ -60,7 +60,7 @@ func (h Hold) with(next domain.Hold) Hold {
 	return h
 }
 
-// PlaceHoldInput pide retener Amount de AccountID hasta ExpiresAt; lo capturado irá a
+// PlaceHoldInput asks to hold Amount of AccountID until ExpiresAt; what is captured goes to
 // CounterAccountID.
 type PlaceHoldInput struct {
 	LegalEntityID, AccountID, CounterAccountID ids.ID
@@ -68,7 +68,7 @@ type PlaceHoldInput struct {
 	ExpiresAt                                  time.Time
 }
 
-// CaptureInput pide asentar Amount, en la moneda del hold, con la fecha de negocio BusinessDate.
+// CaptureInput asks to post Amount, in the hold's currency, with business date BusinessDate.
 type CaptureInput struct {
 	LegalEntityID, HoldID ids.ID
 	Amount                money.Amount
@@ -76,33 +76,33 @@ type CaptureInput struct {
 	Actor, Channel        string
 }
 
-// ReleaseInput pide liberar un hold.
+// ReleaseInput asks to release a hold.
 type ReleaseInput struct {
 	LegalEntityID, HoldID ids.ID
 }
 
-// HoldRecords es la persistencia de las filas de holds.
+// HoldRecords is the persistence of the hold rows.
 type HoldRecords interface {
-	// DatabaseNow es la hora de la base, la misma que fija posted_at.
+	// DatabaseNow is the database time, the same one that sets posted_at.
 	DatabaseNow(ctx context.Context) (time.Time, error)
 	InsertHold(ctx context.Context, entity ids.ID, h Hold) error
-	// LockHold bloquea (FOR UPDATE) y devuelve el hold de la entidad, o ErrHoldNotFound.
+	// LockHold locks (FOR UPDATE) and returns the entity's hold, or ErrHoldNotFound.
 	LockHold(ctx context.Context, entity, id ids.ID) (Hold, error)
-	// CloseHold guarda el resultado de un hold que salió de pending; captureTxID es cero si no se capturó.
+	// CloseHold stores the outcome of a hold that left pending; captureTxID is zero if it was not captured.
 	CloseHold(ctx context.Context, h Hold, captureTxID ids.ID) error
 }
 
-// HoldStore es la persistencia de los casos de uso de holds: un capture asienta con post.
+// HoldStore is the persistence of the hold use cases: a capture posts with post.
 type HoldStore interface {
 	PostingStore
 	HoldRecords
 }
 
-// PlaceHold retiene fondos de la cuenta origen (FR-6): valida el disponible como si el importe saliera
-// ya, crea el hold pending y lo suma al pendiente del lado por el que la cuenta pierde saldo
-// (pending_debits en un pasivo, pending_credits en un activo). El vencimiento se guarda en UTC y con
-// microsegundos, la precisión de la base, para que el hold creado sea igual al que se lee. Emite
-// hold.placed.
+// PlaceHold reserves funds from the source account (FR-6): it checks the available balance as if the
+// amount were leaving now, creates the pending hold and adds it to the pending side through which the
+// account loses balance (pending_debits on a liability, pending_credits on an asset). The expiry is stored
+// in UTC and with microseconds, the database's precision, so that the created hold equals the one read
+// back. It emits hold.placed.
 func PlaceHold(ctx context.Context, store HoldStore, events Events, in PlaceHoldInput) (Hold, error) {
 	origin, err := holdOrigin(ctx, store, in)
 	if err != nil {
@@ -137,11 +137,11 @@ func PlaceHold(ctx context.Context, store HoldStore, events Events, in PlaceHold
 	return h, nil
 }
 
-// CaptureHold asienta parte o todo un hold (FR-6). Bloquea el hold antes que los saldos (ADR-0004); la
-// hora del capture es la de la base tras el lock, así que entre un capture y la expiración gana el
-// primero que bloquea el hold. Lo capturado se asienta del origen a la contrapartida y el pendiente
-// completo se libera en la misma escritura del posting, después de todas sus validaciones: un capture
-// rechazado no deja nada escrito. Emite hold.captured.
+// CaptureHold posts part or all of a hold (FR-6). It locks the hold before the balances (ADR-0004); the
+// capture time is the database's after the lock, so between a capture and the expiry, whichever locks
+// the hold first wins. What is captured is posted from the source to the counterpart and the whole
+// pending amount is released in the posting's own write, after all its checks: a rejected capture leaves
+// nothing written. It emits hold.captured.
 func CaptureHold(ctx context.Context, store HoldStore, guard PeriodGuard, events Events, in CaptureInput) (Hold, Transaction, error) {
 	h, err := store.LockHold(ctx, in.LegalEntityID, in.HoldID)
 	if err != nil {
@@ -156,7 +156,7 @@ func CaptureHold(ctx context.Context, store HoldStore, guard PeriodGuard, events
 		return Hold{}, Transaction{}, err
 	}
 	if in.Amount.Currency() != h.Amount().Currency() {
-		return Hold{}, Transaction{}, fmt.Errorf("%w: capture en %s, hold en %s", ErrCurrencyMismatch, in.Amount.Currency().Code(), h.Amount().Currency().Code())
+		return Hold{}, Transaction{}, fmt.Errorf("%w: capture in %s, hold in %s", ErrCurrencyMismatch, in.Amount.Currency().Code(), h.Amount().Currency().Code())
 	}
 	accounts, err := store.Accounts(ctx, []ids.ID{h.AccountID()})
 	if err != nil {
@@ -173,16 +173,16 @@ func CaptureHold(ctx context.Context, store HoldStore, guard PeriodGuard, events
 	if err := store.CloseHold(ctx, captured, posted.ID); err != nil {
 		return Hold{}, Transaction{}, err
 	}
-	// su evento es hold.captured, con la transacción: el posting del capture no emite transaction.posted
+	// its event is hold.captured, with the transaction: the capture's posting does not emit transaction.posted
 	if err := events.Emit(ctx, holdEvent(typeHoldCaptured, in.LegalEntityID, captured, posted.ID)); err != nil {
 		return Hold{}, Transaction{}, err
 	}
 	return captured, posted, nil
 }
 
-// captureInput es el posting de un capture: outgoing sale del origen y entra a la contrapartida.
+// captureInput is a capture's posting: outgoing leaves the source and enters the counterpart.
 func captureInput(in CaptureInput, h Hold, outgoing money.Amount) PostInput {
-	incoming := money.New(-outgoing.Units(), outgoing.Currency()) // |outgoing| ≤ el importe del hold: no desborda
+	incoming := money.New(-outgoing.Units(), outgoing.Currency()) // |outgoing| ≤ the hold amount: no overflow
 	return PostInput{
 		LegalEntityID: in.LegalEntityID, Code: holdCaptureCode, ValueDate: in.BusinessDate, BusinessDate: in.BusinessDate,
 		Source: holdSource, ExternalRef: h.ID().String(), Actor: in.Actor, Channel: in.Channel, RuleVersion: holdCaptureRuleVersion,
@@ -190,8 +190,8 @@ func captureInput(in CaptureInput, h Hold, outgoing money.Amount) PostInput {
 	}
 }
 
-// ReleaseHold libera un hold pending: su importe sale del pendiente y el disponible vuelve. Emite
-// hold.released.
+// ReleaseHold releases a pending hold: its amount leaves the pending balance and the available balance
+// returns. It emits hold.released.
 func ReleaseHold(ctx context.Context, store HoldStore, events Events, in ReleaseInput) (Hold, error) {
 	h, err := store.LockHold(ctx, in.LegalEntityID, in.HoldID)
 	if err != nil {
@@ -219,12 +219,13 @@ func ReleaseHold(ctx context.Context, store HoldStore, events Events, in Release
 	return released, nil
 }
 
-// holdOrigin carga origen y contrapartida de un hold nuevo, que deben ser distintas, de la entidad y en
-// la moneda del hold; el origen además sync, porque solo una cuenta sync lleva su pendiente. Devuelve
-// el origen. Un hold ya guardado no se revalida: lo garantizan sus FK y holds_distinct_accounts.
+// holdOrigin loads the source and counterpart of a new hold, which must be different, of the entity and
+// in the hold's currency; the source must also be sync, because only a sync account carries its pending
+// balance. It returns the source. A stored hold is not revalidated: its FKs and holds_distinct_accounts
+// guarantee it.
 func holdOrigin(ctx context.Context, store PostingStore, in PlaceHoldInput) (domain.Account, error) {
 	if in.AccountID == in.CounterAccountID {
-		return domain.Account{}, fmt.Errorf("%w: origen y contrapartida son la misma cuenta", domain.ErrInvalidHold)
+		return domain.Account{}, fmt.Errorf("%w: source and counterpart are the same account", domain.ErrInvalidHold)
 	}
 	accounts, err := store.Accounts(ctx, []ids.ID{in.AccountID, in.CounterAccountID})
 	if err != nil {
@@ -236,24 +237,24 @@ func holdOrigin(ctx context.Context, store PostingStore, in PlaceHoldInput) (dom
 			return domain.Account{}, fmt.Errorf("%w: %s", ErrAccountNotFound, id)
 		}
 		if a.Currency != in.Amount.Currency() {
-			return domain.Account{}, fmt.Errorf("%w: cuenta %s en %s, hold en %s", ErrCurrencyMismatch, a.Code, a.Currency.Code(), in.Amount.Currency().Code())
+			return domain.Account{}, fmt.Errorf("%w: account %s in %s, hold in %s", ErrCurrencyMismatch, a.Code, a.Currency.Code(), in.Amount.Currency().Code())
 		}
 	}
 	origin := accounts[in.AccountID]
 	if origin.Mode != domain.BalanceModeSync {
-		return domain.Account{}, fmt.Errorf("%w: la cuenta %s es async y no lleva pendiente", domain.ErrInvalidHold, origin.Code)
+		return domain.Account{}, fmt.Errorf("%w: account %s is async and carries no pending balance", domain.ErrInvalidHold, origin.Code)
 	}
 	return origin, nil
 }
 
-// outgoingOf es amount con el signo con que sale de a: crédito en una cuenta de naturaleza débito,
-// débito en una de naturaleza crédito.
+// outgoingOf is amount with the sign with which it leaves a: a credit on a debit-normal account, a debit
+// on a credit-normal one.
 func outgoingOf(a domain.Account, amount money.Amount) money.Amount {
 	return money.New(-domain.NaturalBalance(a.Kind, amount.Units()), amount.Currency())
 }
 
-// pendingOf reparte outgoing entre los dos pendientes, que se guardan positivos: un débito va a
-// pending_debits y un crédito a pending_credits.
+// pendingOf splits outgoing between the two pending balances, which are stored positive: a debit goes to
+// pending_debits and a credit to pending_credits.
 func pendingOf(outgoing money.Amount) (debits, credits int64) {
 	if outgoing.Sign() > 0 {
 		return outgoing.Units(), 0

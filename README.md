@@ -49,8 +49,8 @@ ALUNA_DATABASE_URL="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable"
 # la API corre con el rol aluna_app, que no puede modificar ni borrar lo asentado
 ALUNA_DATABASE_URL="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable&options=-c%20role%3Daluna_app" \
 ALUNA_OIDC_ISSUER=http://localhost:8180/realms/aluna ALUNA_OIDC_AUDIENCE=aluna-api ./aluna api
-# un token del realm de prueba (usuario operador/operador), para el header Authorization: Bearer
-curl -s -d grant_type=password -d client_id=aluna-dev -d username=operador -d password=operador \
+# un token del realm de prueba (usuario operator/operator), para el header Authorization: Bearer
+curl -s -d grant_type=password -d client_id=aluna-dev -d username=operator -d password=operator \
   http://localhost:8180/realms/aluna/protocol/openid-connect/token
 ```
 

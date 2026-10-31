@@ -7,17 +7,17 @@ import (
 	"slices"
 )
 
-// ErrInvalidWeights indica pesos de reparto vacíos, negativos o que suman cero.
-var ErrInvalidWeights = errors.New("pesos de reparto inválidos")
+// ErrInvalidWeights means allocation weights that are empty, negative or add up to zero.
+var ErrInvalidWeights = errors.New("invalid allocation weights")
 
-// Allocate reparte a en partes proporcionales a weights por el método del mayor residuo: cada parte
-// recibe el piso de su cuota exacta y las unidades que sobran van de a una a las de mayor residuo; en
-// empate, a la primera. Es determinista, las partes suman exactamente a y ninguna se aleja una unidad
-// o más de su cuota exacta. Un monto negativo se reparte como su valor absoluto, con signo. Como Add,
-// rechaza el monto sin moneda.
+// Allocate splits a into parts proportional to weights using the largest remainder method: each part
+// gets the floor of its exact quota and the leftover units go one by one to the parts with the largest
+// remainder; on a tie, to the first. It is deterministic, the parts add up to exactly a and none is one
+// unit or more away from its exact quota. A negative amount is split as its absolute value, with the
+// sign. Like Add, it rejects the amount with no currency.
 func (a Amount) Allocate(weights []int64) ([]Amount, error) {
 	if a.cur.code == "" {
-		return nil, fmt.Errorf("%w: reparto de un monto sin moneda", ErrUnknownCurrency)
+		return nil, fmt.Errorf("%w: allocation of an amount with no currency", ErrUnknownCurrency)
 	}
 	total, err := totalWeight(weights)
 	if err != nil {
@@ -32,7 +32,7 @@ func (a Amount) Allocate(weights []int64) ([]Amount, error) {
 		shares[i], remainders[i] = quota.QuoRem(quota, total, new(big.Int))
 		left.Sub(left, shares[i])
 	}
-	// left < len(weights): es la suma de las partes fraccionarias.
+	// left < len(weights): it is the sum of the fractional parts.
 	order := make([]int, len(weights))
 	for i := range order {
 		order[i] = i
@@ -54,17 +54,17 @@ func (a Amount) Allocate(weights []int64) ([]Amount, error) {
 
 func totalWeight(weights []int64) (*big.Int, error) {
 	if len(weights) == 0 {
-		return nil, fmt.Errorf("%w: sin pesos", ErrInvalidWeights)
+		return nil, fmt.Errorf("%w: no weights", ErrInvalidWeights)
 	}
 	total := new(big.Int)
 	for _, w := range weights {
 		if w < 0 {
-			return nil, fmt.Errorf("%w: peso negativo %d", ErrInvalidWeights, w)
+			return nil, fmt.Errorf("%w: negative weight %d", ErrInvalidWeights, w)
 		}
 		total.Add(total, big.NewInt(w))
 	}
 	if total.Sign() == 0 {
-		return nil, fmt.Errorf("%w: los pesos suman cero", ErrInvalidWeights)
+		return nil, fmt.Errorf("%w: weights add up to zero", ErrInvalidWeights)
 	}
 	return total, nil
 }

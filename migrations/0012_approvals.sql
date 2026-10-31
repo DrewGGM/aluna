@@ -1,6 +1,6 @@
--- Solicitudes de maker-checker (FR-39, ADR-0014): un comando sensible se guarda con su payload y se
--- ejecuta cuando otra persona lo aprueba. La segregación la garantiza la base (checker <> maker) y una
--- solicitud decidida no cambia más: es evidencia de quién pidió y quién aprobó.
+-- Maker-checker requests (FR-39, ADR-0014): a sensitive command is stored with its payload and runs
+-- when another person approves it. The database guarantees segregation (checker <> maker), and a
+-- decided request never changes again: it is evidence of who asked and who approved.
 
 -- +goose Up
 CREATE TABLE approvals.requests (
@@ -11,9 +11,9 @@ CREATE TABLE approvals.requests (
     maker           text NOT NULL CHECK (maker <> ''),
     status          text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'failed')),
     checker         text,
-    reason          text,  -- por qué se rechazó
-    error           text,  -- por qué falló la ejecución aprobada; no sale por la API
-    result          jsonb, -- lo que devolvió la ejecución aprobada
+    reason          text,  -- why it was rejected
+    error           text,  -- why the approved execution failed; never exposed through the API
+    result          jsonb, -- what the approved execution returned
     created_at      timestamptz NOT NULL DEFAULT now(),
     expires_at      timestamptz NOT NULL DEFAULT now() + interval '7 days',
     decided_at      timestamptz,
@@ -30,20 +30,20 @@ CREATE INDEX requests_by_entity ON approvals.requests (legal_entity_id, created_
 CREATE FUNCTION approvals.guard_request() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP <> 'UPDATE' THEN
-        RAISE EXCEPTION 'las solicitudes de aprobación no se borran'
+        RAISE EXCEPTION 'approval requests are never deleted'
             USING ERRCODE = 'prohibited_sql_statement_attempted', TABLE = 'requests';
     END IF;
     IF OLD.status <> 'pending' THEN
-        RAISE EXCEPTION 'la solicitud % ya se decidió', OLD.id
+        RAISE EXCEPTION 'request % was already decided', OLD.id
             USING ERRCODE = 'prohibited_sql_statement_attempted', TABLE = 'requests';
     END IF;
     IF (NEW.id, NEW.legal_entity_id, NEW.kind, NEW.payload, NEW.maker, NEW.created_at, NEW.expires_at)
         IS DISTINCT FROM (OLD.id, OLD.legal_entity_id, OLD.kind, OLD.payload, OLD.maker, OLD.created_at, OLD.expires_at) THEN
-        RAISE EXCEPTION 'de la solicitud % solo cambia su decisión', OLD.id
+        RAISE EXCEPTION 'only the decision of request % can change', OLD.id
             USING ERRCODE = 'prohibited_sql_statement_attempted', TABLE = 'requests';
     END IF;
     IF OLD.expires_at <= now() THEN
-        RAISE EXCEPTION 'la solicitud % venció', OLD.id
+        RAISE EXCEPTION 'request % has expired', OLD.id
             USING ERRCODE = 'prohibited_sql_statement_attempted', TABLE = 'requests';
     END IF;
     RETURN NEW;
@@ -61,7 +61,7 @@ CREATE TRIGGER requests_not_truncated
 
 GRANT SELECT ON approvals.requests TO aluna_app;
 GRANT INSERT (id, legal_entity_id, kind, payload, maker) ON approvals.requests TO aluna_app;
--- solo las columnas de la decisión: lo que se pidió y quién lo pidió no cambian
+-- only the decision columns: what was requested and who requested it never change
 GRANT UPDATE (status, checker, reason, error, result, decided_at) ON approvals.requests TO aluna_app;
 
 -- +goose Down

@@ -19,38 +19,38 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// CommandAudit es lo que necesita la auditoría de los comandos (FR-40): el servicio que guarda los
-// registros y la Unit of Work con que se registra, en una tx aparte, un comando que no confirmó el suyo.
+// CommandAudit is what command auditing needs (FR-40): the service that stores the records and the Unit of
+// Work used to record, in a separate tx, a command that did not commit its own.
 type CommandAudit struct {
 	Records *audit.Service
 	UoW     *postgres.UnitOfWork
 }
 
-// Quién llama antes de autenticarse: un request rechazado sin token queda con este actor y rol; uno
-// autenticado, con los de su token (notePrincipal).
+// Who calls before authenticating: a request rejected without a token keeps this actor and role; an
+// authenticated one, those of its token (notePrincipal).
 const (
-	auditActor   = "anónimo"
-	auditRole    = "ninguno"
+	auditActor   = "anonymous"
+	auditRole    = "none"
 	auditChannel = "api"
 )
 
-// Resultados de un comando en su registro, además del código del problem con que se rechazó.
+// Results of a command in its record, besides the code of the problem it was rejected with.
 const (
 	resultOK     = "ok"
 	resultReplay = "replay"
-	resultError  = "error" // sin problem escrito: un panic que escapó, o un POST con ruta que no pasó por commands
+	resultError  = "error" // no problem written: an escaped panic, or a routed POST that skipped commands
 )
 
-// apartTimeout acota el registro en una tx aparte: corre después de que el request terminó y no debe
-// quedarse esperando una base caída.
+// apartTimeout bounds the record in a separate tx: it runs after the request ended and must not keep
+// waiting on a database that is down.
 const apartTimeout = 5 * time.Second
 
-var errNoAuditTrail = errors.New("comando sin rastro de auditoría")
+var errNoAuditTrail = errors.New("command without audit trail")
 
 type auditTrailKey struct{}
 
-// auditTrail es el registro de auditoría de un POST en curso. committed dice que el comando confirmó el
-// suyo en su propia transacción; rejected es el código del problem que se respondió, si hubo.
+// auditTrail is the audit record of a POST in progress. committed says the command committed its record in
+// its own transaction; rejected is the code of the problem that was answered, if any.
 type auditTrail struct {
 	records   *audit.Service
 	base      audit.Record
@@ -58,7 +58,7 @@ type auditTrail struct {
 	rejected  string
 }
 
-// auditTrailFrom es el rastro del request; sin él un comando no corre (falla cerrado).
+// auditTrailFrom is the request's trail; without it a command does not run (fail closed).
 func auditTrailFrom(ctx context.Context) (*auditTrail, error) {
 	trail, ok := ctx.Value(auditTrailKey{}).(*auditTrail)
 	if !ok {
@@ -67,8 +67,8 @@ func auditTrailFrom(ctx context.Context) (*auditTrail, error) {
 	return trail, nil
 }
 
-// record guarda en tx, la del comando, su registro con el resultado result. Si salió bien, after es el
-// resumen de la respuesta y targets los IDs que aparecen en él.
+// record stores in tx, the command's, its record with the result result. If it succeeded, after is the
+// summary of the response and targets the IDs that appear in it.
 func (t *auditTrail) record(ctx context.Context, tx postgres.Tx, resp storedResponse, result string) error {
 	r := t.base
 	r.Result = result
@@ -82,23 +82,23 @@ func (t *auditTrail) record(ctx context.Context, tx postgres.Tx, resp storedResp
 	return t.records.Record(ctx, tx, r)
 }
 
-// summaryKeys son los campos de una respuesta que pasan al after: identificadores, montos, monedas,
-// estados y fechas. El texto libre del cliente (code, source, external_ref) se queda fuera: puede traer
-// datos de personas y el registro dura 10 años.
+// summaryKeys are the response fields that go into after: identifiers, amounts, currencies, statuses and
+// dates. The client's free text (code, source, external_ref) is left out: it can carry personal data and the
+// record lasts 10 years.
 var summaryKeys = map[string]bool{
 	"id": true, "account_id": true, "counter_account_id": true, "amount": true, "captured": true, "currency": true,
 	"status": true, "kind": true, "balance_mode": true, "lower_limit": true, "value_date": true, "business_date": true,
 	"posted_at": true, "expires_at": true, "entries": true, "hold": true, "transaction": true,
 }
 
-// summaryOf es el resumen de una respuesta JSON. Los números quedan como json.Number: un monto en
-// unidades menores no pasa por float.
+// summaryOf is the summary of a JSON response. Numbers stay as json.Number: an amount in minor units never
+// goes through float.
 func summaryOf(body []byte) (map[string]any, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
 	var v map[string]any
 	if err := dec.Decode(&v); err != nil {
-		return nil, fmt.Errorf("respuesta del comando para auditar: %w", err)
+		return nil, fmt.Errorf("command response to audit: %w", err)
 	}
 	summary, _ := summarized(v).(map[string]any)
 	return summary, nil
@@ -125,8 +125,8 @@ func summarized(v any) any {
 	}
 }
 
-// idsIn son, sin repetir, los IDs de known más los del resumen v: los de los recursos y las cuentas que
-// tocó el comando.
+// idsIn are, without repeats, the IDs in known plus those in the summary v: the resources and accounts the
+// command touched.
 func idsIn(v any, known []string) map[string]bool {
 	found := map[string]bool{}
 	for _, id := range known {
@@ -152,12 +152,12 @@ func idsIn(v any, known []string) map[string]bool {
 	return found
 }
 
-// withAudit le da a cada POST con ruta su rastro de auditoría: quién, desde dónde, con qué correlación y
-// qué comando. El comando es el patrón de la ruta y se busca aquí en routes, antes del handler: withRoute
-// lo sabe solo después. Una ruta que el mux redirige a su ruta limpia (/v1//transactions,
-// redirectsToCleanPath) no lleva rastro: el comando llega en el request siguiente. Si el comando no
-// confirmó su registro (un rechazo antes de su tx, un 5xx o un panic), lo registra en una tx aparte con el
-// código del problem que se respondió; el defer lo hace aunque un panic escape de withRecovery.
+// withAudit gives every routed POST its audit trail: who, from where, with which correlation and which
+// command. The command is the route pattern and it is looked up here in routes, before the handler: withRoute
+// only knows it afterwards. A path that the mux redirects to its clean path (/v1//transactions,
+// redirectsToCleanPath) carries no trail: the command arrives in the next request. If the command did not
+// commit its record (a rejection before its tx, a 5xx or a panic), it records it in a separate tx with the
+// code of the problem that was answered; the defer does it even if a panic escapes withRecovery.
 func withAudit(a *CommandAudit, routes *http.ServeMux, log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -180,8 +180,8 @@ func withAudit(a *CommandAudit, routes *http.ServeMux, log *slog.Logger) func(ht
 	}
 }
 
-// recordApart registra en su propia transacción el comando del rastro si su tx no confirmó el registro.
-// Corre aunque el cliente ya se haya ido, con su propio límite.
+// recordApart records the trail's command in its own transaction if its tx did not commit the record. It
+// runs even if the client already left, with its own limit.
 func (a *CommandAudit) recordApart(ctx context.Context, trail *auditTrail, log *slog.Logger) {
 	if trail.committed {
 		return
@@ -195,12 +195,12 @@ func (a *CommandAudit) recordApart(ctx context.Context, trail *auditTrail, log *
 	}
 	err := a.UoW.Do(ctx, func(tx postgres.Tx) error { return a.Records.Record(ctx, tx, r) })
 	if err != nil {
-		log.LogAttrs(ctx, slog.LevelError, "auditar un comando que no confirmó",
+		log.LogAttrs(ctx, slog.LevelError, "audit a command that did not commit",
 			slog.String("command", r.Command), slog.String("request_id", r.CorrelationID), slog.String("error", err.Error()))
 	}
 }
 
-// notePrincipal anota en el rastro del request, si hay, quién lo hace: el sujeto y los roles del token.
+// notePrincipal notes in the request's trail, if any, who makes it: the subject and roles of the token.
 func notePrincipal(ctx context.Context, p access.Principal) {
 	if trail, err := auditTrailFrom(ctx); err == nil {
 		trail.base.Actor = p.Subject
@@ -210,22 +210,22 @@ func notePrincipal(ctx context.Context, p access.Principal) {
 	}
 }
 
-// noteTargets anota en el rastro del request, si hay, los IDs que nombra la ruta del comando: su registro
-// los lleva aunque se rechace.
+// noteTargets notes in the request's trail, if any, the IDs that the command's path names: its record
+// carries them even if it is rejected.
 func noteTargets(ctx context.Context, targets []string) {
 	if trail, err := auditTrailFrom(ctx); err == nil {
 		trail.base.Targets = targets
 	}
 }
 
-// noteRejection anota en el rastro del request, si hay, el código del problem que se le responde.
+// noteRejection notes in the request's trail, if any, the code of the problem it is answered with.
 func noteRejection(ctx context.Context, code string) {
 	if trail, err := auditTrailFrom(ctx); err == nil {
 		trail.rejected = code
 	}
 }
 
-// clientIP es la IP de la conexión. No se toma de X-Forwarded-For: la pone cualquiera (Q-85).
+// clientIP is the IP of the connection. It is not taken from X-Forwarded-For: anyone can set it (Q-85).
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

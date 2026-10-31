@@ -1,10 +1,10 @@
-// Package domain es el dominio del calendario (ADR-0006): días calendario, festivos de Colombia y ajuste
-// de fechas a día hábil.
+// Package domain is the calendar domain (ADR-0006): calendar days, Colombian holidays and adjustment of
+// dates to business days.
 package domain
 
 import "time"
 
-// Date es un día calendario, sin hora ni zona.
+// Date is a calendar day, with no time or zone.
 type Date struct {
 	Year  int
 	Month time.Month
@@ -18,22 +18,23 @@ func (d Date) addDays(n int) Date {
 	return Date{t.Year(), t.Month(), t.Day()}
 }
 
-// Convention es cómo se mueve una fecha que cae en un día inhábil.
+// Convention is how a date that falls on a non-business day is moved.
 type Convention string
 
-// Convenciones de ajuste de día hábil.
+// Business day adjustment conventions.
 const (
-	// Following lleva la fecha al siguiente día hábil.
+	// Following moves the date to the next business day.
 	Following Convention = "following"
-	// ModifiedFollowing la lleva al siguiente hábil, salvo que sea de otro mes: entonces al anterior.
+	// ModifiedFollowing moves it to the next business day, unless that is in another month: then to the
+	// previous one.
 	ModifiedFollowing Convention = "modified_following"
-	// Preceding la lleva al día hábil anterior.
+	// Preceding moves it to the previous business day.
 	Preceding Convention = "preceding"
-	// Unadjusted no la mueve.
+	// Unadjusted does not move it.
 	Unadjusted Convention = "unadjusted"
 )
 
-// IsBusinessDay dice si d es hábil: de lunes a viernes y no festivo.
+// IsBusinessDay reports whether d is a business day: Monday to Friday and not a holiday.
 func IsBusinessDay(d Date, isHoliday func(Date) bool) bool {
 	if wd := d.utc().Weekday(); wd == time.Saturday || wd == time.Sunday {
 		return false
@@ -41,8 +42,9 @@ func IsBusinessDay(d Date, isHoliday func(Date) bool) bool {
 	return !isHoliday(d)
 }
 
-// Adjust mueve d al día hábil que dice c; un d hábil no se mueve. No termina si isHoliday no deja ningún
-// día hábil en la dirección de búsqueda. Una convención desconocida no mueve la fecha, como Unadjusted.
+// Adjust moves d to the business day that c dictates; a d that is a business day is not moved. It does
+// not terminate if isHoliday leaves no business day in the search direction. An unknown convention does
+// not move the date, like Unadjusted.
 func Adjust(d Date, c Convention, isHoliday func(Date) bool) Date {
 	switch c {
 	case Following:
@@ -59,7 +61,7 @@ func Adjust(d Date, c Convention, isHoliday func(Date) bool) Date {
 	return d
 }
 
-// nearest es el primer día hábil desde d (inclusive) avanzando de a step días.
+// nearest is the first business day from d (inclusive), moving step days at a time.
 func nearest(d Date, step int, isHoliday func(Date) bool) Date {
 	for !IsBusinessDay(d, isHoliday) {
 		d = d.addDays(step)

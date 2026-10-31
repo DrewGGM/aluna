@@ -33,7 +33,7 @@ type event struct {
 	Data          map[string]any
 }
 
-// eventsAbout son los eventos del outbox sobre subject, en el orden en que se emitieron.
+// eventsAbout are the outbox events about subject, in the order they were emitted.
 func eventsAbout(t *testing.T, subject string) []event {
 	t.Helper()
 	rows, err := testPool.Query(t.Context(), `SELECT type, legal_entity_id, payload FROM infra.outbox
@@ -48,7 +48,7 @@ func eventsAbout(t *testing.T, subject string) []event {
 			return event{}, err
 		}
 		dec := json.NewDecoder(bytes.NewReader(payload))
-		dec.UseNumber() // los montos se comparan como el texto del JSON, sin pasar por float
+		dec.UseNumber() // amounts are compared as the JSON text, without going through float
 		return e, dec.Decode(&e.Data)
 	})
 	if err != nil {
@@ -57,7 +57,7 @@ func eventsAbout(t *testing.T, subject string) []event {
 	return events
 }
 
-// expectTypes revisa que los eventos sobre subject sean, en orden, los de los tipos want, y los devuelve.
+// expectTypes checks that the events about subject are, in order, those of types want, and returns them.
 func expectTypes(t *testing.T, subject string, want ...string) []event {
 	t.Helper()
 	events := eventsAbout(t, subject)
@@ -66,29 +66,29 @@ func expectTypes(t *testing.T, subject string, want ...string) []event {
 		got = append(got, e.Type)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("eventos de %s = %v, se esperaba %v", subject, got, want)
+		t.Fatalf("events of %s = %v, want %v", subject, got, want)
 	}
 	return events
 }
 
-// expectEntity revisa que todos los eventos sean de la entidad legal want.
+// expectEntity checks that every event belongs to legal entity want.
 func expectEntity(t *testing.T, events []event, want ids.ID) {
 	t.Helper()
 	for _, e := range events {
 		if e.LegalEntityID != want {
-			t.Errorf("%s de la entidad %s, se esperaba %s", e.Type, e.LegalEntityID, want)
+			t.Errorf("%s of entity %s, want %s", e.Type, e.LegalEntityID, want)
 		}
 	}
 }
 
-// heldElsewhere pone un hold de una hora sobre un depósito con fondos de otra entidad, y devuelve el hold
-// y la entidad.
+// heldElsewhere places a one-hour hold on a funded deposit of another entity, and returns the hold and
+// the entity.
 func heldElsewhere(t *testing.T) (hold, other ids.ID) {
 	t.Helper()
 	other = ids.New()
 	account := func(kind ledger.Kind) ledger.Account {
 		a, err := tryCreateAccount(t, ledger.CreateAccountInput{
-			LegalEntityID: other, Code: "cta-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: ledger.BalanceModeSync,
+			LegalEntityID: other, Code: "acct-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: ledger.BalanceModeSync,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -113,10 +113,10 @@ func heldElsewhere(t *testing.T) (hold, other ids.ID) {
 func txSubject(id ids.ID) string   { return "transactions/" + id.String() }
 func holdSubject(id ids.ID) string { return "holds/" + id.String() }
 
-// TestEachOperationEmitsOneEvent (FR-12): Post, Reverse, PlaceHold, Capture, Release y Expire emiten cada
-// uno exactamente un evento de su tipo, sobre la transacción o el hold que cambiaron y con su entidad. El
-// posting de un capture no emite transaction.posted: su evento es hold.captured. El lote de expiración
-// mezcla entidades: cada hold.expired sale con la del hold.
+// TestEachOperationEmitsOneEvent (FR-12): Post, Reverse, PlaceHold, Capture, Release and Expire each emit
+// exactly one event of their type, about the transaction or hold they changed and with its entity. A
+// capture's posting does not emit transaction.posted: its event is hold.captured. The expiry batch mixes
+// entities: each hold.expired goes out with the hold's.
 func TestEachOperationEmitsOneEvent(t *testing.T) {
 	deposit, clearing := fundedDeposit(t)
 	original, _ := mustPostRef(t, transfer(t, createAccount(t, ledger.KindAsset).ID, deposit.ID, ids.New().String()))
@@ -141,7 +141,7 @@ func TestEachOperationEmitsOneEvent(t *testing.T) {
 	reversals := expectTypes(t, txSubject(reversal.ID), evReversed)
 	expectEntity(t, reversals, entity)
 	if got := reversals[0].Data["reverses_id"]; got != original.ID.String() {
-		t.Errorf("reverses_id = %v, se esperaba %s", got, original.ID)
+		t.Errorf("reverses_id = %v, want %s", got, original.ID)
 	}
 	expectEntity(t, expectTypes(t, holdSubject(toCapture), evPlaced, evCaptured), entity)
 	expectTypes(t, txSubject(capture.tx.ID))
@@ -150,33 +150,33 @@ func TestEachOperationEmitsOneEvent(t *testing.T) {
 	expectEntity(t, expectTypes(t, holdSubject(elsewhere), evPlaced, evExpired), other)
 }
 
-// TestARepeatedOperationEmitsNothing: un posting repetido (FR-11) y una reversa que ya existe devuelven
-// lo que ya estaba sin emitir otra vez.
+// TestARepeatedOperationEmitsNothing: a repeated posting (FR-11) and a reversal that already exists
+// return what was already there without emitting again.
 func TestARepeatedOperationEmitsNothing(t *testing.T) {
 	deposit, _ := fundedDeposit(t)
 	in := transfer(t, createAccount(t, ledger.KindAsset).ID, deposit.ID, ids.New().String())
 	original, _ := mustPostRef(t, in)
 	if _, duplicate := mustPostRef(t, in); !duplicate {
-		t.Fatal("el segundo posting con la misma referencia no se tomó como repetido")
+		t.Fatal("the second posting with the same reference was not taken as a duplicate")
 	}
 	reversal, err := reverse(t, original.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := reverse(t, original.ID); !errors.Is(err, ledger.ErrAlreadyReversed) {
-		t.Fatalf("segunda reversa = %v, se esperaba ErrAlreadyReversed", err)
+		t.Fatalf("second reversal = %v, want ErrAlreadyReversed", err)
 	}
 
 	expectTypes(t, txSubject(original.ID), evPosted)
 	expectTypes(t, txSubject(reversal.ID), evReversed)
 }
 
-// TestARolledBackOperationEmitsNothing: el evento va en la transacción del comando; si esta se revierte,
-// no queda.
+// TestARolledBackOperationEmitsNothing: the event goes in the command's transaction; if it rolls back,
+// the event does not remain.
 func TestARolledBackOperationEmitsNothing(t *testing.T) {
 	deposit, _ := fundedDeposit(t)
 	cash := createAccount(t, ledger.KindAsset)
-	errRollback := errors.New("se revierte a propósito")
+	errRollback := errors.New("rolled back on purpose")
 	var postedID ids.ID
 	_, err := inTx(t, func(tx postgres.Tx) (struct{}, error) {
 		p, err := svc().Post(t.Context(), tx, transfer(t, cash.ID, deposit.ID, ids.New().String()))
@@ -188,19 +188,19 @@ func TestARolledBackOperationEmitsNothing(t *testing.T) {
 	})
 
 	if !errors.Is(err, errRollback) {
-		t.Fatalf("posting = %v, se esperaba el rollback", err)
+		t.Fatalf("posting = %v, want the rollback", err)
 	}
 	expectTypes(t, txSubject(postedID))
 }
 
-// TestTheEventsCarryIDsAmountsAndDates: el payload de un posting lleva su transacción, fechas y entries
-// (cuenta, monto en unidades menores y moneda), sin actor, canal ni metadata; el de un capture, el hold
-// con lo capturado y la transacción que lo asentó. Los dos son de la entidad del comando.
+// TestTheEventsCarryIDsAmountsAndDates: a posting's payload carries its transaction, dates and entries
+// (account, amount in minor units and currency), without actor, channel or metadata; a capture's, the
+// hold with what was captured and the transaction that posted it. Both belong to the command's entity.
 func TestTheEventsCarryIDsAmountsAndDates(t *testing.T) {
 	deposit, clearing := fundedDeposit(t)
 	cash := createAccount(t, ledger.KindAsset)
 	in := transfer(t, cash.ID, deposit.ID, ids.New().String())
-	in.Metadata = map[string]string{"nombre": "no va al evento"}
+	in.Metadata = map[string]string{"name": "does not go into the event"}
 	tx, _ := mustPostRef(t, in)
 	hold := mustPlaceHold(t, deposit.ID, clearing.ID, 30, time.Hour)
 	capture, err := captureHold(t, hold, 20)
@@ -219,7 +219,7 @@ func TestTheEventsCarryIDsAmountsAndDates(t *testing.T) {
 		},
 	}
 	if got.LegalEntityID != entity || !reflect.DeepEqual(got.Data, want) {
-		t.Errorf("transaction.posted de %s = %v, se esperaba %v", got.LegalEntityID, got.Data, want)
+		t.Errorf("transaction.posted of %s = %v, want %v", got.LegalEntityID, got.Data, want)
 	}
 	gotHold := expectTypes(t, holdSubject(hold), evPlaced, evCaptured)[1]
 	wantHold := map[string]any{
@@ -229,6 +229,6 @@ func TestTheEventsCarryIDsAmountsAndDates(t *testing.T) {
 		"transaction_id": capture.tx.ID.String(),
 	}
 	if gotHold.LegalEntityID != entity || !reflect.DeepEqual(gotHold.Data, wantHold) {
-		t.Errorf("hold.captured de %s = %v, se esperaba %v", gotHold.LegalEntityID, gotHold.Data, wantHold)
+		t.Errorf("hold.captured of %s = %v, want %v", gotHold.LegalEntityID, gotHold.Data, wantHold)
 	}
 }

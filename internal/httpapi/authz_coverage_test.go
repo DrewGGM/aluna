@@ -20,7 +20,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 )
 
-// testAuthorizer es la autorización de producción: la política y el contrato que viajan en el binario.
+// testAuthorizer is the production authorization: the policy and the contract shipped in the binary.
 func testAuthorizer(t *testing.T) *Authorizer {
 	t.Helper()
 	policy, err := access.ParsePolicy(config.Roles)
@@ -34,13 +34,13 @@ func testAuthorizer(t *testing.T) *Authorizer {
 	return a
 }
 
-// notOperations son las claves de una ruta del contrato que no son operaciones (OpenAPI 3.1, Path Item).
+// notOperations are the keys of a contract path that are not operations (OpenAPI 3.1, Path Item).
 var notOperations = []string{"$ref", "summary", "description", "servers", "parameters"}
 
-// specOperations son las operaciones del contrato ("POST /v1/transactions") con el x-aluna-permission que
-// declaran, vacío si no declaran ninguno. Se leen aquí por separado de NewAuthorizer y sin su lista de
-// métodos: toda clave de una ruta que no está en notOperations cuenta, así que un método que el
-// autorizador no conoce (head, options, trace) hace fallar la comparación.
+// specOperations are the contract operations ("POST /v1/transactions") with the x-aluna-permission they
+// declare, empty if they declare none. They are read here separately from NewAuthorizer and without its list
+// of methods: every key of a path that is not in notOperations counts, so a method the authorizer does not
+// know (head, options, trace) makes the comparison fail.
 func specOperations(t *testing.T) map[string]string {
 	t.Helper()
 	var doc struct {
@@ -63,26 +63,27 @@ func specOperations(t *testing.T) map[string]string {
 	return ops
 }
 
-// TestEveryOperationDeclaresAPermission (FF-8): toda operación del contrato declara x-aluna-permission, y
-// el autorizador tiene ese permiso para cada una.
+// TestEveryOperationDeclaresAPermission (FF-8): every contract operation declares x-aluna-permission, and the
+// authorizer has that permission for each one.
 func TestEveryOperationDeclaresAPermission(t *testing.T) {
 	ops := specOperations(t)
 	if len(ops) == 0 {
-		t.Fatal("el contrato no tiene operaciones")
+		t.Fatal("the contract has no operations")
 	}
 	for op, permission := range ops {
 		if permission == "" {
-			t.Errorf("%s no declara x-aluna-permission", op)
+			t.Errorf("%s does not declare x-aluna-permission", op)
 		}
 	}
 
 	if got := testAuthorizer(t).permissions; !maps.Equal(got, ops) {
-		t.Fatalf("permisos del autorizador = %v, el contrato declara %v", got, ops)
+		t.Fatalf("authorizer permissions = %v, the contract declares %v", got, ops)
 	}
 }
 
-// TestThePermissionTableMatchesTheMux: cada operación de la tabla del autorizador es el patrón con que el
-// mux de Routes enruta su request; si no, el permiso no se encontraría y la ruta se negaría.
+// TestThePermissionTableMatchesTheMux: every operation in the authorizer's table is the pattern with which
+// the Routes mux routes its request; otherwise, the permission would not be found and the route would be
+// denied.
 func TestThePermissionTableMatchesTheMux(t *testing.T) {
 	mux := http.NewServeMux()
 	Routes(API{}, slog.New(slog.NewJSONHandler(io.Discard, nil)))(mux)
@@ -91,20 +92,21 @@ func TestThePermissionTableMatchesTheMux(t *testing.T) {
 		method, path, _ := strings.Cut(op, " ")
 		req := httptest.NewRequest(method, withIDs(path), nil)
 		if _, pattern := mux.Handler(req); pattern != op {
-			t.Errorf("%s llega al mux como %q", op, pattern)
+			t.Errorf("%s reaches the mux as %q", op, pattern)
 		}
 	}
 }
 
-// withIDs es path con un ID nuevo en cada parámetro ({id}, {hold_id}).
+// withIDs is path with a new ID in each parameter ({id}, {hold_id}).
 func withIDs(path string) string {
 	return pathParam.ReplaceAllStringFunc(path, func(string) string { return ids.New().String() })
 }
 
 var pathParam = regexp.MustCompile(`\{[^}]+\}`)
 
-// TestTheRolesOfThePolicy: config/roles.yaml define los seis roles de ADR-0014 y solo da permisos que el
-// contrato declara: un permiso mal escrito no queda dando nada sin que nadie lo note.
+// TestTheRolesOfThePolicy: config/roles.yaml defines the six roles of ADR-0014 and only grants permissions
+// the contract declares: a misspelled permission does not sit there granting nothing without anyone
+// noticing.
 func TestTheRolesOfThePolicy(t *testing.T) {
 	policy, err := access.ParsePolicy(config.Roles)
 	if err != nil {
@@ -113,20 +115,21 @@ func TestTheRolesOfThePolicy(t *testing.T) {
 	declared := slices.Collect(maps.Values(specOperations(t)))
 
 	if want := []string{"auditor", "channel", "compliance", "finance", "operator", "system"}; !slices.Equal(policy.Roles(), want) {
-		t.Errorf("roles = %v, se esperaba %v", policy.Roles(), want)
+		t.Errorf("roles = %v, want %v", policy.Roles(), want)
 	}
 	for _, permission := range policy.Permissions() {
 		if !slices.Contains(declared, permission) {
-			t.Errorf("config/roles.yaml da %s, que ninguna operación del contrato declara", permission)
+			t.Errorf("config/roles.yaml grants %s, which no contract operation declares", permission)
 		}
 	}
 }
 
-// TestAnOperationWithoutPermissionIsRejected: un contrato con una operación sin permiso no se autoriza.
+// TestAnOperationWithoutPermissionIsRejected: a contract with an operation without a permission is not
+// authorized.
 func TestAnOperationWithoutPermissionIsRejected(t *testing.T) {
 	spec := []byte("paths:\n  /v1/x:\n    get:\n      operationId: x\n")
 
 	if _, err := NewAuthorizer(spec, &access.Policy{}); !errors.Is(err, errNoPermission) {
-		t.Fatalf("= %v, se esperaba errNoPermission", err)
+		t.Fatalf("= %v, want errNoPermission", err)
 	}
 }

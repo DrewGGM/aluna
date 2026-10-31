@@ -1,10 +1,10 @@
-// Package config es la configuración que viaja dentro del binario: un cambio pasa por revisión y por una
-// versión nueva, nunca por un archivo editado en el servidor.
+// Package config is the configuration that ships inside the binary: a change goes through review and a new
+// release, never through a file edited on the server.
 package config
 
 import _ "embed"
 
-// Roles es config/roles.yaml, la política de roles y permisos (ADR-0014).
+// Roles is config/roles.yaml, the role and permission policy (ADR-0014).
 //
 //go:embed roles.yaml
 var Roles []byte

@@ -14,7 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// keepGlobals restaura al terminar la prueba lo que Setup cambia en el estado global de OTel.
+// keepGlobals restores, when the test ends, what Setup changes in OTel's global state.
 func keepGlobals(t *testing.T) {
 	t.Helper()
 	tracer, meter, propagator := otel.GetTracerProvider(), otel.GetMeterProvider(), otel.GetTextMapPropagator()
@@ -36,19 +36,19 @@ func TestSetupWithoutEndpointLogsJSONWithTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, isSDK := otel.GetTracerProvider().(*sdktrace.TracerProvider); isSDK {
-		t.Fatal("sin OTEL_EXPORTER_OTLP_ENDPOINT, OTel debe quedar en no-op")
+		t.Fatal("without OTEL_EXPORTER_OTLP_ENDPOINT, OTel must stay no-op")
 	}
 	sc := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID: trace.TraceID{1, 2, 3}, SpanID: trace.SpanID{4, 5, 6}, TraceFlags: trace.FlagsSampled,
 	})
 
-	log.InfoContext(trace.ContextWithSpanContext(t.Context(), sc), "hola", "k", "v")
+	log.InfoContext(trace.ContextWithSpanContext(t.Context(), sc), "hello", "k", "v")
 
 	var entry map[string]any
 	if err := json.Unmarshal(out.Bytes(), &entry); err != nil {
-		t.Fatalf("el log debe ser una línea JSON: %v (%s)", err, out.String())
+		t.Fatalf("the log must be one JSON line: %v (%s)", err, out.String())
 	}
-	if entry["msg"] != "hola" || entry["k"] != "v" || entry["trace_id"] != sc.TraceID().String() || entry["span_id"] != sc.SpanID().String() {
+	if entry["msg"] != "hello" || entry["k"] != "v" || entry["trace_id"] != sc.TraceID().String() || entry["span_id"] != sc.SpanID().String() {
 		t.Fatalf("log = %v", entry)
 	}
 	if err := shutdown(t.Context()); err != nil {
@@ -64,15 +64,15 @@ func TestOTelErrorsGoToTheLog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	otel.Handle(errors.New("colector caído"))
+	otel.Handle(errors.New("collector down"))
 
 	var entry map[string]any
-	if err := json.Unmarshal(out.Bytes(), &entry); err != nil || entry["level"] != "ERROR" || entry["error"] != "colector caído" {
-		t.Fatalf("el error de OTel debe salir como una línea JSON de error: %v (%s)", err, out.String())
+	if err := json.Unmarshal(out.Bytes(), &entry); err != nil || entry["level"] != "ERROR" || entry["error"] != "collector down" {
+		t.Fatalf("the OTel error must come out as a JSON error line: %v (%s)", err, out.String())
 	}
 }
 
-// TestSetupExportsOverOTLP: con endpoint, las trazas y las métricas salen por OTLP/HTTP al apagar.
+// TestSetupExportsOverOTLP: with an endpoint, traces and metrics go out over OTLP/HTTP on shutdown.
 func TestSetupExportsOverOTLP(t *testing.T) {
 	var mu sync.Mutex
 	received := map[string]bool{}
@@ -89,9 +89,9 @@ func TestSetupExportsOverOTLP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, span := otel.Tracer("prueba").Start(t.Context(), "operación")
+	_, span := otel.Tracer("test").Start(t.Context(), "operation")
 	span.End()
-	counter, err := otel.Meter("prueba").Int64Counter("prueba.contador")
+	counter, err := otel.Meter("test").Int64Counter("test.counter")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +103,6 @@ func TestSetupExportsOverOTLP(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if !received["/v1/traces"] || !received["/v1/metrics"] {
-		t.Fatalf("el colector recibió %v, se esperaban /v1/traces y /v1/metrics", received)
+		t.Fatalf("the collector received %v, want /v1/traces and /v1/metrics", received)
 	}
 }

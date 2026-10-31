@@ -17,7 +17,8 @@ import (
 
 var testPool *pgxpool.Pool
 
-// TestMain usa ALUNA_TEST_DATABASE_URL si existe (CI) y si no levanta PostgreSQL 16 con testcontainers.
+// TestMain uses ALUNA_TEST_DATABASE_URL if set (CI) and otherwise starts PostgreSQL 16 with
+// testcontainers.
 func TestMain(m *testing.M) {
 	os.Exit(runWithDatabase(m))
 }
@@ -30,12 +31,12 @@ func runWithDatabase(m *testing.M) int {
 			tcpostgres.WithDatabase("aluna_test"), tcpostgres.WithUsername("aluna"), tcpostgres.WithPassword("aluna"),
 			tcpostgres.BasicWaitStrategies())
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "levantar PostgreSQL:", err)
+			fmt.Fprintln(os.Stderr, "start PostgreSQL:", err)
 			return 1
 		}
-		defer container.Terminate(ctx) //nolint:errcheck // el contenedor lo recoge Ryuk si falla
+		defer container.Terminate(ctx) //nolint:errcheck // Ryuk reaps the container if this fails
 		if dsn, err = container.ConnectionString(ctx, "sslmode=disable"); err != nil {
-			fmt.Fprintln(os.Stderr, "dirección de PostgreSQL:", err)
+			fmt.Fprintln(os.Stderr, "PostgreSQL address:", err)
 			return 1
 		}
 	}
@@ -46,14 +47,14 @@ func runWithDatabase(m *testing.M) int {
 	}
 	defer pool.Close()
 	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS uow_probe; CREATE TABLE uow_probe (id int PRIMARY KEY)`); err != nil {
-		fmt.Fprintln(os.Stderr, "crear tabla de prueba:", err)
+		fmt.Fprintln(os.Stderr, "create test table:", err)
 		return 1
 	}
 	testPool = pool
 	return m.Run()
 }
 
-// cleanProbes vacía la tabla al terminar cada prueba, así las pruebas se pueden repetir con -count.
+// cleanProbes empties the table when each test ends, so the tests can be repeated with -count.
 func cleanProbes(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
@@ -86,7 +87,7 @@ func TestOpenSetsSessionLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got != value {
-			t.Errorf("%s = %q, se esperaba %q", setting, got, value)
+			t.Errorf("%s = %q, want %q", setting, got, value)
 		}
 	}
 }
@@ -106,17 +107,17 @@ func TestDoCommitsAndUsesReadCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if isolation != "read committed" {
-		t.Errorf("aislamiento = %q, se esperaba read committed", isolation)
+		t.Errorf("isolation = %q, want read committed", isolation)
 	}
 	if !probeExists(t, 1) {
-		t.Error("el commit no quedó visible")
+		t.Error("the commit is not visible")
 	}
 }
 
 func TestDoRollsBackOnError(t *testing.T) {
 	cleanProbes(t)
 	ctx := context.Background()
-	errBusiness := errors.New("saldo insuficiente")
+	errBusiness := errors.New("insufficient funds")
 
 	err := NewUnitOfWork(testPool).Do(ctx, func(tx Tx) error {
 		if err := insertProbe(ctx, tx, 2); err != nil {
@@ -126,10 +127,10 @@ func TestDoRollsBackOnError(t *testing.T) {
 	})
 
 	if !errors.Is(err, errBusiness) {
-		t.Fatalf("error = %v, se esperaba el de fn", err)
+		t.Fatalf("error = %v, want fn's", err)
 	}
 	if probeExists(t, 2) {
-		t.Error("el rollback dejó la fila")
+		t.Error("the rollback left the row")
 	}
 }
 
@@ -138,10 +139,10 @@ func TestDoRollsBackOnPanicAndRepanics(t *testing.T) {
 	ctx := context.Background()
 	defer func() {
 		if got := recover(); got != "boom" {
-			t.Fatalf("panic = %v, se esperaba que Do relanzara \"boom\"", got)
+			t.Fatalf("panic = %v, want Do to re-panic with \"boom\"", got)
 		}
 		if probeExists(t, 3) {
-			t.Error("el rollback dejó la fila")
+			t.Error("the rollback left the row")
 		}
 	}()
 
@@ -151,7 +152,7 @@ func TestDoRollsBackOnPanicAndRepanics(t *testing.T) {
 		}
 		panic("boom")
 	})
-	t.Fatalf("Do debió relanzar el panic; devolvió %v", err)
+	t.Fatalf("Do should have re-panicked; it returned %v", err)
 }
 
 func TestDoRetriesDeadlockOnce(t *testing.T) {
@@ -165,16 +166,16 @@ func TestDoRetriesDeadlockOnce(t *testing.T) {
 			return err
 		}
 		if calls == 1 {
-			return fmt.Errorf("débito: %w", &pgconn.PgError{Code: "40P01"})
+			return fmt.Errorf("debit: %w", &pgconn.PgError{Code: "40P01"})
 		}
 		return nil
 	})
 
 	if err != nil || calls != 2 {
-		t.Fatalf("error = %v, intentos = %d; se esperaba éxito en el segundo", err, calls)
+		t.Fatalf("error = %v, attempts = %d; want success on the second", err, calls)
 	}
 	if !probeExists(t, 4) {
-		t.Error("el reintento no quedó visible")
+		t.Error("the retry is not visible")
 	}
 }
 
@@ -188,7 +189,7 @@ func TestDoGivesUpAfterThreeAttempts(t *testing.T) {
 
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "40001" || calls != maxAttempts {
-		t.Fatalf("error = %v, intentos = %d; se esperaban %d intentos y el 40001", err, calls, maxAttempts)
+		t.Fatalf("error = %v, attempts = %d; want %d attempts and the 40001", err, calls, maxAttempts)
 	}
 }
 
@@ -201,12 +202,12 @@ func TestDoDoesNotRetryOtherErrors(t *testing.T) {
 	})
 
 	if err == nil || calls != 1 {
-		t.Fatalf("error = %v, intentos = %d; una violación de unicidad no se reintenta", err, calls)
+		t.Fatalf("error = %v, attempts = %d; a unique violation is not retried", err, calls)
 	}
 }
 
-// TestDoRollsBackWhenFnExitsGoroutine prueba el caso de un t.Fatal dentro de fn: runtime.Goexit no es
-// un panic, y la transacción no puede quedar abierta reteniendo la conexión.
+// TestDoRollsBackWhenFnExitsGoroutine covers a t.Fatal inside fn: runtime.Goexit is not a panic, and the
+// transaction must not stay open holding the connection.
 func TestDoRollsBackWhenFnExitsGoroutine(t *testing.T) {
 	cleanProbes(t)
 	ctx := context.Background()
@@ -221,14 +222,14 @@ func TestDoRollsBackWhenFnExitsGoroutine(t *testing.T) {
 			runtime.Goexit()
 			return nil
 		})
-		t.Errorf("Do no debió volver: fn terminó la goroutine (devolvió %v)", err)
+		t.Errorf("Do should not have returned: fn ended the goroutine (returned %v)", err)
 	}()
 	<-done
 
 	if probeExists(t, 5) {
-		t.Error("el rollback dejó la fila")
+		t.Error("the rollback left the row")
 	}
 	if acquired := testPool.Stat().AcquiredConns(); acquired != 0 {
-		t.Errorf("quedaron %d conexiones tomadas del pool", acquired)
+		t.Errorf("%d pool connections left acquired", acquired)
 	}
 }

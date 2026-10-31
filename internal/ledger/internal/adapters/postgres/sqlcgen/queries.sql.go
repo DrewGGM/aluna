@@ -26,7 +26,7 @@ type AccountOfEntityRow struct {
 	LedgerAccount LedgerAccount
 }
 
-// Las lecturas por ID filtran por entidad: lo ajeno se ve igual que lo que no existe.
+// Reads by ID filter by entity: another entity's rows look the same as missing ones.
 func (q *Queries) AccountOfEntity(ctx context.Context, arg AccountOfEntityParams) (AccountOfEntityRow, error) {
 	row := q.db.QueryRow(ctx, accountOfEntity, arg.ID, arg.LegalEntityID)
 	var i AccountOfEntityRow
@@ -135,11 +135,11 @@ type AsyncEntriesAfterRow struct {
 	Amount     int64
 }
 
-// Entries de cuentas async después del cursor, en orden de (posted_xact, id), solo de transacciones de
-// base anteriores a la más vieja en curso: esas ya confirmaron o abortaron y no suman entries. Recorre
-// transactions por posted_xact y lee los entries de cada una por transaction_id: unidos directo, el
-// planner entra por la cuenta async y lee su historia completa en cada lote. OFFSET 0 impide que
-// aplane la subconsulta y vuelva a ese plan.
+// Async account entries after the cursor, in (posted_xact, id) order, only from database transactions
+// older than the oldest one in progress: those have already committed or aborted and add no entries. It
+// walks transactions by posted_xact and reads each one's entries by transaction_id: with a direct join,
+// the planner enters through the async account and reads its whole history on every batch. OFFSET 0
+// keeps it from flattening the subquery and going back to that plan.
 func (q *Queries) AsyncEntriesAfter(ctx context.Context, arg AsyncEntriesAfterParams) ([]AsyncEntriesAfterRow, error) {
 	rows, err := q.db.Query(ctx, asyncEntriesAfter, arg.PostedXact, arg.EntryID, arg.Batch)
 	if err != nil {
@@ -301,7 +301,7 @@ type InsertEntriesParams struct {
 	Amounts       []int64
 }
 
-// Los entries no llevan entidad, fecha valor ni posted_at: los copia entries_stamp de la transacción.
+// Entries carry no entity, value date or posted_at: entries_stamp copies them from the transaction.
 func (q *Queries) InsertEntries(ctx context.Context, arg InsertEntriesParams) error {
 	_, err := q.db.Exec(ctx, insertEntries,
 		arg.TransactionID,
@@ -393,7 +393,8 @@ type LockAsyncCursorRow struct {
 	EntryID    int64
 }
 
-// Serializa los agregadores: el segundo espera y, al bloquear, lee el cursor que dejó el primero.
+// Serializes the aggregators: the second one waits and, once it gets the lock, reads the cursor the
+// first one left.
 func (q *Queries) LockAsyncCursor(ctx context.Context) (LockAsyncCursorRow, error) {
 	row := q.db.QueryRow(ctx, lockAsyncCursor)
 	var i LockAsyncCursorRow
@@ -416,8 +417,8 @@ type LockBalancesRow struct {
 	PendingCredits int64
 }
 
-// Bloquea los saldos en orden de account_id (ADR-0004): dos postings sobre las mismas cuentas toman
-// los locks en el mismo orden y no se bloquean en ciclo.
+// Locks the balances in account_id order (ADR-0004): two postings on the same accounts take the locks
+// in the same order and never deadlock.
 func (q *Queries) LockBalances(ctx context.Context, accountIds []ids.ID) ([]LockBalancesRow, error) {
 	rows, err := q.db.Query(ctx, lockBalances, accountIds)
 	if err != nil {
@@ -468,9 +469,9 @@ type LockDueHoldsRow struct {
 	ExpiresAt        time.Time
 }
 
-// Lote de la expiración: los vencidos (expires_at anterior a now, como en Hold.Expire) más antiguos
-// primero, por el índice parcial de pending. SKIP LOCKED salta los que tiene bloqueados un capture o un
-// release en curso, que deciden su resultado.
+// Expiry batch: overdue holds (expires_at before now, as in Hold.Expire), oldest first, through the
+// partial index on pending. SKIP LOCKED skips those locked by a capture or release in progress, which
+// decides their outcome.
 func (q *Queries) LockDueHolds(ctx context.Context, arg LockDueHoldsParams) ([]LockDueHoldsRow, error) {
 	rows, err := q.db.Query(ctx, lockDueHolds, arg.Now, arg.Batch)
 	if err != nil {
@@ -523,7 +524,7 @@ type LockHoldRow struct {
 	ExpiresAt        time.Time
 }
 
-// Bloquea el hold antes que los saldos (ADR-0004). Lo de otra entidad se ve igual que lo inexistente.
+// Locks the hold before the balances (ADR-0004). Another entity's hold looks the same as a missing one.
 func (q *Queries) LockHold(ctx context.Context, arg LockHoldParams) (LockHoldRow, error) {
 	row := q.db.QueryRow(ctx, lockHold, arg.ID, arg.LegalEntityID)
 	var i LockHoldRow
@@ -568,9 +569,9 @@ type PostedAsOfParams struct {
 	AsKnownAt     pgtype.Timestamptz
 }
 
-// Saldo bitemporal (FR-8): entries con fecha valor hasta as_of_value_date y asentados hasta as_known_at;
-// un parámetro nulo no filtra ese eje. Recorre por índice los entries de la cuenta y lee cada uno del
-// heap (amount no está en el índice): cuesta lo que la historia de la cuenta.
+// Bitemporal balance (FR-8): entries with a value date up to as_of_value_date and posted up to
+// as_known_at; a null parameter does not filter that axis. It walks the account's entries by index and
+// reads each one from the heap (amount is not in the index): it costs as much as the account's history.
 func (q *Queries) PostedAsOf(ctx context.Context, arg PostedAsOfParams) (int64, error) {
 	row := q.db.QueryRow(ctx, postedAsOf, arg.AccountID, arg.AsOfValueDate, arg.AsKnownAt)
 	var posted int64

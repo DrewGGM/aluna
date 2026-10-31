@@ -30,8 +30,8 @@ func inTx(ctx context.Context, fn func(tx postgres.Tx) error) error {
 	return postgres.NewUnitOfWork(testPool).Do(ctx, fn)
 }
 
-// claim hace lo que hará el middleware HTTP en una transacción: reclama la clave y, si es nueva,
-// guarda status y body como su respuesta.
+// claim does what the HTTP middleware will do in a transaction: it claims the key and, if it is new,
+// stores status and body as its response.
 func claim(ctx context.Context, s *Store, scope, key string, hash [32]byte, status int, body []byte) (Claim, error) {
 	var c Claim
 	err := inTx(ctx, func(tx postgres.Tx) error {
@@ -44,24 +44,24 @@ func claim(ctx context.Context, s *Store, scope, key string, hash [32]byte, stat
 	return c, err
 }
 
-// mustClaimFresh reclama una clave que debe ser nueva y guarda su respuesta.
+// mustClaimFresh claims a key that must be new and stores its response.
 func mustClaimFresh(t *testing.T, s *Store, key string, hash [32]byte, status int, body string) {
 	t.Helper()
 	if c, err := claim(t.Context(), s, txScope, key, hash, status, []byte(body)); err != nil || !c.Fresh {
-		t.Fatalf("Claim de una clave nueva = %+v, %v; se esperaba Fresh", c, err)
+		t.Fatalf("Claim of a new key = %+v, %v; want Fresh", c, err)
 	}
 }
 
 func TestReplayReturnsTheStoredResponse(t *testing.T) {
 	s := NewStore(testPool)
-	for _, status := range []int{200, 201, 422, 499} { // 2xx y 4xx de negocio se guardan
+	for _, status := range []int{200, 201, 422, 499} { // business 2xx and 4xx are stored
 		key := ids.New().String()
 		mustClaimFresh(t, s, key, hashOf("a"), status, `{"id":"1"}`)
 
 		c, err := claim(t.Context(), s, txScope, key, hashOf("a"), 500, nil)
 
 		if err != nil || c.Fresh || c.Status != status || string(c.Body) != `{"id":"1"}` {
-			t.Errorf("replay de un %d = %+v, %v; se esperaba la respuesta guardada", status, c, err)
+			t.Errorf("replay of a %d = %+v, %v; want the stored response", status, c, err)
 		}
 	}
 }
@@ -75,7 +75,7 @@ func TestAResponseWithoutBodyIsStored(t *testing.T) {
 	c, err := claim(t.Context(), s, txScope, key, hashOf("a"), 500, nil)
 
 	if err != nil || c.Fresh || c.Status != 204 || len(c.Body) != 0 {
-		t.Fatalf("replay de un 204 = %+v, %v", c, err)
+		t.Fatalf("replay of a 204 = %+v, %v", c, err)
 	}
 }
 
@@ -84,7 +84,7 @@ func TestSameKeyWithAnotherPayloadIsRejected(t *testing.T) {
 	mustClaimFresh(t, s, key, hashOf("a"), 201, `{}`)
 
 	if _, err := claim(t.Context(), s, txScope, key, hashOf("b"), 201, nil); !errors.Is(err, ErrKeyReused) {
-		t.Fatalf("otro payload con la misma clave = %v, se esperaba ErrKeyReused", err)
+		t.Fatalf("another payload with the same key = %v, want ErrKeyReused", err)
 	}
 }
 
@@ -95,20 +95,19 @@ func TestTheSameKeyInAnotherScopeIsIndependent(t *testing.T) {
 	c, err := claim(t.Context(), s, "POST /v1/ledger-accounts", key, hashOf("b"), 201, nil)
 
 	if err != nil || !c.Fresh {
-		t.Fatalf("la misma clave en otro scope = %+v, %v; se esperaba Fresh", c, err)
+		t.Fatalf("the same key in another scope = %+v, %v; want Fresh", c, err)
 	}
 }
 
-// holdClaim reclama key en una transacción que sigue abierta hasta que se cierra release; entonces
-// termina con finish. Vuelve cuando la clave ya está reclamada; el resultado de la transacción llega
-// por el canal.
+// holdClaim claims key in a transaction that stays open until release is closed; then it finishes with
+// finish. It returns once the key is claimed; the transaction's result arrives on the channel.
 func holdClaim(t *testing.T, s *Store, key string, release <-chan struct{}, finish func(tx postgres.Tx) error) <-chan error {
 	t.Helper()
 	claimed, done := make(chan struct{}), make(chan error, 1)
 	go func() {
 		done <- inTx(t.Context(), func(tx postgres.Tx) error {
 			if c, err := s.Claim(t.Context(), tx, txScope, key, hashOf("a")); err != nil || !c.Fresh {
-				return errors.Join(err, errors.New("la primera debía ser Fresh"))
+				return errors.Join(err, errors.New("the first one should be Fresh"))
 			}
 			close(claimed)
 			<-release
@@ -118,7 +117,7 @@ func holdClaim(t *testing.T, s *Store, key string, release <-chan struct{}, fini
 	select {
 	case <-claimed:
 	case err := <-done:
-		t.Fatalf("la primera transacción no reclamó la clave: %v", err)
+		t.Fatalf("the first transaction did not claim the key: %v", err)
 	}
 	return done
 }
@@ -129,33 +128,33 @@ func complete201(s *Store, key string) func(tx postgres.Tx) error {
 	}
 }
 
-// TestConcurrentClaimIsInProgress: si la primera transacción no termina dentro del lock_timeout del
-// pool (2 s), la segunda no repite el efecto: recibe ErrInProgress.
+// TestConcurrentClaimIsInProgress: if the first transaction does not finish within the pool's
+// lock_timeout (2 s), the second does not repeat the effect: it gets ErrInProgress.
 func TestConcurrentClaimIsInProgress(t *testing.T) {
 	s, key, release := NewStore(testPool), ids.New().String(), make(chan struct{})
 	first := holdClaim(t, s, key, release, complete201(s, key))
 
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // Claim no debe esperar sin límite
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // Claim must not wait indefinitely
 	defer cancel()
 	_, err := claim(ctx, s, txScope, key, hashOf("a"), 201, nil)
 	close(release)
 
 	if !errors.Is(err, ErrInProgress) {
-		t.Fatalf("Claim concurrente = %v, se esperaba ErrInProgress", err)
+		t.Fatalf("concurrent Claim = %v, want ErrInProgress", err)
 	}
 	if err := <-first; err != nil {
 		t.Fatal(err)
 	}
 	if c, err := claim(t.Context(), s, txScope, key, hashOf("a"), 500, nil); err != nil || c.Fresh || c.Status != 201 {
-		t.Fatalf("después de la primera = %+v, %v; se esperaba su respuesta", c, err)
+		t.Fatalf("after the first one = %+v, %v; want its response", c, err)
 	}
 }
 
-// TestAConcurrentClaimWaitsForAShortFirst: si la primera termina dentro del lock_timeout, la segunda
-// espera y recibe su respuesta; si la primera se revierte, la segunda queda como nueva.
+// TestAConcurrentClaimWaitsForAShortFirst: if the first one finishes within the lock_timeout, the second
+// waits and gets its response; if the first one rolls back, the second is treated as new.
 func TestAConcurrentClaimWaitsForAShortFirst(t *testing.T) {
 	s := NewStore(testPool)
-	rollback := func(postgres.Tx) error { return errors.New("el comando falló") }
+	rollback := func(postgres.Tx) error { return errors.New("the command failed") }
 	for name, tc := range map[string]struct {
 		rollback  bool
 		wantFresh bool
@@ -175,18 +174,18 @@ func TestAConcurrentClaimWaitsForAShortFirst(t *testing.T) {
 			c, err := claim(t.Context(), s, txScope, key, hashOf("a"), 201, []byte(`{}`))
 
 			if firstErr := <-first; (firstErr != nil) != tc.rollback {
-				t.Fatalf("la primera transacción = %v", firstErr)
+				t.Fatalf("the first transaction = %v", firstErr)
 			}
 			if err != nil || c.Fresh != tc.wantFresh || (!c.Fresh && c.Status != 201) {
-				t.Fatalf("la segunda = %+v, %v; se esperaba Fresh = %v", c, err, tc.wantFresh)
+				t.Fatalf("the second one = %+v, %v; want Fresh = %v", c, err, tc.wantFresh)
 			}
 		})
 	}
 }
 
-// TestALockedStoredKeyIsInProgress: si otra transacción tiene la fila bloqueada, el reintento no lee
-// una respuesta que puede desaparecer: ErrInProgress. Con FOR UPDATE responde de inmediato (NOWAIT);
-// con un DELETE en curso (una purga), tras el lock_timeout del pool.
+// TestALockedStoredKeyIsInProgress: if another transaction has the row locked, the retry does not read a
+// response that may vanish: ErrInProgress. With FOR UPDATE it answers immediately (NOWAIT); with an
+// ongoing DELETE (a purge), after the pool's lock_timeout.
 func TestALockedStoredKeyIsInProgress(t *testing.T) {
 	s := NewStore(testPool)
 	for name, lock := range map[string]string{
@@ -200,13 +199,13 @@ func TestALockedStoredKeyIsInProgress(t *testing.T) {
 			defer unlock()
 
 			if _, err := claim(t.Context(), s, txScope, key, hashOf("a"), 201, nil); !errors.Is(err, ErrInProgress) {
-				t.Fatalf("Claim sobre una fila bloqueada = %v, se esperaba ErrInProgress", err)
+				t.Fatalf("Claim on a locked row = %v, want ErrInProgress", err)
 			}
 		})
 	}
 }
 
-// lockRow corre sql sobre key en una transacción que queda abierta hasta llamar la función que devuelve.
+// lockRow runs sql on key in a transaction that stays open until the returned function is called.
 func lockRow(t *testing.T, sql, key string) func() {
 	t.Helper()
 	locker, err := testPool.Begin(t.Context())
@@ -216,11 +215,11 @@ func lockRow(t *testing.T, sql, key string) func() {
 	if _, err := locker.Exec(t.Context(), sql, key); err != nil {
 		t.Fatal(err)
 	}
-	return func() { locker.Rollback(context.Background()) } //nolint:errcheck,gosec // solo suelta el lock
+	return func() { locker.Rollback(context.Background()) } //nolint:errcheck,gosec // only releases the lock
 }
 
-// TestAClaimMustBeCompletedToCommit: una clave reclamada y no completada no puede quedar guardada, o
-// cada reintento sería ErrInProgress hasta la purga.
+// TestAClaimMustBeCompletedToCommit: a claimed key that was not completed cannot stay stored, or every
+// retry would be ErrInProgress until the purge.
 func TestAClaimMustBeCompletedToCommit(t *testing.T) {
 	s, key := NewStore(testPool), ids.New().String()
 	err := inTx(t.Context(), func(tx postgres.Tx) error {
@@ -228,7 +227,7 @@ func TestAClaimMustBeCompletedToCommit(t *testing.T) {
 		return err
 	})
 	if err == nil {
-		t.Fatal("el commit de un Claim sin Complete debe fallar")
+		t.Fatal("committing a Claim without Complete must fail")
 	}
 	mustClaimFresh(t, s, key, hashOf("a"), 201, `{}`)
 }
@@ -240,7 +239,7 @@ func TestClaimTwiceInTheSameTransaction(t *testing.T) {
 			return err
 		}
 		if _, err := s.Claim(t.Context(), tx, txScope, key, hashOf("a")); !errors.Is(err, ErrInProgress) {
-			t.Errorf("segundo Claim en la misma transacción = %v, se esperaba ErrInProgress", err)
+			t.Errorf("second Claim in the same transaction = %v, want ErrInProgress", err)
 		}
 		return s.Complete(t.Context(), tx, txScope, key, 201, nil)
 	})
@@ -251,33 +250,34 @@ func TestClaimTwiceInTheSameTransaction(t *testing.T) {
 
 func TestCompleteErrors(t *testing.T) {
 	s := NewStore(testPool)
-	t.Run("sin Claim", func(t *testing.T) {
+	t.Run("without Claim", func(t *testing.T) {
 		err := inTx(t.Context(), func(tx postgres.Tx) error {
 			return s.Complete(t.Context(), tx, txScope, ids.New().String(), 201, nil)
 		})
 		if !errors.Is(err, ErrNotClaimed) {
-			t.Errorf("= %v, se esperaba ErrNotClaimed", err)
+			t.Errorf("= %v, want ErrNotClaimed", err)
 		}
 	})
-	t.Run("dos veces", func(t *testing.T) {
+	t.Run("twice", func(t *testing.T) {
 		key := ids.New().String()
 		mustClaimFresh(t, s, key, hashOf("a"), 201, `{}`)
 		err := inTx(t.Context(), func(tx postgres.Tx) error { return s.Complete(t.Context(), tx, txScope, key, 409, nil) })
 		if !errors.Is(err, ErrNotClaimed) {
-			t.Errorf("= %v, se esperaba ErrNotClaimed", err)
+			t.Errorf("= %v, want ErrNotClaimed", err)
 		}
 	})
-	t.Run("fuera de 2xx y 4xx", func(t *testing.T) {
-		for _, status := range []int{500, 199} { // un 5xx no se guarda: el cliente puede reintentar
+	t.Run("outside 2xx and 4xx", func(t *testing.T) {
+		for _, status := range []int{500, 199} { // a 5xx is not stored: the client may retry
 			if _, err := claim(t.Context(), s, txScope, ids.New().String(), hashOf("a"), status, nil); !errors.Is(err, ErrNotStorable) {
-				t.Errorf("guardar un %d = %v, se esperaba ErrNotStorable", status, err)
+				t.Errorf("store a %d = %v, want ErrNotStorable", status, err)
 			}
 		}
 	})
 }
 
-// TestTheTableEnforcesItsInvariants: aun con SQL directo y el rol de la aplicación, no se fabrica una
-// respuesta guardada, la respuesta no cambia, la huella no se toca y un 5xx no se guarda.
+// TestTheTableEnforcesItsInvariants: even with direct SQL and the application role, a stored response
+// cannot be forged, the response does not change, the fingerprint is not touched and a 5xx is not
+// stored.
 func TestTheTableEnforcesItsInvariants(t *testing.T) {
 	s, key := NewStore(testPool), ids.New().String()
 	mustClaimFresh(t, s, key, hashOf("a"), 201, `{}`)
@@ -285,22 +285,22 @@ func TestTheTableEnforcesItsInvariants(t *testing.T) {
 		sql      string
 		sqlState string
 	}{
-		"insertar una respuesta": {`INSERT INTO infra.idempotency_keys (scope, key, request_hash, status, response_code, response_body)
+		"insert a response": {`INSERT INTO infra.idempotency_keys (scope, key, request_hash, status, response_code, response_body)
 			VALUES ('s', $1, decode(repeat('00', 32), 'hex'), 'completed', 201, '')`, "42501"},
-		"volver a in_progress": {`UPDATE infra.idempotency_keys SET status = 'in_progress', response_code = NULL, response_body = NULL
+		"back to in_progress": {`UPDATE infra.idempotency_keys SET status = 'in_progress', response_code = NULL, response_body = NULL
 			WHERE key = $1`, "2F003"},
-		"cambiar la respuesta": {`UPDATE infra.idempotency_keys SET response_code = 409 WHERE key = $1`, "2F003"},
-		"cambiar la huella":    {`UPDATE infra.idempotency_keys SET request_hash = request_hash WHERE key = $1`, "42501"},
+		"change the response":    {`UPDATE infra.idempotency_keys SET response_code = 409 WHERE key = $1`, "2F003"},
+		"change the fingerprint": {`UPDATE infra.idempotency_keys SET request_hash = request_hash WHERE key = $1`, "42501"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := testPool.Exec(t.Context(), tc.sql, key)
 			if state := sqlState(err); state != tc.sqlState {
-				t.Fatalf("= %v, se esperaba SQLSTATE %s", err, tc.sqlState)
+				t.Fatalf("= %v, want SQLSTATE %s", err, tc.sqlState)
 			}
 		})
 	}
-	t.Run("guardar un 5xx", func(t *testing.T) {
+	t.Run("store a 5xx", func(t *testing.T) {
 		k := ids.New().String()
 		err := inTx(t.Context(), func(tx postgres.Tx) error {
 			if _, err := s.Claim(t.Context(), tx, txScope, k, hashOf("a")); err != nil {
@@ -311,7 +311,7 @@ func TestTheTableEnforcesItsInvariants(t *testing.T) {
 			return err
 		})
 		if state := sqlState(err); state != "23514" {
-			t.Fatalf("= %v, se esperaba SQLSTATE 23514", err)
+			t.Fatalf("= %v, want SQLSTATE 23514", err)
 		}
 	})
 }
@@ -332,17 +332,17 @@ func TestPurgeDeletesOnlyOlderKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c, err := claim(t.Context(), s, txScope, key, hashOf("a"), 201, nil); err != nil || c.Fresh {
-		t.Fatalf("Purge borró una clave más nueva que el corte: %+v, %v", c, err)
+		t.Fatalf("Purge deleted a key newer than the cutoff: %+v, %v", c, err)
 	}
 	n, err := s.Purge(t.Context(), time.Now().Add(time.Hour))
 	if err != nil || n < 1 {
-		t.Fatalf("Purge = %d, %v; se esperaba al menos una clave borrada", n, err)
+		t.Fatalf("Purge = %d, %v; want at least one key deleted", n, err)
 	}
 	mustClaimFresh(t, s, key, hashOf("b"), 201, `{}`)
 }
 
-// TestPurgeSkipsLockedKeys: un reintento que tiene una clave bloqueada no hace fallar la purga del resto.
-// Con FOR KEY SHARE, el lock de un reintento que lee su respuesta (stored), la purga tampoco espera.
+// TestPurgeSkipsLockedKeys: a retry holding a key locked does not make the purge of the rest fail. With
+// FOR KEY SHARE, the lock of a retry reading its response (stored), the purge does not wait either.
 func TestPurgeSkipsLockedKeys(t *testing.T) {
 	s := NewStore(testPool)
 	for _, lock := range []string{"FOR UPDATE", "FOR KEY SHARE"} {
@@ -356,19 +356,20 @@ func TestPurgeSkipsLockedKeys(t *testing.T) {
 			unlock()
 
 			if err != nil {
-				t.Fatalf("Purge con una fila bloqueada = %v", err)
+				t.Fatalf("Purge with a locked row = %v", err)
 			}
 			if c, err := claim(t.Context(), s, txScope, locked, hashOf("a"), 201, nil); err != nil || c.Fresh {
-				t.Errorf("la clave bloqueada debía quedar para la próxima purga: %+v, %v", c, err)
+				t.Errorf("the locked key should remain for the next purge: %+v, %v", c, err)
 			}
 			mustClaimFresh(t, s, free, hashOf("b"), 201, `{}`)
 		})
 	}
 }
 
-// TestPurgeDeletesMoreThanOneBatch: con más claves que un lote, Purge sigue hasta borrarlas todas.
+// TestPurgeDeletesMoreThanOneBatch: with more keys than one batch, Purge keeps going until it deletes
+// them all.
 func TestPurgeDeletesMoreThanOneBatch(t *testing.T) {
-	s, bulk := NewStore(testPool), "purga-"+ids.New().String()
+	s, bulk := NewStore(testPool), "purge-"+ids.New().String()
 	err := inTx(t.Context(), func(tx postgres.Tx) error {
 		if _, err := tx.Exec(t.Context(), `INSERT INTO infra.idempotency_keys (scope, key, request_hash)
 			SELECT $1, n::text, decode(repeat('00', 32), 'hex') FROM generate_series(1, $2::int) AS n`, bulk, purgeBatch+1); err != nil {
@@ -389,6 +390,6 @@ func TestPurgeDeletesMoreThanOneBatch(t *testing.T) {
 		t.Fatal(scanErr)
 	}
 	if err != nil || n <= purgeBatch || left != 0 {
-		t.Fatalf("Purge = %d, %v; quedaron %d claves del lote", n, err, left)
+		t.Fatalf("Purge = %d, %v; %d keys of the batch left", n, err, left)
 	}
 }

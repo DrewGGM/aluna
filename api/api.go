@@ -1,10 +1,10 @@
-// Package api es el contrato de la API (ADR-0010). El servidor se genera de él y la autorización lee de él
-// el permiso de cada operación.
+// Package api is the API contract (ADR-0010). The server is generated from it and authorization reads from it
+// the permission of each operation.
 package api
 
 import _ "embed"
 
-// OpenAPI es api/openapi.yaml.
+// OpenAPI is api/openapi.yaml.
 //
 //go:embed openapi.yaml
 var OpenAPI []byte

@@ -1,6 +1,6 @@
-// Package approvals es el maker-checker transversal (FR-39, ADR-0014): un comando sensible queda como
-// solicitud pendiente con su payload y se ejecuta, con ese payload, cuando otra persona con el permiso lo
-// aprueba.
+// Package approvals is the cross-cutting maker-checker (FR-39, ADR-0014): a sensitive command is kept as a
+// pending request with its payload and runs, with that payload, when another person with the permission
+// approves it.
 package approvals
 
 import (
@@ -17,10 +17,10 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// Status es el estado de una solicitud. Expired es una pendiente que pasó su vencimiento (7 días).
+// Status is the state of a request. Expired is a pending one past its expiry (7 days).
 type Status string
 
-// Estados de una solicitud.
+// Request states.
 const (
 	StatusPending  Status = "pending"
 	StatusApproved Status = "approved"
@@ -29,39 +29,39 @@ const (
 	StatusExpired  Status = "expired"
 )
 
-// listLimit es cuántas solicitudes devuelve List como mucho.
+// listLimit is the most requests List returns.
 const listLimit = 100
 
 var (
-	// ErrUnknownKind es un tipo de solicitud que nadie registró.
-	ErrUnknownKind = errors.New("tipo de solicitud desconocido")
-	// ErrNotFound es una solicitud que no existe en la entidad del principal.
-	ErrNotFound = errors.New("solicitud no encontrada")
-	// ErrNotPending es una solicitud ya decidida.
-	ErrNotPending = errors.New("la solicitud ya se decidió")
-	// ErrExpired es una solicitud pendiente que venció.
-	ErrExpired = errors.New("la solicitud venció")
-	// ErrSelfApproval es quien pidió intentando decidir su propia solicitud (AB-5).
-	ErrSelfApproval = errors.New("quien pide no puede decidir su propia solicitud")
-	// ErrNoReason es un rechazo sin motivo.
-	ErrNoReason = errors.New("un rechazo necesita un motivo")
-	// ErrCommandRejected es el comando de una solicitud aprobada que su módulo rechazó por una regla de
-	// negocio: el Executor lo envuelve y la solicitud queda failed.
-	ErrCommandRejected = errors.New("el comando aprobado se rechazó")
+	// ErrUnknownKind is a request kind nobody registered.
+	ErrUnknownKind = errors.New("unknown request kind")
+	// ErrNotFound is a request that does not exist in the principal's entity.
+	ErrNotFound = errors.New("request not found")
+	// ErrNotPending is a request already decided.
+	ErrNotPending = errors.New("the request was already decided")
+	// ErrExpired is a pending request that expired.
+	ErrExpired = errors.New("the request expired")
+	// ErrSelfApproval is the maker trying to decide their own request (AB-5).
+	ErrSelfApproval = errors.New("the maker cannot decide their own request")
+	// ErrNoReason is a rejection without a reason.
+	ErrNoReason = errors.New("a rejection needs a reason")
+	// ErrCommandRejected is the command of an approved request that its module rejected on a business rule:
+	// the Executor wraps it and the request ends up failed.
+	ErrCommandRejected = errors.New("the approved command was rejected")
 )
 
-// maxFailureText es lo más que se guarda del error de un comando rechazado.
+// maxFailureText is the most that is stored of a rejected command's error.
 const maxFailureText = 2048
 
-// Executor corre el comando de una solicitud aprobada, en la transacción de la aprobación, con el payload
-// original y el principal que aprobó; devuelve el resultado del comando. Un rechazo de negocio va envuelto
-// en ErrCommandRejected y deja la solicitud failed; cualquier otro error (un conflicto, un timeout, una
-// dependencia caída) sube sin decidirla, para que se pueda aprobar otra vez. Nunca envuelve un 40001 o un
-// 40P01 en ErrCommandRejected: la Unit of Work no los vería y no repetiría. Como la aprobación se puede
-// repetir, no tiene efectos fuera de la transacción.
+// Executor runs the command of an approved request, in the approval's transaction, with the original
+// payload and the approving principal; it returns the command's result. A business rejection comes wrapped
+// in ErrCommandRejected and leaves the request failed; any other error (a conflict, a timeout, a dependency
+// down) is returned without deciding it, so it can be approved again. It never wraps a 40001 or a 40P01 in
+// ErrCommandRejected: the Unit of Work would not see them and would not retry. Since the approval can be
+// retried, it has no effects outside the transaction.
 type Executor func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (result json.RawMessage, err error)
 
-// Request es una solicitud de maker-checker.
+// Request is a maker-checker request.
 type Request struct {
 	ID, LegalEntityID    ids.ID
 	Kind                 string
@@ -74,37 +74,37 @@ type Request struct {
 	DecidedAt            *time.Time
 }
 
-// registration es lo que un módulo registró para un tipo de solicitud.
+// registration is what a module registered for a request kind.
 type registration struct {
 	permission string
 	exec       Executor
 }
 
-// Service guarda y decide las solicitudes; cada módulo registra sus tipos al cablear.
+// Service stores and decides requests; each module registers its kinds during wiring.
 type Service struct {
 	policy *access.Policy
 	kinds  map[string]registration
 }
 
-// New crea el servicio; policy dice quién puede aprobar cada tipo.
+// New creates the service; policy says who can approve each kind.
 func New(policy *access.Policy) *Service {
 	return &Service{policy: policy, kinds: map[string]registration{}}
 }
 
-// RegisterKind registra el tipo kind: quien lo apruebe o rechace necesita permission con alcance all, y
-// aprobarlo corre exec. Registrar de nuevo un tipo lo reemplaza.
+// RegisterKind registers kind: whoever approves or rejects it needs permission with scope all, and
+// approving it runs exec. Registering a kind again replaces it.
 func (s *Service) RegisterKind(kind, permission string, exec Executor) {
 	s.kinds[kind] = registration{permission: permission, exec: exec}
 }
 
-// Request guarda, en tx, una solicitud pendiente de kind con payload, pedida por maker en su entidad.
+// Request stores, in tx, a pending request of kind with payload, made by maker in its entity.
 func (s *Service) Request(ctx context.Context, tx postgres.Tx, kind string, payload any, maker access.Principal) (Request, error) {
 	if _, ok := s.kinds[kind]; !ok {
 		return Request{}, fmt.Errorf("%w: %s", ErrUnknownKind, kind)
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return Request{}, fmt.Errorf("payload de la solicitud %s: %w", kind, err)
+		return Request{}, fmt.Errorf("encode %s request payload: %w", kind, err)
 	}
 	row, err := pg.Insert(ctx, tx, ids.New(), maker.LegalEntityID, kind, raw, maker.Subject)
 	if err != nil {
@@ -113,16 +113,16 @@ func (s *Service) Request(ctx context.Context, tx postgres.Tx, kind string, payl
 	return requestOf(row), nil
 }
 
-// Approve aprueba en tx la solicitud id: corre su Executor con el payload original y, si sale bien, la
-// deja approved con el resultado, en la misma transacción. Si el comando se rechaza (ErrCommandRejected),
-// deshace lo que hizo y la deja failed con el error.
+// Approve approves request id in tx: it runs its Executor with the original payload and, if it succeeds,
+// leaves it approved with the result, in the same transaction. If the command is rejected
+// (ErrCommandRejected), it undoes what it did and leaves the request failed with the error.
 func (s *Service) Approve(ctx context.Context, tx postgres.Tx, id ids.ID, checker access.Principal) (Request, error) {
 	row, k, err := s.lockForDecision(ctx, tx, id, checker)
 	if err != nil {
 		return Request{}, err
 	}
 	if _, err := tx.Exec(ctx, "SAVEPOINT approval_execution"); err != nil {
-		return Request{}, fmt.Errorf("savepoint de la aprobación: %w", err)
+		return Request{}, fmt.Errorf("approval savepoint: %w", err)
 	}
 	result, execErr := k.exec(ctx, tx, row.Payload, checker)
 	var decision pg.Decision
@@ -131,7 +131,7 @@ func (s *Service) Approve(ctx context.Context, tx postgres.Tx, id ids.ID, checke
 		return Request{}, execErr
 	case execErr != nil:
 		if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT approval_execution"); err != nil {
-			return Request{}, fmt.Errorf("deshacer la ejecución de la solicitud %s: %w", id, err)
+			return Request{}, fmt.Errorf("undo execution of request %s: %w", id, err)
 		}
 		decision = pg.Decision{Status: string(StatusFailed), Checker: checker.Subject, Error: failureText(execErr)}
 	case len(result) == 0:
@@ -146,8 +146,8 @@ func (s *Service) Approve(ctx context.Context, tx postgres.Tx, id ids.ID, checke
 	return requestOf(decided), nil
 }
 
-// failureText es el error de un comando rechazado tal como se guarda: texto UTF-8 sin NUL (PostgreSQL no
-// los acepta), de hasta maxFailureText bytes.
+// failureText is a rejected command's error as it is stored: UTF-8 text with no NUL (PostgreSQL does not
+// accept them), of up to maxFailureText bytes.
 func failureText(err error) string {
 	text := strings.ToValidUTF8(strings.ReplaceAll(err.Error(), "\x00", ""), "")
 	if len(text) > maxFailureText {
@@ -156,7 +156,7 @@ func failureText(err error) string {
 	return text
 }
 
-// Reject rechaza en tx la solicitud id con reason; el comando no corre.
+// Reject rejects request id in tx with reason; the command does not run.
 func (s *Service) Reject(ctx context.Context, tx postgres.Tx, id ids.ID, checker access.Principal, reason string) (Request, error) {
 	if strings.TrimSpace(reason) == "" {
 		return Request{}, ErrNoReason
@@ -171,9 +171,9 @@ func (s *Service) Reject(ctx context.Context, tx postgres.Tx, id ids.ID, checker
 	return requestOf(decided), nil
 }
 
-// lockForDecision bloquea la solicitud id para que checker la decida. Tiene que existir en su entidad y ser
-// de un tipo cuyo permiso checker tenga con alcance all (antes de mirar su estado: quien no puede decidirla
-// no se entera de cómo está); además, seguir pendiente y sin vencer, y no ser suya.
+// lockForDecision locks request id for checker to decide it. It must exist in checker's entity and be of a
+// kind whose permission checker holds with scope all (before looking at its state: whoever cannot decide it
+// does not learn how it stands); it must also still be pending and unexpired, and not be checker's own.
 func (s *Service) lockForDecision(ctx context.Context, tx postgres.Tx, id ids.ID, checker access.Principal) (pg.Row, registration, error) {
 	row, found, err := pg.Lock(ctx, tx, checker.LegalEntityID, id)
 	if err != nil {
@@ -187,7 +187,7 @@ func (s *Service) lockForDecision(ctx context.Context, tx postgres.Tx, id ids.ID
 	case err != nil:
 		return pg.Row{}, registration{}, err
 	case row.Status != string(StatusPending):
-		return pg.Row{}, registration{}, fmt.Errorf("%w: %s está %s", ErrNotPending, id, row.Status)
+		return pg.Row{}, registration{}, fmt.Errorf("%w: %s is %s", ErrNotPending, id, row.Status)
 	case row.Expired:
 		return pg.Row{}, registration{}, fmt.Errorf("%w: %s", ErrExpired, id)
 	case row.Maker == checker.Subject:
@@ -196,7 +196,7 @@ func (s *Service) lockForDecision(ctx context.Context, tx postgres.Tx, id ids.ID
 	return row, k, nil
 }
 
-// permitted es el registro del tipo kind si checker tiene su permiso con alcance all.
+// permitted is the registration of kind if checker holds its permission with scope all.
 func (s *Service) permitted(checker access.Principal, kind string) (registration, error) {
 	k, ok := s.kinds[kind]
 	if !ok {
@@ -207,13 +207,12 @@ func (s *Service) permitted(checker access.Principal, kind string) (registration
 		return registration{}, err
 	}
 	if scope != access.ScopeAll {
-		return registration{}, fmt.Errorf("%w: %s solo con alcance own", access.ErrForbidden, k.permission)
+		return registration{}, fmt.Errorf("%w: %s only with scope own", access.ErrForbidden, k.permission)
 	}
 	return k, nil
 }
 
-// List son las solicitudes más recientes de la entidad entity (hasta 100); con status, solo las de ese
-// estado.
+// List is the most recent requests of entity (up to 100); with status, only those in that state.
 func (s *Service) List(ctx context.Context, q postgres.Querier, entity ids.ID, status Status) ([]Request, error) {
 	rows, err := pg.List(ctx, q, entity, string(status), listLimit)
 	if err != nil {

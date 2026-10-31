@@ -22,16 +22,16 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// Carga del benchmark de posting (QS-3); la describe docs/benchmarks/2026-posting.md.
+// Load of the posting benchmark (QS-3); docs/benchmarks/2026-posting.md describes it.
 const (
 	benchCustomers = 10_000
 	benchWorkers   = 64
 	benchScope     = "benchmark POST /v1/transactions"
 
-	benchAggregateBatch = 1000 // el agregador sigue con otro lote hasta ponerse al día
+	benchAggregateBatch = 1000 // the aggregator keeps going with another batch until it catches up
 )
 
-// benchLedger son las cuentas del benchmark: se crean una vez y las reusan las corridas con b.N creciente.
+// benchLedger is the benchmark's accounts: created once and reused by the runs with growing b.N.
 type benchLedger struct {
 	cur                 money.Currency
 	customers           []ids.ID
@@ -40,8 +40,8 @@ type benchLedger struct {
 
 var benchSetup = sync.OnceValues(func() (benchLedger, error) { return setUpBenchLedger(context.Background()) })
 
-// BenchmarkPost reporta throughput, p50/p95/p99 y la tasa de reintentos de UnitOfWork de postings de 4
-// entries con Idempotency-Key, 64 a la vez, con el agregador async corriendo.
+// BenchmarkPost reports throughput, p50/p95/p99 and the UnitOfWork retry rate of 4-entry postings with an
+// Idempotency-Key, 64 at a time, with the async aggregator running.
 func BenchmarkPost(b *testing.B) {
 	requireDurableServer(b)
 	l, err := benchSetup()
@@ -54,15 +54,15 @@ func BenchmarkPost(b *testing.B) {
 		b.Fatal(err)
 	}
 	if r.failed > 0 {
-		b.Fatalf("%d de %d postings fallaron; el primero: %v", r.failed, b.N, r.firstErr)
+		b.Fatalf("%d of %d postings failed; the first one: %v", r.failed, b.N, r.firstErr)
 	}
 	checkAggregated(b, l)
 	r.report(b)
 }
 
-// requireDurableServer registra el servidor y se niega a medir sin fsync: un ledger se mide con commits
-// que esperan el disco. El PostgreSQL de testcontainers arranca con fsync=off; el benchmark corre contra
-// uno durable con ALUNA_TEST_DATABASE_URL.
+// requireDurableServer logs the server and refuses to measure without fsync: a ledger is measured with
+// commits that wait for the disk. The testcontainers PostgreSQL starts with fsync=off; the benchmark runs
+// against a durable one with ALUNA_TEST_DATABASE_URL.
 func requireDurableServer(b *testing.B) {
 	b.Helper()
 	var version, fsync, syncCommit string
@@ -71,14 +71,14 @@ func requireDurableServer(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Logf("%s; fsync=%s, synchronous_commit=%s; pool de %d conexiones", version, fsync, syncCommit, testPool.Config().MaxConns)
+	b.Logf("%s; fsync=%s, synchronous_commit=%s; pool of %d connections", version, fsync, syncCommit, testPool.Config().MaxConns)
 	if fsync != "on" || syncCommit != "on" {
-		b.Fatal("el servidor no es durable: corre el benchmark con ALUNA_TEST_DATABASE_URL apuntando a uno con fsync y synchronous_commit en on")
+		b.Fatal("the server is not durable: run the benchmark with ALUNA_TEST_DATABASE_URL pointing to one with fsync and synchronous_commit on")
 	}
 }
 
-// checkAggregated termina de agregar lo que quedó al parar el agregador, lo registra (es su atraso) y
-// exige que el settlement quede con la suma de sus entries.
+// checkAggregated finishes aggregating what was left when the aggregator stopped, logs it (it is its lag)
+// and requires the settlement to end with the sum of its entries.
 func checkAggregated(b *testing.B, l benchLedger) {
 	b.Helper()
 	backlog, err := svc().AggregateAsyncBalances(b.Context(), postgres.NewUnitOfWork(testPool), benchAggregateBatch)
@@ -91,14 +91,14 @@ func checkAggregated(b *testing.B, l benchLedger) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Logf("al parar, el agregador tenía %d entries por agregar", backlog)
+	b.Logf("when stopped, the aggregator had %d entries left to aggregate", backlog)
 	if posted != entries {
-		b.Fatalf("settlement: saldo %d, Σ entries %d", posted, entries)
+		b.Fatalf("settlement: balance %d, Σ entries %d", posted, entries)
 	}
 }
 
-// setUpBenchLedger crea, en una transacción, los clientes (pasivos sync con sobregiro amplio: se valida
-// el límite, pero no hay que fondearlos) y las dos cuentas async compartidas.
+// setUpBenchLedger creates, in one transaction, the customers (sync liabilities with a wide overdraft:
+// the limit is checked, but they need no funding) and the two shared async accounts.
 func setUpBenchLedger(ctx context.Context) (benchLedger, error) {
 	cur, err := money.CurrencyOf("COP")
 	if err != nil {
@@ -126,13 +126,13 @@ func setUpBenchLedger(ctx context.Context) (benchLedger, error) {
 		return err
 	})
 	if err != nil {
-		return benchLedger{}, fmt.Errorf("crear las cuentas del benchmark: %w", err)
+		return benchLedger{}, fmt.Errorf("create benchmark accounts: %w", err)
 	}
 	return l, nil
 }
 
-// aggregateEverySecond corre el agregador async cada segundo, como lo hará el job (T-031), hasta que se
-// llama la función que devuelve.
+// aggregateEverySecond runs the async aggregator every second, as the job will (T-031), until the
+// function it returns is called.
 func aggregateEverySecond(ctx context.Context) func() error {
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -147,7 +147,7 @@ func aggregateEverySecond(ctx context.Context) func() error {
 				return
 			case <-tick.C:
 				if _, err := svc().AggregateAsyncBalances(ctx, uow, benchAggregateBatch); err != nil && ctx.Err() == nil {
-					done <- fmt.Errorf("agregador: %w", err)
+					done <- fmt.Errorf("aggregator: %w", err)
 					return
 				}
 			}
@@ -156,7 +156,7 @@ func aggregateEverySecond(ctx context.Context) func() error {
 	return func() error { cancel(); return <-done }
 }
 
-// benchResult es lo que midió una corrida de b.N postings.
+// benchResult is what a run of b.N postings measured.
 type benchResult struct {
 	failed    int
 	firstErr  error
@@ -176,7 +176,7 @@ func runPostings(b *testing.B, l benchLedger) benchResult {
 	var wg sync.WaitGroup
 	for w := range benchWorkers {
 		wg.Go(func() {
-			rng := rand.New(rand.NewPCG(uint64(w), uint64(start.UnixNano()))) //nolint:gosec // elegir cuentas al azar, no es criptografía
+			rng := rand.New(rand.NewPCG(uint64(w), uint64(start.UnixNano()))) //nolint:gosec // picking random accounts, not cryptography
 			for {
 				i := next.Add(1) - 1
 				if i >= int64(b.N) {
@@ -198,8 +198,9 @@ func runPostings(b *testing.B, l benchLedger) benchResult {
 	return r
 }
 
-// posting arma los 4 entries: un cliente paga 1.000 a otro, que recibe 900; 90 van al settlement y 10
-// al ingreso de la comisión. Los dos clientes son distintos: con el mismo, Post netearía sus dos entries.
+// posting builds the 4 entries: a customer pays 1,000 to another, who receives 900; 90 go to the
+// settlement and 10 to the fee income. The two customers are different: with the same one, Post would net
+// its two entries.
 func (l benchLedger) posting(rng *rand.Rand) []ledger.EntryInput {
 	from := rng.IntN(len(l.customers))
 	to := (from + 1 + rng.IntN(len(l.customers)-1)) % len(l.customers)
@@ -209,17 +210,16 @@ func (l benchLedger) posting(rng *rand.Rand) []ledger.EntryInput {
 	return []ledger.EntryInput{entry(l.customers[from], 1000), entry(l.customers[to], -900), entry(l.settlement, -90), entry(l.revenue, -10)}
 }
 
-// postIdempotent asienta entries con las sentencias de commands.idempotent y underSavepoint
-// (internal/httpapi/idempotency.go) para un comando que pasa, en su orden: reclamo de la clave, savepoint,
-// Post, respuesta guardada y registro de auditoría. Si ese camino suma una sentencia, hay que sumarla
-// aquí; la huella, el scope, el cuerpo y el resumen se simplifican porque no cambian el SQL. La clave
-// (también la referencia externa) es al azar, como la de un cliente: una clave ordenada en el tiempo
-// insertaría siempre al final de los índices. Cuenta cada intento de la transacción: los que pasan de uno
-// son reintentos de UnitOfWork.
+// postIdempotent posts entries with the statements of commands.idempotent and underSavepoint
+// (internal/httpapi/idempotency.go) for a command that succeeds, in their order: key claim, savepoint,
+// Post, stored response and audit record. If that path adds a statement, it has to be added here; the
+// fingerprint, scope, body and summary are simplified because they do not change the SQL. The key (also
+// the external reference) is random, like a client's: a time-ordered key would always insert at the end
+// of the indexes. It counts each attempt of the transaction: those beyond one are UnitOfWork retries.
 func postIdempotent(ctx context.Context, uow *postgres.UnitOfWork, keys *idempotency.Store, entries []ledger.EntryInput, attempts *atomic.Int64) error {
 	key, today := crand.Text(), time.Now().UTC().Truncate(24*time.Hour)
 	in := ledger.PostInput{
-		LegalEntityID: entity, Code: "pago", ValueDate: today, BusinessDate: today,
+		LegalEntityID: entity, Code: "payment", ValueDate: today, BusinessDate: today,
 		Source: "benchmark", ExternalRef: key, Actor: "bench", Channel: "api", RuleVersion: "manual.v1", Entries: entries,
 	}
 	hash := sha256.Sum256([]byte(key))
@@ -248,9 +248,10 @@ func postIdempotent(ctx context.Context, uow *postgres.UnitOfWork, keys *idempot
 	})
 }
 
-// report publica las métricas del benchmark. Son tiempos y tasas, no montos: ReportMetric pide float64.
+// report publishes the benchmark metrics. They are times and rates, not amounts: ReportMetric takes
+// float64.
 //
-//nolint:forbidigo // métricas del benchmark, no dinero (ADR-0005)
+//nolint:forbidigo // benchmark metrics, not money (ADR-0005)
 func (r benchResult) report(b *testing.B) {
 	b.Helper()
 	n := len(r.latencies)
@@ -263,5 +264,5 @@ func (r benchResult) report(b *testing.B) {
 	b.ReportMetric(at(0.95), "p95_ms")
 	b.ReportMetric(at(0.99), "p99_ms")
 	b.ReportMetric(100*float64(r.attempts-int64(n))/float64(n), "retries_%")
-	b.ReportMetric(0, "ns/op") // el tiempo por posting lo dicen los percentiles: 64 en paralelo
+	b.ReportMetric(0, "ns/op") // the percentiles give the time per posting: 64 in parallel
 }

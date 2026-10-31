@@ -1,5 +1,5 @@
-// Package app es el sellado del registro de auditoría (ADR-0012): bloques encadenados por hash y anclados
-// fuera de la base, y la verificación de esa cadena.
+// Package app seals the audit log (ADR-0012): blocks chained by hash and anchored outside the database, and
+// the verification of that chain.
 package app
 
 import (
@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// Record es un registro de auditoría tal como se sella. Before y After son el JSON que guardó la base,
-// nil si no hay.
+// Record is an audit record as it is sealed. Before and After are the JSON the database stored, nil if
+// there is none.
 type Record struct {
 	Seq                      int64
 	RecordedAt               time.Time
@@ -24,8 +24,8 @@ type Record struct {
 	Before, After            json.RawMessage
 }
 
-// Block es un bloque sellado: su hash encadena el del anterior (PrevHash) con sus registros. El valor
-// cero es "no hay bloque": su hash, ceros, es el PrevHash del primero.
+// Block is a sealed block: its hash chains the previous one (PrevHash) with its records. The zero value
+// means "no block": its hash, all zeros, is the PrevHash of the first one.
 type Block struct {
 	ID             int64
 	PrevHash, Hash [32]byte
@@ -33,60 +33,60 @@ type Block struct {
 }
 
 var (
-	// ErrNotAnchored indica un bloque sin hash anclado.
-	ErrNotAnchored = errors.New("el bloque no tiene ancla")
-	// ErrNoBlocks indica un rango sin bloques sellados ni anclados: no hay nada que verificar.
-	ErrNoBlocks = errors.New("no hay bloques sellados en el rango")
+	// ErrNotAnchored means a block with no anchored hash.
+	ErrNotAnchored = errors.New("the block has no anchor")
+	// ErrNoBlocks means a range with no sealed or anchored blocks: there is nothing to verify.
+	ErrNoBlocks = errors.New("no sealed blocks in the range")
 )
 
-// AnchorStore guarda fuera de la base el hash de cada bloque (WORM en producción): lo que no se puede
-// reescribir desde la base contra lo que se compara la cadena. Get de un bloque sin ancla es
-// ErrNotAnchored; Put del mismo hash otra vez no hace nada.
+// AnchorStore stores the hash of each block outside the database (WORM in production): what cannot be
+// rewritten from the database and what the chain is compared against. Get of a block with no anchor is
+// ErrNotAnchored; Put of the same hash again does nothing.
 type AnchorStore interface {
 	Put(ctx context.Context, blockID int64, hash [32]byte) error
 	Get(ctx context.Context, blockID int64) ([32]byte, error)
 }
 
-// SealStore es la persistencia del sellado, dentro de una transacción.
+// SealStore is the sealing persistence, within a transaction.
 type SealStore interface {
-	// Unsealed bloquea (FOR UPDATE) hasta limit registros confirmados sin bloque, en orden de seq.
+	// Unsealed locks (FOR UPDATE) up to limit committed records with no block, in seq order.
 	Unsealed(ctx context.Context, limit int) ([]Record, error)
-	// LastBlock es el último bloque, o Block{} si todavía no hay.
+	// LastBlock is the last block, or Block{} if there is none yet.
 	LastBlock(ctx context.Context) (Block, error)
-	// InsertBlock guarda un bloque; otro con el mismo prevHash ya sellado es un error (la cadena no se
-	// bifurca: el sellador que pierde la carrera se revierte y sigue en la próxima vuelta).
+	// InsertBlock stores a block; another one already sealed with the same prevHash is an error (the chain
+	// does not fork: the sealer that loses the race rolls back and carries on in the next round).
 	InsertBlock(ctx context.Context, prevHash, hash [32]byte, records int) (int64, error)
 	AssignBlock(ctx context.Context, blockID int64, seqs []int64) error
 }
 
-// VerifyStore es la lectura de la cadena para verificarla.
+// VerifyStore reads the chain to verify it.
 type VerifyStore interface {
-	// LastBlock es el último bloque, o Block{} si todavía no hay.
+	// LastBlock is the last block, or Block{} if there is none yet.
 	LastBlock(ctx context.Context) (Block, error)
-	// Blocks son los bloques con id entre from y to, en orden.
+	// Blocks are the blocks with id between from and to, in order.
 	Blocks(ctx context.Context, from, to int64) ([]Block, error)
-	// BlockBefore es el bloque anterior a id, o Block{} si id es el primero.
+	// BlockBefore is the block before id, or Block{} if id is the first one.
 	BlockBefore(ctx context.Context, id int64) (Block, error)
-	// RecordsOf son los registros del bloque, en orden de seq.
+	// RecordsOf are the records of the block, in seq order.
 	RecordsOf(ctx context.Context, blockID int64) ([]Record, error)
 }
 
-// ErrChainBroken dice en qué bloque deja de cuadrar la cadena: un registro alterado, insertado o borrado,
-// un bloque cambiado o borrado, o un ancla que no coincide o que falta.
+// ErrChainBroken names the block where the chain stops adding up: a record altered, inserted or deleted, a
+// block changed or deleted, or an anchor that does not match or is missing.
 type ErrChainBroken struct {
 	BlockID int64
 	Reason  string
 }
 
 func (e ErrChainBroken) Error() string {
-	return fmt.Sprintf("la cadena de auditoría se rompe en el bloque %d: %s", e.BlockID, e.Reason)
+	return fmt.Sprintf("the audit chain breaks at block %d: %s", e.BlockID, e.Reason)
 }
 
-// Seal sella en un bloque, dentro de la transacción de store, hasta maxRecords registros sin bloque: hash =
-// SHA-256(hash del bloque anterior ‖ registros por seq). Antes ancla el último bloque que ya había (reanclar
-// el mismo hash no hace nada): si su ancla falló, se completa aquí, y si vuelve a fallar no se sella nada
-// encima, así que solo el último bloque puede quedar sin ancla. Devuelve el bloque nuevo, o Block{} si no
-// había registros que sellar; quien llama lo ancla después de confirmar (ver audit.Service.Seal).
+// Seal seals up to maxRecords records with no block into one block, within the store's transaction: hash =
+// SHA-256(previous block hash ‖ records by seq). First it anchors the last existing block (re-anchoring the
+// same hash does nothing): if its anchor failed, it is completed here, and if it fails again nothing is
+// sealed on top, so only the last block can be left unanchored. It returns the new block, or Block{} if
+// there were no records to seal; the caller anchors it after committing (see audit.Service.Seal).
 func Seal(ctx context.Context, store SealStore, anchor AnchorStore, maxRecords int) (Block, error) {
 	records, err := store.Unsealed(ctx, maxRecords)
 	if err != nil {
@@ -118,17 +118,17 @@ func Seal(ctx context.Context, store SealStore, anchor AnchorStore, maxRecords i
 	return sealed, store.AssignBlock(ctx, sealed.ID, seqs)
 }
 
-// Verify recorre los ids de from a to (hasta el último bloque de la base) en orden: cada bloque debe empezar
-// en el hash del anterior (también el anterior a from), dar su hash con sus registros y coincidir con su
-// ancla, y un id sin bloque no debe tener ancla (un bloque borrado). El primero que no cumple es
-// ErrChainBroken; un rango sin nada sellado es ErrNoBlocks. Los bloques borrados después del último de la
-// base no se ven (Q-88).
+// Verify walks the ids from from to to (up to the last block in the database) in order: each block must
+// start at the previous block's hash (including the one before from), yield its hash from its records and
+// match its anchor, and an id with no block must have no anchor (a deleted block). The first one that fails
+// is ErrChainBroken; a range with nothing sealed is ErrNoBlocks. Blocks deleted after the last one in the
+// database are not seen (Q-88).
 func Verify(ctx context.Context, store VerifyStore, anchor AnchorStore, from, to int64) error {
 	last, err := store.LastBlock(ctx)
 	if err != nil {
 		return err
 	}
-	to = min(to, last.ID) // con from > to no hay ids que revisar: ErrNoBlocks
+	to = min(to, last.ID) // with from > to there are no ids to check: ErrNoBlocks
 	blocks, err := store.Blocks(ctx, from, to)
 	if err != nil {
 		return err
@@ -146,8 +146,8 @@ func Verify(ctx context.Context, store VerifyStore, anchor AnchorStore, from, to
 	return nil
 }
 
-// walk recorre los ids de from a to en orden: el que tiene bloque (blocks, en orden) se verifica contra el
-// hash del anterior, empezando por prev; el que no, no debe tener ancla.
+// walk goes through the ids from from to to in order: one with a block (blocks, in order) is verified
+// against the previous block's hash, starting with prev; one without must have no anchor.
 func walk(ctx context.Context, store VerifyStore, anchor AnchorStore, prev Block, blocks []Block, from, to int64) error {
 	for id := from; id <= to; id++ {
 		if err := ctx.Err(); err != nil {
@@ -167,12 +167,13 @@ func walk(ctx context.Context, store VerifyStore, anchor AnchorStore, prev Block
 	return nil
 }
 
-// notAnchored es nil si el id no tiene ancla: un sellado que no confirmó. Con ancla, el bloque se borró.
+// notAnchored is nil if the id has no anchor: a seal that did not commit. With an anchor, the block was
+// deleted.
 func notAnchored(ctx context.Context, anchor AnchorStore, id int64) error {
 	_, err := anchor.Get(ctx, id)
 	switch {
 	case err == nil:
-		return ErrChainBroken{BlockID: id, Reason: "tiene ancla pero ya no está en la base"}
+		return ErrChainBroken{BlockID: id, Reason: "it is anchored but no longer in the database"}
 	case errors.Is(err, ErrNotAnchored):
 		return nil
 	default:
@@ -182,7 +183,7 @@ func notAnchored(ctx context.Context, anchor AnchorStore, id int64) error {
 
 func verifyBlock(ctx context.Context, store VerifyStore, anchor AnchorStore, prevHash [32]byte, b Block) error {
 	if b.PrevHash != prevHash {
-		return ErrChainBroken{BlockID: b.ID, Reason: "no empieza en el hash del bloque anterior"}
+		return ErrChainBroken{BlockID: b.ID, Reason: "it does not start at the previous block's hash"}
 	}
 	records, err := store.RecordsOf(ctx, b.ID)
 	if err != nil {
@@ -193,23 +194,23 @@ func verifyBlock(ctx context.Context, store VerifyStore, anchor AnchorStore, pre
 		return err
 	}
 	if len(records) != b.Records || hash != b.Hash {
-		return ErrChainBroken{BlockID: b.ID, Reason: "sus registros no dan su hash"}
+		return ErrChainBroken{BlockID: b.ID, Reason: "its records do not yield its hash"}
 	}
 	anchored, err := anchor.Get(ctx, b.ID)
 	if errors.Is(err, ErrNotAnchored) {
-		return ErrChainBroken{BlockID: b.ID, Reason: "no tiene ancla"}
+		return ErrChainBroken{BlockID: b.ID, Reason: "it has no anchor"}
 	}
 	if err != nil {
 		return err
 	}
 	if anchored != b.Hash {
-		return ErrChainBroken{BlockID: b.ID, Reason: "su hash no es el anclado"}
+		return ErrChainBroken{BlockID: b.ID, Reason: "its hash is not the anchored one"}
 	}
 	return nil
 }
 
-// canonicalRecord fija el orden y la forma de cada campo en el hash: cambiar uno cambia el hash de todos
-// los bloques sellados con él.
+// canonicalRecord fixes the order and form of each field in the hash: changing one changes the hash of
+// every block sealed with it.
 type canonicalRecord struct {
 	Seq           int64           `json:"seq"`
 	RecordedAt    string          `json:"recorded_at"`
@@ -225,9 +226,9 @@ type canonicalRecord struct {
 	After         json.RawMessage `json:"after"`
 }
 
-// blockHash es SHA-256(prev ‖ un JSON por registro terminado en '\n'): JSON compacto, sin escapar <, > ni &
-// (así lo puede recalcular cualquier lenguaje), recorded_at en UTC con microsegundos (la precisión de la
-// base) y before/after como los devuelve jsonb, compactados.
+// blockHash is SHA-256(prev ‖ one JSON per record ending in '\n'): compact JSON, without escaping <, > or &
+// (so any language can recompute it), recorded_at in UTC with microseconds (the database precision) and
+// before/after as jsonb returns them, compacted.
 func blockHash(prev [32]byte, records []Record) ([32]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(prev[:])
@@ -240,7 +241,7 @@ func blockHash(prev [32]byte, records []Record) ([32]byte, error) {
 			Result: r.Result, Before: r.Before, After: r.After,
 		})
 		if err != nil {
-			return [32]byte{}, fmt.Errorf("serializar el registro %d: %w", r.Seq, err)
+			return [32]byte{}, fmt.Errorf("encode record %d: %w", r.Seq, err)
 		}
 	}
 	return sha256.Sum256(buf.Bytes()), nil

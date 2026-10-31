@@ -5,27 +5,27 @@ import (
 	"fmt"
 )
 
-// ErrUnknownCurrency indica un código que no está en la tabla de monedas soportadas.
-var ErrUnknownCurrency = errors.New("moneda desconocida")
+// ErrUnknownCurrency means a code that is not in the table of supported currencies.
+var ErrUnknownCurrency = errors.New("unknown currency")
 
-// Currency es una moneda ISO 4217 con su exponente: cuántos dígitos tiene la unidad menor (COP = 2:
-// un peso son 100 unidades). El valor cero no es una moneda: Add y Sub lo rechazan.
+// Currency is an ISO 4217 currency with its exponent: how many digits the minor unit has (COP = 2: one
+// peso is 100 units). The zero value is not a currency: Add and Sub reject it.
 type Currency struct {
 	code     string
 	exponent int
 }
 
-// exponents son las monedas soportadas. Una moneda nueva se agrega aquí con su exponente ISO 4217.
+// exponents are the supported currencies. A new currency is added here with its ISO 4217 exponent.
 var exponents = map[string]int{
 	"COP": 2,
 	"USD": 2,
 	"EUR": 2,
 	"JPY": 0,
-	"CLF": 4, // Unidad de Fomento chilena
+	"CLF": 4, // Chilean Unidad de Fomento
 }
 
-// CurrencyOf devuelve la moneda con código ISO 4217 code. No normaliza: el código llega ya validado
-// desde el borde (API, archivos), así que "cop" es un error y no un COP.
+// CurrencyOf returns the currency with ISO 4217 code code. It does not normalize: the code arrives
+// already validated from the edge (API, files), so "cop" is an error and not a COP.
 func CurrencyOf(code string) (Currency, error) {
 	exponent, ok := exponents[code]
 	if !ok {
@@ -34,5 +34,5 @@ func CurrencyOf(code string) (Currency, error) {
 	return Currency{code: code, exponent: exponent}, nil
 }
 
-// Code es el código ISO 4217 de la moneda.
+// Code is the currency's ISO 4217 code.
 func (c Currency) Code() string { return c.code }

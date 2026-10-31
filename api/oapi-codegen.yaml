@@ -1,6 +1,6 @@
-# Generación del servidor desde api/openapi.yaml (ADR-0010): modelos y servidor strict sobre net/http.
-# Se corre con go generate ./internal/httpapi/... (la directiva está en server.go), así que la
-# salida es relativa a internal/httpapi.
+# Generates the server from api/openapi.yaml (ADR-0010): models and a strict server on net/http.
+# It runs with go generate ./internal/httpapi/... (the directive is in server.go), so the output is
+# relative to internal/httpapi.
 package: gen
 output: gen/gen.go
 generate:

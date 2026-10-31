@@ -33,15 +33,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// TestRunAPIStopsOnSIGTERM prueba el camino real: la configuración sale del entorno, la API queda lista
-// contra la base y SIGTERM, lo que manda el orquestador en un deploy, la apaga en orden.
+// TestRunAPIStopsOnSIGTERM tests the real path: the configuration comes from the environment, the API
+// becomes ready against the database, and SIGTERM, which the orchestrator sends on a deploy, shuts it
+// down in order.
 func TestRunAPIStopsOnSIGTERM(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Windows no permite enviar SIGTERM a un proceso; corre en CI (Linux)")
+		t.Skip("Windows cannot send SIGTERM to a process; runs in CI (Linux)")
 	}
 	addr := freeAddr(t)
 	t.Setenv("ALUNA_HTTP_ADDR", addr)
-	appDSN, err := pgtest.AppDSN(testDSN) // como en producción: el rol de la aplicación, no el dueño
+	appDSN, err := pgtest.AppDSN(testDSN) // as in production: the application role, not the owner
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestRunAPIStopsOnSIGTERM(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := resp.Body.Close(); err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("/readyz = %d (%v): con la base arriba la api está lista", resp.StatusCode, err)
+		t.Fatalf("/readyz = %d (%v): with the database up the api is ready", resp.StatusCode, err)
 	}
 
 	self, err := os.FindProcess(os.Getpid())
@@ -70,7 +71,7 @@ func TestRunAPIStopsOnSIGTERM(t *testing.T) {
 	expectExit(t, exit, 0)
 }
 
-// freeAddr reserva un puerto libre y lo suelta para que el servidor bajo prueba lo abra.
+// freeAddr reserves a free port and releases it so the server under test can open it.
 func freeAddr(t *testing.T) string {
 	t.Helper()
 	ln, err := new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -84,11 +85,11 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
-// oidcIssuer es un emisor OIDC de prueba: la api lo descubre al arrancar.
+// oidcIssuer is a test OIDC issuer: the api discovers it on startup.
 func oidcIssuer(t *testing.T) string {
 	t.Helper()
 	s := &oidctest.Server{}
-	ts := httptest.NewUnstartedServer(s) // la URL se fija antes de que el servidor atienda requests
+	ts := httptest.NewUnstartedServer(s) // the URL is set before the server handles requests
 	s.SetIssuer("http://" + ts.Listener.Addr().String())
 	ts.Start()
 	t.Cleanup(ts.Close)

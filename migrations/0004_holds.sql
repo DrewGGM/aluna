@@ -1,7 +1,7 @@
--- Holds de dos fases (FR-6, ADR-0003): una reserva de fondos sobre una cuenta sync de la entidad, que
--- termina en exactamente un estado: captured (con la transacción real que la asentó), released o
--- expired. Mientras está pending, su importe cuenta en el pendiente de la cuenta origen (lo suma y lo
--- resta el caso de uso en la misma transacción). Un hold terminado no cambia.
+-- Two-phase holds (FR-6, ADR-0003): a reservation of funds on one of the entity's sync accounts that
+-- ends in exactly one state: captured (with the actual transaction that posted it), released or
+-- expired. While pending, its amount counts toward the source account's pending balance (the use case
+-- adds and subtracts it in the same transaction). A finished hold never changes.
 
 -- +goose Up
 CREATE TABLE ledger.holds (
@@ -15,27 +15,27 @@ CREATE TABLE ledger.holds (
     status             text NOT NULL DEFAULT 'pending'
                            CHECK (status IN ('pending', 'captured', 'released', 'expired')),
     expires_at         timestamptz NOT NULL,
-    capture_tx_id      uuid UNIQUE, -- una transacción asienta a lo sumo un hold
+    capture_tx_id      uuid UNIQUE, -- a transaction posts at most one hold
     created_at         timestamptz NOT NULL DEFAULT clock_timestamp(),
-    -- origen y contrapartida de la misma entidad y en la moneda del hold, como los entries
+    -- source and counter account of the same entity and in the hold's currency, like entries
     FOREIGN KEY (account_id, legal_entity_id, currency) REFERENCES ledger.accounts (id, legal_entity_id, currency),
     FOREIGN KEY (counter_account_id, legal_entity_id, currency) REFERENCES ledger.accounts (id, legal_entity_id, currency),
     FOREIGN KEY (capture_tx_id, legal_entity_id) REFERENCES ledger.transactions (id, legal_entity_id),
     CONSTRAINT holds_distinct_accounts CHECK (account_id <> counter_account_id),
-    -- solo un hold captured tiene transacción e importe capturado, y los tiene los dos
+    -- only a captured hold has a transaction and a captured amount, and it has both
     CONSTRAINT holds_capture_by_status CHECK (
         (status = 'captured') = (capture_tx_id IS NOT NULL)
         AND (status = 'captured') = (captured_amount > 0))
 );
 
-CREATE INDEX holds_pending_expiry_idx ON ledger.holds (expires_at) WHERE status = 'pending'; -- job de expiración (T-022)
+CREATE INDEX holds_pending_expiry_idx ON ledger.holds (expires_at) WHERE status = 'pending'; -- expiry job (T-022)
 
--- Un hold solo sale de pending, una vez, y lo único que cambia es su resultado.
+-- A hold only leaves pending, once, and the only thing that changes is its outcome.
 -- +goose StatementBegin
 CREATE FUNCTION ledger.forbid_hold_change() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF OLD.status <> 'pending' OR NEW.status = 'pending' THEN
-        RAISE EXCEPTION 'un hold solo sale de pending una vez'
+        RAISE EXCEPTION 'a hold leaves pending only once'
             USING ERRCODE = 'prohibited_sql_statement_attempted', TABLE = 'holds';
     END IF;
     RETURN NEW;
@@ -51,7 +51,7 @@ CREATE TRIGGER holds_no_delete
     BEFORE DELETE ON ledger.holds
     FOR EACH ROW EXECUTE FUNCTION ledger.forbid_change();
 
--- Vaciar holds pending dejaría su importe para siempre en el pendiente de las cuentas.
+-- Truncating pending holds would leave their amounts in the accounts' pending balances forever.
 CREATE TRIGGER holds_no_truncate
     BEFORE TRUNCATE ON ledger.holds
     FOR EACH STATEMENT EXECUTE FUNCTION ledger.forbid_change();
@@ -61,6 +61,6 @@ GRANT INSERT (id, legal_entity_id, account_id, counter_account_id, currency, amo
 GRANT UPDATE (status, captured_amount, capture_tx_id) ON ledger.holds TO aluna_app;
 
 -- +goose Down
--- Borra los holds con sus datos: solo sirve en desarrollo y pruebas.
+-- Drops the holds with their data: only for development and tests.
 DROP TABLE ledger.holds;
 DROP FUNCTION ledger.forbid_hold_change();

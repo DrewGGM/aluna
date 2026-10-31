@@ -12,31 +12,31 @@ import (
 	"github.com/DrewGGM/aluna/internal/audit/internal/app"
 )
 
-// TestAnAnchorIsWrittenOnce: el hash anclado se lee igual; anclarlo otra vez con el mismo hash no hace
-// nada y con otro es ErrAnchored, sin cambiar el anclado.
+// TestAnAnchorIsWrittenOnce: the anchored hash reads back the same; anchoring it again with the same hash
+// does nothing and with a different one is ErrAnchored, without changing the anchored one.
 func TestAnAnchorIsWrittenOnce(t *testing.T) {
 	d, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, second := sha256.Sum256([]byte("uno")), sha256.Sum256([]byte("dos"))
+	first, second := sha256.Sum256([]byte("one")), sha256.Sum256([]byte("two"))
 
 	if err := d.Put(t.Context(), 7, first); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Put(t.Context(), 7, first); err != nil {
-		t.Fatalf("repetir el mismo ancla = %v", err)
+		t.Fatalf("repeating the same anchor = %v", err)
 	}
 	if err := d.Put(t.Context(), 7, second); !errors.Is(err, ErrAnchored) {
-		t.Fatalf("reescribir el ancla = %v, se esperaba ErrAnchored", err)
+		t.Fatalf("rewriting the anchor = %v, want ErrAnchored", err)
 	}
 
 	if got, err := d.Get(t.Context(), 7); err != nil || got != first {
-		t.Fatalf("ancla = %x (%v), se esperaba %x", got, err, first)
+		t.Fatalf("anchor = %x (%v), want %x", got, err, first)
 	}
 }
 
-// TestAMissingAnchorIsNotAnchored: un bloque sin ancla no se lee como hash cero.
+// TestAMissingAnchorIsNotAnchored: a block with no anchor does not read as a zero hash.
 func TestAMissingAnchorIsNotAnchored(t *testing.T) {
 	d, err := New(t.TempDir())
 	if err != nil {
@@ -44,12 +44,12 @@ func TestAMissingAnchorIsNotAnchored(t *testing.T) {
 	}
 
 	if _, err := d.Get(t.Context(), 1); !errors.Is(err, app.ErrNotAnchored) {
-		t.Fatalf("ancla que no existe = %v, se esperaba ErrNotAnchored", err)
+		t.Fatalf("missing anchor = %v, want ErrNotAnchored", err)
 	}
 }
 
-// TestACorruptAnchorIsAnError: un archivo de ancla con más o menos de 64 caracteres hex es un error, no un
-// panic ni un hash.
+// TestACorruptAnchorIsAnError: an anchor file with more or fewer than 64 hex characters is an error, not a
+// panic or a hash.
 func TestACorruptAnchorIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	d, err := New(dir)
@@ -62,46 +62,46 @@ func TestACorruptAnchorIsAnError(t *testing.T) {
 		}
 
 		if _, err := d.Get(t.Context(), id); err == nil || errors.Is(err, app.ErrNotAnchored) {
-			t.Errorf("ancla %q = %v, se esperaba un error de ancla ilegible", content, err)
+			t.Errorf("anchor %q = %v, want an unreadable anchor error", content, err)
 		}
 	}
 }
 
-// TestTheAnchorDirectoryMustExist: abrir un ancla en una ruta que no existe es un error, no un directorio
-// nuevo y vacío.
+// TestTheAnchorDirectoryMustExist: opening an anchor at a path that does not exist is an error, not a new
+// empty directory.
 func TestTheAnchorDirectoryMustExist(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "no-existe")
+	missing := filepath.Join(t.TempDir(), "missing")
 
 	if _, err := New(missing); err == nil {
-		t.Fatal("se abrió un ancla en una ruta que no existe")
+		t.Fatal("an anchor was opened at a path that does not exist")
 	}
 	if _, err := os.Stat(missing); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("New creó %s", missing)
+		t.Fatalf("New created %s", missing)
 	}
 }
 
-// TestALeftoverTemporaryDoesNotBlock: un temporal que dejó una escritura cortada no es un ancla ni impide
-// anclar el bloque después.
+// TestALeftoverTemporaryDoesNotBlock: a temporary file left by an interrupted write is not an anchor and
+// does not prevent anchoring the block later.
 func TestALeftoverTemporaryDoesNotBlock(t *testing.T) {
 	dir := t.TempDir()
 	d, err := New(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "ancla-cortada.tmp"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "anchor-interrupted.tmp"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	hash := sha256.Sum256([]byte("bloque"))
+	hash := sha256.Sum256([]byte("block"))
 
 	if err := d.Put(t.Context(), 3, hash); err != nil {
 		t.Fatal(err)
 	}
 
 	if got, err := d.Get(t.Context(), 3); err != nil || got != hash {
-		t.Fatalf("ancla = %x (%v), se esperaba %x", got, err, hash)
+		t.Fatalf("anchor = %x (%v), want %x", got, err, hash)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 2 {
-		t.Fatalf("el directorio tiene %d entradas (%v), se esperaban el ancla y el temporal viejo", len(entries), err)
+		t.Fatalf("the directory has %d entries (%v), want the anchor and the old temporary file", len(entries), err)
 	}
 }

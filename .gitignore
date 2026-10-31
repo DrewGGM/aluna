@@ -1,13 +1,13 @@
-# Binarios
+# Binaries
 /aluna
 *.exe
 /bin/
 /dist/
 
-# Pruebas
+# Tests
 cover.out
 *.test
 
-# Entorno local
+# Local environment
 .env*
 tmp/

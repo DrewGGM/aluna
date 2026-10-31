@@ -9,26 +9,26 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 )
 
-// PeriodStatus es el estado de un periodo contable (FR-15).
+// PeriodStatus is the status of an accounting period (FR-15).
 type PeriodStatus string
 
-// Estados de un periodo contable: open → closing → closed.
+// Statuses of an accounting period: open → closing → closed.
 const (
 	PeriodOpen    PeriodStatus = "open"
 	PeriodClosing PeriodStatus = "closing"
 	PeriodClosed  PeriodStatus = "closed"
 )
 
-// ErrPeriodClosed indica una fecha de negocio dentro de un periodo cerrado: no se asienta.
-var ErrPeriodClosed = errors.New("periodo contable cerrado")
+// ErrPeriodClosed means a business date inside a closed period: nothing is posted.
+var ErrPeriodClosed = errors.New("accounting period closed")
 
-// PeriodStore lee el estado de los periodos.
+// PeriodStore reads the status of periods.
 type PeriodStore interface {
-	// PeriodStatus es el estado del periodo yyyy-mm de la entidad; found es false si no tiene fila.
+	// PeriodStatus is the status of the entity's yyyy-mm period; found is false if it has no row.
 	PeriodStatus(ctx context.Context, entity ids.ID, period string) (status PeriodStatus, found bool, err error)
 }
 
-// PeriodStatusOf es el estado del periodo de d. Un mes sin fila está abierto: el cierre crea la fila.
+// PeriodStatusOf is the status of d's period. A month with no row is open: the close creates the row.
 func PeriodStatusOf(ctx context.Context, store PeriodStore, entity ids.ID, d domain.Date) (PeriodStatus, error) {
 	status, found, err := store.PeriodStatus(ctx, entity, periodOf(d))
 	if err != nil {
@@ -40,8 +40,8 @@ func PeriodStatusOf(ctx context.Context, store PeriodStore, entity ids.ID, d dom
 	return status, nil
 }
 
-// EnsureOpen es ErrPeriodClosed si d cae en un periodo cerrado. Un periodo en cierre todavía admite
-// asientos (los ajustes del cierre).
+// EnsureOpen is ErrPeriodClosed if d falls in a closed period. A period that is closing still accepts
+// postings (the closing adjustments).
 func EnsureOpen(ctx context.Context, store PeriodStore, entity ids.ID, d domain.Date) error {
 	status, err := PeriodStatusOf(ctx, store, entity, d)
 	if err != nil {

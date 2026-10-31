@@ -1,7 +1,7 @@
--- Un esquema por módulo (ADR-0002) y el rol de la aplicación. aluna_app no es dueño de nada: las
--- tablas son del usuario que migra, así que la aplicación no puede alterarlas ni saltarse los REVOKE
--- de cada módulo. Al desplegar, el usuario con el que se conecta la aplicación se hace miembro de
--- aluna_app (GRANT aluna_app TO <usuario>); el que migra es el dueño de las tablas.
+-- One schema per module (ADR-0002) and the application role. aluna_app owns nothing: the tables
+-- belong to the migrating user, so the application can neither alter them nor bypass each module's
+-- REVOKEs. On deployment, the user the application connects as is made a member of aluna_app
+-- (GRANT aluna_app TO <user>); the migrating user owns the tables.
 
 -- +goose Up
 CREATE SCHEMA infra;
@@ -20,9 +20,10 @@ CREATE SCHEMA audit;
 CREATE SCHEMA access;
 CREATE SCHEMA webhooks;
 
--- Los roles son del clúster, no de la base: puede existir ya por otra base del mismo servidor, o
--- crearlo otra base que migra al mismo tiempo (por eso se atrapa el error y no basta un IF NOT EXISTS;
--- la carrera da unique_violation en pg_authid y no duplicate_object).
+-- Roles belong to the cluster, not the database: it may already exist because of another database on
+-- the same server, or another database migrating at the same time may create it (hence the error is
+-- caught and an IF NOT EXISTS is not enough; the race raises unique_violation on pg_authid, not
+-- duplicate_object).
 -- +goose StatementBegin
 DO $$
 BEGIN
@@ -37,7 +38,7 @@ GRANT USAGE ON SCHEMA infra, ledger, calendar, party, products, pricing, deposit
     compliance, recon, accounting, approvals, audit, access, webhooks TO aluna_app;
 
 -- +goose Down
--- Sin CASCADE: si una migración posterior dejó tablas, el down debe fallar y no borrarlas.
+-- No CASCADE: if a later migration left tables behind, the down must fail rather than drop them.
 DROP SCHEMA webhooks, access, audit, approvals, accounting, recon, compliance, payments, deposits,
     pricing, products, party, calendar, ledger, infra;
--- El rol se conserva: puede estar en uso por otra base del clúster.
+-- The role is kept: another database in the cluster may be using it.

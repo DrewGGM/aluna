@@ -1,16 +1,16 @@
 package domain
 
-// AccountInfo nombra la forma y guarda diccionarios sin tipo.
+// AccountInfo names the shape and holds untyped dictionaries.
 type AccountInfo struct {
 	Attributes map[string]any
 	Legacy     map[string]interface{}
 }
 
-// Describe recibe un tipo abierto.
+// Describe takes an open type.
 func Describe(v interface{}) string { return "" }
 
-// Payload es un alias de un tipo abierto.
+// Payload is an alias of an open type.
 type Payload = any
 
-// Apply recibe una función con un tipo abierto: se reporta una sola vez.
+// Apply takes a function with an open type: it is reported only once.
 func Apply(fn func(any)) {}

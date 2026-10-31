@@ -9,13 +9,13 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 )
 
-// Events publica los eventos del ledger en la transacción del caso de uso (ADR-0007): si la transacción
-// se revierte, el evento tampoco sale.
+// Events publishes the ledger events within the use case's transaction (ADR-0007): if the transaction
+// rolls back, the event does not go out either.
 type Events interface {
 	Emit(ctx context.Context, e Event) error
 }
 
-// Event es un evento del ledger (architecture §8).
+// Event is a ledger event (architecture §8).
 type Event struct {
 	Type, Subject string
 	LegalEntityID ids.ID
@@ -23,12 +23,12 @@ type Event struct {
 	Data          Payload
 }
 
-// Payload es el contenido de un evento: transactionPayload o holdPayload. Lleva identificadores, montos,
-// monedas, estados y fechas; nunca el actor ni la metadata, que pueden traer datos personales
-// (Constitución VII).
+// Payload is an event's content: transactionPayload or holdPayload. It carries identifiers, amounts,
+// currencies, statuses and dates; never the actor or the metadata, which may bring personal data
+// (Constitution VII).
 type Payload interface{ ledgerPayload() }
 
-// Tipos de los eventos del ledger; schemaVersion es la versión que dice su sufijo .v1.
+// Ledger event types; schemaVersion is the version their .v1 suffix states.
 const (
 	typeTransactionPosted   = "aluna.ledger.transaction.posted.v1"
 	typeTransactionReversed = "aluna.ledger.transaction.reversed.v1"
@@ -41,7 +41,7 @@ const (
 )
 
 type amountPayload struct {
-	Amount   int64  `json:"amount"` // unidades menores, como Money en la API
+	Amount   int64  `json:"amount"` // minor units, like Money in the API
 	Currency string `json:"currency"`
 }
 
@@ -51,7 +51,7 @@ func amountOf(a money.Amount) amountPayload {
 
 type entryPayload struct {
 	AccountID ids.ID        `json:"account_id"`
-	Amount    amountPayload `json:"amount"` // débito positivo, crédito negativo
+	Amount    amountPayload `json:"amount"` // debit positive, credit negative
 }
 
 type transactionPayload struct {
@@ -68,7 +68,7 @@ type transactionPayload struct {
 
 func (transactionPayload) ledgerPayload() {}
 
-// transactionEvent es el evento typ de la transacción t.
+// transactionEvent is the typ event of transaction t.
 func transactionEvent(typ string, t Transaction) Event {
 	entries := make([]entryPayload, len(t.Entries))
 	for i, e := range t.Entries {
@@ -92,12 +92,12 @@ type holdPayload struct {
 	Captured         amountPayload     `json:"captured"`
 	Status           domain.HoldStatus `json:"status"`
 	ExpiresAt        time.Time         `json:"expires_at"`
-	TransactionID    ids.ID            `json:"transaction_id,omitzero"` // la del capture
+	TransactionID    ids.ID            `json:"transaction_id,omitzero"` // the capture's
 }
 
 func (holdPayload) ledgerPayload() {}
 
-// holdEvent es el evento typ del hold h de la entidad; captureTx es la transacción de un capture o cero.
+// holdEvent is the typ event of the entity's hold h; captureTx is a capture's transaction or zero.
 func holdEvent(typ string, entity ids.ID, h Hold, captureTx ids.ID) Event {
 	return Event{
 		Type: typ, Subject: "holds/" + h.ID().String(), LegalEntityID: entity, SchemaVersion: schemaVersion,

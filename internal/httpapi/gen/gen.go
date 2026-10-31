@@ -182,26 +182,26 @@ type AccountKind string
 
 // Approval defines model for Approval.
 type Approval struct {
-	// Checker sub de quien decidió
+	// Checker sub of the decider
 	Checker   *string            `json:"checker,omitempty"`
 	CreatedAt time.Time          `json:"created_at"`
 	DecidedAt *time.Time         `json:"decided_at,omitempty"`
 	ExpiresAt time.Time          `json:"expires_at"`
 	Id        openapi_types.UUID `json:"id"`
 
-	// Kind Tipo de solicitud; cada módulo registra los suyos
+	// Kind Request kind; each module registers its own
 	Kind string `json:"kind"`
 
-	// Maker sub de quien pidió
+	// Maker sub of the requester
 	Maker string `json:"maker"`
 
-	// Payload El comando pedido, tal como se ejecutará al aprobarse.
+	// Payload The requested command, as it will run when approved.
 	Payload json.RawMessage `json:"payload"`
 
-	// Reason Motivo del rechazo
+	// Reason Rejection reason
 	Reason *string `json:"reason,omitempty"`
 
-	// Result Lo que devolvió el comando aprobado.
+	// Result What the approved command returned.
 	Result *json.RawMessage `json:"result,omitempty"`
 	Status ApprovalStatus   `json:"status"`
 }
@@ -218,25 +218,25 @@ type ApprovalStatus string
 type Balance struct {
 	AccountId openapi_types.UUID `json:"account_id"`
 
-	// AsKnownAt Corte de conocimiento del saldo bitemporal; no viene en el materializado.
+	// AsKnownAt Knowledge cutoff of the bitemporal balance; absent in the materialized one.
 	AsKnownAt *time.Time `json:"as_known_at,omitempty"`
 
-	// AsOfValueDate Corte de fecha valor del saldo bitemporal; no viene en el materializado.
+	// AsOfValueDate Value date cutoff of the bitemporal balance; absent in the materialized one.
 	AsOfValueDate *openapi_types.Date `json:"as_of_value_date,omitempty"`
 
-	// Natural Saldo en la naturaleza de la cuenta (un depósito de cliente es positivo).
+	// Natural Balance in the account's natural sign (a customer deposit is positive).
 	Natural Money `json:"natural"`
 
-	// PendingCredits Holds de crédito pendientes (importe no negativo). Solo en el materializado.
+	// PendingCredits Pending credit holds (non-negative amount). Only in the materialized balance.
 	PendingCredits *Money `json:"pending_credits,omitempty"`
 
-	// PendingDebits Holds de débito pendientes (importe no negativo). Solo en el materializado.
+	// PendingDebits Pending debit holds (non-negative amount). Only in the materialized balance.
 	PendingDebits *Money `json:"pending_debits,omitempty"`
 
-	// Posted Saldo con signo (débito positivo, crédito negativo).
+	// Posted Signed balance (debit positive, credit negative).
 	Posted Money `json:"posted"`
 
-	// Version Versión del saldo materializado. Solo en el materializado.
+	// Version Version of the materialized balance. Only in the materialized balance.
 	Version *int64 `json:"version,omitempty"`
 }
 
@@ -256,7 +256,7 @@ type CreateLedgerAccount struct {
 	Currency    string      `json:"currency"`
 	Kind        AccountKind `json:"kind"`
 
-	// LowerLimit Límite inferior del saldo natural, en unidades menores (0 por defecto).
+	// LowerLimit Lower limit of the natural balance, in minor units (0 by default).
 	LowerLimit *int64 `json:"lower_limit,omitempty"`
 }
 
@@ -264,7 +264,7 @@ type CreateLedgerAccount struct {
 type Entry struct {
 	AccountId openapi_types.UUID `json:"account_id"`
 
-	// Amount Con signo, débito positivo y crédito negativo.
+	// Amount Signed, debit positive and credit negative.
 	Amount Money `json:"amount"`
 }
 
@@ -303,7 +303,7 @@ type LedgerAccount struct {
 
 // Money defines model for Money.
 type Money struct {
-	// Amount Unidades menores de la moneda (COP 100.000 = 10000000).
+	// Amount Minor units of the currency (COP 100,000 = 10000000).
 	Amount   int64  `json:"amount"`
 	Currency string `json:"currency"`
 }
@@ -331,11 +331,11 @@ type PartyKind string
 
 // PlaceHold defines model for PlaceHold.
 type PlaceHold struct {
-	// AccountId Cuenta cuyos fondos se retienen
+	// AccountId Account whose funds are held
 	AccountId openapi_types.UUID `json:"account_id"`
 	Amount    Money              `json:"amount"`
 
-	// CounterAccountId Cuenta que recibe lo capturado
+	// CounterAccountId Account that receives the captured amount
 	CounterAccountId openapi_types.UUID `json:"counter_account_id"`
 	ExpiresAt        time.Time          `json:"expires_at"`
 }
@@ -358,7 +358,7 @@ type Problem struct {
 	Status   int     `json:"status"`
 	Title    string  `json:"title"`
 
-	// TraceId Traza del request (W3C), para buscarla en los logs y en el backend de trazas.
+	// TraceId Trace of the request (W3C), to look it up in the logs and the tracing backend.
 	TraceId *string `json:"trace_id,omitempty"`
 	Type    string  `json:"type"`
 }
@@ -386,7 +386,7 @@ type RejectApproval struct {
 
 // RequestReversal defines model for RequestReversal.
 type RequestReversal struct {
-	// BusinessDate Fecha de negocio de la reversa; por defecto, la de la entidad al aprobarse.
+	// BusinessDate Business date of the reversal; by default, the entity's when approved.
 	BusinessDate *openapi_types.Date `json:"business_date,omitempty"`
 	Reason       string              `json:"reason"`
 }
@@ -439,10 +439,10 @@ type ReleaseHoldParams struct {
 
 // GetLedgerAccountBalanceParams defines parameters for GetLedgerAccountBalance.
 type GetLedgerAccountBalanceParams struct {
-	// AsOfValueDate Fecha valor de corte (inclusive). Vacío (o 0001-01-01) cuenta como ausente.
+	// AsOfValueDate Value date cutoff (inclusive). Empty (or 0001-01-01) counts as absent.
 	AsOfValueDate *openapi_types.Date `form:"as_of_value_date,omitempty" json:"as_of_value_date,omitempty"`
 
-	// AsKnownAt Saldo como se conocía en este instante RFC 3339 (posted_at hasta él, inclusive; se aplica en UTC y en microsegundos, y así se devuelve). posted_at es la hora de inserción y no la del commit, así que el corte es definitivo solo para instantes anteriores a la transacción en curso más larga. Vacío (o el instante cero) cuenta como ausente.
+	// AsKnownAt Balance as it was known at this RFC 3339 instant (posted_at up to it, inclusive; it applies in UTC and in microseconds, and is returned that way). posted_at is the insertion time and not the commit time, so the cutoff is final only for instants before the longest transaction in progress. Empty (or the zero instant) counts as absent.
 	AsKnownAt *time.Time `form:"as_known_at,omitempty" json:"as_known_at,omitempty"`
 }
 
@@ -479,31 +479,31 @@ type RequestReversalJSONRequestBody = RequestReversal
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// ListApprovals Solicitudes de maker-checker de la entidad
+	// ListApprovals Maker-checker requests of the entity
 	// (GET /v1/approvals)
 	ListApprovals(w http.ResponseWriter, r *http.Request, params ListApprovalsParams)
-	// ApproveRequest Aprobar una solicitud
+	// ApproveRequest Approve a request
 	// (POST /v1/approvals/{id}/approval)
 	ApproveRequest(w http.ResponseWriter, r *http.Request, id ID, params ApproveRequestParams)
-	// RejectRequest Rechazar una solicitud
+	// RejectRequest Reject a request
 	// (POST /v1/approvals/{id}/rejection)
 	RejectRequest(w http.ResponseWriter, r *http.Request, id ID)
-	// PlaceHold Retener fondos de una cuenta
+	// PlaceHold Hold funds of an account
 	// (POST /v1/holds)
 	PlaceHold(w http.ResponseWriter, r *http.Request, params PlaceHoldParams)
-	// CaptureHold Asentar un hold, total o parcialmente
+	// CaptureHold Capture a hold, fully or partially
 	// (POST /v1/holds/{id}/capture)
 	CaptureHold(w http.ResponseWriter, r *http.Request, id ID, params CaptureHoldParams)
-	// ReleaseHold Liberar un hold
+	// ReleaseHold Release a hold
 	// (POST /v1/holds/{id}/release)
 	ReleaseHold(w http.ResponseWriter, r *http.Request, id ID, params ReleaseHoldParams)
-	// CreateLedgerAccount Crear una cuenta del ledger
+	// CreateLedgerAccount Create a ledger account
 	// (POST /v1/ledger-accounts)
 	CreateLedgerAccount(w http.ResponseWriter, r *http.Request)
-	// GetLedgerAccount Leer una cuenta del ledger
+	// GetLedgerAccount Read a ledger account
 	// (GET /v1/ledger-accounts/{id})
 	GetLedgerAccount(w http.ResponseWriter, r *http.Request, id ID)
-	// GetLedgerAccountBalance Leer el saldo de una cuenta
+	// GetLedgerAccountBalance Read an account balance
 	// (GET /v1/ledger-accounts/{id}/balance)
 	GetLedgerAccountBalance(w http.ResponseWriter, r *http.Request, id ID, params GetLedgerAccountBalanceParams)
 	// RegisterParty Register a party
@@ -512,13 +512,13 @@ type ServerInterface interface {
 	// GetParty Read a party
 	// (GET /v1/parties/{id})
 	GetParty(w http.ResponseWriter, r *http.Request, id ID)
-	// PostTransaction Asentar una transacción balanceada
+	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(w http.ResponseWriter, r *http.Request, params PostTransactionParams)
-	// GetTransaction Leer una transacción
+	// GetTransaction Read a transaction
 	// (GET /v1/transactions/{id})
 	GetTransaction(w http.ResponseWriter, r *http.Request, id ID)
-	// RequestReversal Pedir la reversa de una transacción
+	// RequestReversal Request the reversal of a transaction
 	// (POST /v1/transactions/{id}/reversal)
 	RequestReversal(w http.ResponseWriter, r *http.Request, id ID, params RequestReversalParams)
 }
@@ -2414,31 +2414,31 @@ func (response RequestReversaldefaultApplicationProblemPlusJSONResponse) VisitRe
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
-	// ListApprovals Solicitudes de maker-checker de la entidad
+	// ListApprovals Maker-checker requests of the entity
 	// (GET /v1/approvals)
 	ListApprovals(ctx context.Context, request ListApprovalsRequestObject) (ListApprovalsResponseObject, error)
-	// ApproveRequest Aprobar una solicitud
+	// ApproveRequest Approve a request
 	// (POST /v1/approvals/{id}/approval)
 	ApproveRequest(ctx context.Context, request ApproveRequestRequestObject) (ApproveRequestResponseObject, error)
-	// RejectRequest Rechazar una solicitud
+	// RejectRequest Reject a request
 	// (POST /v1/approvals/{id}/rejection)
 	RejectRequest(ctx context.Context, request RejectRequestRequestObject) (RejectRequestResponseObject, error)
-	// PlaceHold Retener fondos de una cuenta
+	// PlaceHold Hold funds of an account
 	// (POST /v1/holds)
 	PlaceHold(ctx context.Context, request PlaceHoldRequestObject) (PlaceHoldResponseObject, error)
-	// CaptureHold Asentar un hold, total o parcialmente
+	// CaptureHold Capture a hold, fully or partially
 	// (POST /v1/holds/{id}/capture)
 	CaptureHold(ctx context.Context, request CaptureHoldRequestObject) (CaptureHoldResponseObject, error)
-	// ReleaseHold Liberar un hold
+	// ReleaseHold Release a hold
 	// (POST /v1/holds/{id}/release)
 	ReleaseHold(ctx context.Context, request ReleaseHoldRequestObject) (ReleaseHoldResponseObject, error)
-	// CreateLedgerAccount Crear una cuenta del ledger
+	// CreateLedgerAccount Create a ledger account
 	// (POST /v1/ledger-accounts)
 	CreateLedgerAccount(ctx context.Context, request CreateLedgerAccountRequestObject) (CreateLedgerAccountResponseObject, error)
-	// GetLedgerAccount Leer una cuenta del ledger
+	// GetLedgerAccount Read a ledger account
 	// (GET /v1/ledger-accounts/{id})
 	GetLedgerAccount(ctx context.Context, request GetLedgerAccountRequestObject) (GetLedgerAccountResponseObject, error)
-	// GetLedgerAccountBalance Leer el saldo de una cuenta
+	// GetLedgerAccountBalance Read an account balance
 	// (GET /v1/ledger-accounts/{id}/balance)
 	GetLedgerAccountBalance(ctx context.Context, request GetLedgerAccountBalanceRequestObject) (GetLedgerAccountBalanceResponseObject, error)
 	// RegisterParty Register a party
@@ -2447,13 +2447,13 @@ type StrictServerInterface interface {
 	// GetParty Read a party
 	// (GET /v1/parties/{id})
 	GetParty(ctx context.Context, request GetPartyRequestObject) (GetPartyResponseObject, error)
-	// PostTransaction Asentar una transacción balanceada
+	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(ctx context.Context, request PostTransactionRequestObject) (PostTransactionResponseObject, error)
-	// GetTransaction Leer una transacción
+	// GetTransaction Read a transaction
 	// (GET /v1/transactions/{id})
 	GetTransaction(ctx context.Context, request GetTransactionRequestObject) (GetTransactionResponseObject, error)
-	// RequestReversal Pedir la reversa de una transacción
+	// RequestReversal Request the reversal of a transaction
 	// (POST /v1/transactions/{id}/reversal)
 	RequestReversal(ctx context.Context, request RequestReversalRequestObject) (RequestReversalResponseObject, error)
 }

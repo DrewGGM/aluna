@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Querier es lo que un adapter puede hacer con la base: el mismo conjunto de métodos que espera el
-// código de sqlc. Lo cumplen Tx y, para lecturas fuera de transacción, *pgxpool.Pool.
+// Querier is what an adapter can do with the database: the same method set the sqlc code expects. Tx
+// satisfies it and, for reads outside a transaction, so does *pgxpool.Pool.
 type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -25,32 +25,32 @@ var (
 	_ Querier = (*pgxpool.Pool)(nil)
 )
 
-// Tx es la transacción que comparten los módulos dentro de UnitOfWork.Do. Deja consultar, pero no cerrar:
-// el commit y el rollback son de Do, así que ningún módulo puede cerrar la transacción de los demás.
+// Tx is the transaction the modules share within UnitOfWork.Do. It allows querying, but not closing:
+// commit and rollback belong to Do, so no module can close the others' transaction.
 type Tx struct{ tx pgx.Tx }
 
-// Exec ejecuta una sentencia dentro de la transacción.
+// Exec runs a statement within the transaction.
 func (t Tx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return t.tx.Exec(ctx, sql, args...)
 }
 
-// Query ejecuta una consulta dentro de la transacción.
-func (t Tx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) { //nolint:ireturn // mismo contrato que pgx.Tx
+// Query runs a query within the transaction.
+func (t Tx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) { //nolint:ireturn // same contract as pgx.Tx
 	return t.tx.Query(ctx, sql, args...)
 }
 
-// QueryRow ejecuta una consulta de una fila dentro de la transacción.
-func (t Tx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row { //nolint:ireturn // mismo contrato que pgx.Tx
+// QueryRow runs a single-row query within the transaction.
+func (t Tx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row { //nolint:ireturn // same contract as pgx.Tx
 	return t.tx.QueryRow(ctx, sql, args...)
 }
 
-// ErrSharedTx indica un Commit o Rollback sobre Tx.Pgx(): la transacción solo la cierra UnitOfWork.Do.
-var ErrSharedTx = errors.New("la transacción la cierra UnitOfWork.Do")
+// ErrSharedTx means a Commit or Rollback on Tx.Pgx(): only UnitOfWork.Do closes the transaction.
+var ErrSharedTx = errors.New("the transaction is closed by UnitOfWork.Do")
 
-// Pgx es la transacción como pgx.Tx, para las librerías que escriben en ella con su propio cliente: River
-// inserta en la misma transacción el job que publica un evento del outbox. Commit y Rollback devuelven
-// ErrSharedTx; los savepoints (Begin) sí se pueden cerrar.
-func (t Tx) Pgx() pgx.Tx { return sharedTx{t.tx} } //nolint:ireturn // pgx.Tx es la interfaz que piden esas librerías
+// Pgx is the transaction as a pgx.Tx, for libraries that write to it with their own client: River
+// inserts, in the same transaction, the job that publishes an outbox event. Commit and Rollback return
+// ErrSharedTx; savepoints (Begin) can be closed.
+func (t Tx) Pgx() pgx.Tx { return sharedTx{t.tx} } //nolint:ireturn // pgx.Tx is the interface those libraries ask for
 
 type sharedTx struct{ pgx.Tx }
 
@@ -66,19 +66,19 @@ const (
 	deadlockDetected     = "40P01"
 )
 
-// UnitOfWork corre un comando de negocio en una sola transacción de PostgreSQL.
+// UnitOfWork runs a business command in a single PostgreSQL transaction.
 type UnitOfWork struct {
 	pool *pgxpool.Pool
 }
 
-// NewUnitOfWork crea la Unit of Work sobre p.
+// NewUnitOfWork creates the Unit of Work over p.
 func NewUnitOfWork(p *pgxpool.Pool) *UnitOfWork { return &UnitOfWork{pool: p} }
 
-// Do corre fn en una transacción READ COMMITTED: hace commit si fn devuelve nil y rollback en cualquier
-// otro caso (error, panic o runtime.Goexit; el panic sigue su curso). Ante un conflicto de serialización (40001) o un
-// deadlock (40P01) repite toda la transacción hasta maxAttempts intentos, con backoff y jitter. Por eso
-// fn tiene que poder repetirse, y los adapters no deben traducir esos dos errores a errores de dominio:
-// los devuelven envueltos con %w para que Do los reconozca.
+// Do runs fn in a READ COMMITTED transaction: it commits if fn returns nil and rolls back in any other
+// case (error, panic or runtime.Goexit; the panic carries on). On a serialization failure (40001) or a
+// deadlock (40P01) it retries the whole transaction up to maxAttempts attempts, with backoff and jitter.
+// That is why fn must be repeatable, and adapters must not translate those two errors into domain
+// errors: they return them wrapped with %w so that Do recognizes them.
 func (u *UnitOfWork) Do(ctx context.Context, fn func(Tx) error) error {
 	for attempt := 1; ; attempt++ {
 		err := u.once(ctx, fn)
@@ -94,16 +94,16 @@ func (u *UnitOfWork) Do(ctx context.Context, fn func(Tx) error) error {
 func (u *UnitOfWork) once(ctx context.Context, fn func(Tx) error) error {
 	tx, err := u.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return fmt.Errorf("iniciar la transacción: %w", err)
+		return fmt.Errorf("begin transaction: %w", err)
 	}
-	// El rollback no se cancela con el request (tiene que llegar a la base igual), pero tiene su propio
-	// límite por si la red se cortó.
+	// The rollback is not canceled with the request (it must reach the database anyway), but it has its
+	// own limit in case the network dropped.
 	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
 	defer cancel()
 	finished := false
 	defer func() {
-		if !finished { // fn hizo panic o runtime.Goexit (t.Fatal): el panic sigue su curso tras el rollback
-			tx.Rollback(rollbackCtx) //nolint:errcheck,gosec // si falla, pgx descarta la conexión; lo que importa es lo que interrumpió a fn
+		if !finished { // fn panicked or called runtime.Goexit (t.Fatal): the panic carries on after the rollback
+			tx.Rollback(rollbackCtx) //nolint:errcheck,gosec // if it fails, pgx discards the connection; what matters is what interrupted fn
 		}
 	}()
 	err = fn(Tx{tx: tx})
@@ -125,11 +125,11 @@ func retryable(err error) bool {
 	return errors.As(err, &pgErr) && (pgErr.Code == serializationFailure || pgErr.Code == deadlockDetected)
 }
 
-// backoff duplica la espera en cada intento y le suma hasta otro tanto al azar, para que dos
-// transacciones que chocaron no vuelvan a chocar al mismo tiempo.
+// backoff doubles the wait on each attempt and adds up to as much again at random, so that two
+// transactions that collided do not collide again at the same time.
 func backoff(attempt int) time.Duration {
 	wait := baseBackoff << (attempt - 1)
-	return wait + rand.N(wait) //nolint:gosec // el jitter no necesita aleatoriedad criptográfica
+	return wait + rand.N(wait) //nolint:gosec // jitter does not need cryptographic randomness
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

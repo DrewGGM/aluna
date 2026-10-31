@@ -1,6 +1,6 @@
--- Periodos contables por entidad (FR-15, ADR-0006): open → closing → closed. El ledger no asienta con
--- una fecha de negocio dentro de un periodo cerrado. Un mes sin fila está abierto; el cierre (T-069)
--- crea y avanza las filas, y hasta entonces la aplicación solo las lee.
+-- Accounting periods per entity (FR-15, ADR-0006): open → closing → closed. The ledger does not post with
+-- a business date inside a closed period. A month with no row is open; the close (T-069) creates and
+-- advances the rows, and until then the application only reads them.
 
 -- +goose Up
 CREATE TABLE calendar.periods (
@@ -10,7 +10,7 @@ CREATE TABLE calendar.periods (
     closed_at       timestamptz,
     closed_by       text,
     PRIMARY KEY (legal_entity_id, period),
-    -- un periodo cerrado dice cuándo y quién lo cerró, y solo uno cerrado lo dice
+    -- a closed period records when and by whom it was closed, and only a closed one records it
     CHECK ((status = 'closed') = (closed_at IS NOT NULL AND closed_by IS NOT NULL)),
     CHECK ((closed_at IS NULL) = (closed_by IS NULL))
 );

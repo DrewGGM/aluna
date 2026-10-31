@@ -1,12 +1,13 @@
--- Tablas de River (ADR-0007) en el esquema infra: la cola de jobs del outbox, de los periódicos y de los
--- de fin de día. El SQL es el de River v0.49.0, migraciones 002 a 008, tal cual lo da
--- `river migrate-get --all --exclude-version 1 --up --schema infra` (la 001 son las tablas de su propio
--- framework de migraciones, que aquí es goose). Para subir de versión de River se agrega una migración
--- con `migrate-get --version N` de las versiones nuevas.
+-- River tables (ADR-0007) in the infra schema: the job queue for the outbox, periodic jobs and
+-- end-of-day jobs. The SQL is River v0.49.0's, migrations 002 to 008, exactly as produced by
+-- `river migrate-get --all --exclude-version 1 --up --schema infra` (001 holds the tables of its own
+-- migration framework, which here is goose). To upgrade River, add a migration with
+-- `migrate-get --version N` for the new versions.
 --
--- Sin transacción: la 004 agrega el valor 'pending' a infra.river_job_state y la 006 lo usa, y
--- PostgreSQL no deja usar un valor de enum en la misma transacción que lo crea. Si falla a mitad,
--- goose no registra la versión y quedan objetos creados: se borran con el Down antes de reintentar.
+-- No transaction: 004 adds the 'pending' value to infra.river_job_state and 006 uses it, and
+-- PostgreSQL does not allow using an enum value in the same transaction that creates it. If it fails
+-- halfway, goose does not record the version and created objects remain: drop them with the Down
+-- before retrying.
 
 -- +goose NO TRANSACTION
 -- +goose Up
@@ -340,14 +341,14 @@ ALTER TABLE infra.river_queue
 -- from being reused.
 SELECT 1;
 
--- River corre como aluna_app: lee y escribe solo sus tablas (no todo infra, cuyas otras tablas tienen
--- permisos por columna). REINDEX exige ser dueño del índice, así que su reindexer no corre como
--- aluna_app: el worker lo apaga y los índices de river_job los reconstruye operaciones.
+-- River runs as aluna_app: it reads and writes only its own tables (not all of infra, whose other
+-- tables have column-level grants). REINDEX requires owning the index, so its reindexer does not run as
+-- aluna_app: the worker disables it and operations rebuilds the river_job indexes.
 GRANT SELECT, INSERT, UPDATE, DELETE ON infra.river_job, infra.river_leader, infra.river_queue, infra.river_notification TO aluna_app;
 GRANT USAGE ON SEQUENCE infra.river_job_id_seq, infra.river_notification_id_seq TO aluna_app;
 
 -- +goose Down
--- Borra River con sus jobs: solo sirve en desarrollo y pruebas.
+-- Drops River with its jobs: only for development and tests.
 DROP TABLE infra.river_notification, infra.river_queue, infra.river_leader, infra.river_job;
 DROP FUNCTION infra.river_job_state_in_bitmask;
 DROP TYPE infra.river_job_state;

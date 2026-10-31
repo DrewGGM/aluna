@@ -1,14 +1,14 @@
 package app
 
-// Poster recibe un tipo abierto.
+// Poster takes an open type.
 type Poster interface {
 	Post(payload any) error
 }
 
-// First es genérico: any como restricción no es un tipo abierto.
+// First is generic: any as a constraint is not an open type.
 func First[T any](items []T) T { return items[0] }
 
-// LedgerManager nombra la forma; la caché sin tipo no es AS-5 fuera del dominio.
+// LedgerManager names the shape; the untyped cache is not AS-5 outside the domain.
 type LedgerManager struct{}
 
 var cache map[string]any

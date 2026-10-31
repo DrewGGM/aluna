@@ -14,7 +14,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// transfer es un posting de 100 COP de from (crédito) a to (débito) con la referencia ref.
+// transfer is a posting of 100 COP from from (credit) to to (debit) with reference ref.
 func transfer(t *testing.T, to, from ids.ID, ref string) ledger.PostInput {
 	t.Helper()
 	today := time.Now().UTC().Truncate(24 * time.Hour)
@@ -28,9 +28,9 @@ func transfer(t *testing.T, to, from ids.ID, ref string) ledger.PostInput {
 	}
 }
 
-// postRef asienta in en su propia transacción como lo haría un productor interno: un repetido se toma
-// como hecho y se confirma. No llama t.Fatal, así que sirve desde otras goroutines; err es el de Post
-// (si no es un repetido) o el del commit.
+// postRef posts in in its own transaction as an internal producer would: a duplicate is taken as done
+// and committed. It does not call t.Fatal, so it works from other goroutines; err is Post's (if it is not
+// a duplicate) or the commit's.
 func postRef(t *testing.T, in ledger.PostInput) (posted ledger.Transaction, duplicate bool, err error) {
 	t.Helper()
 	err = postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
@@ -53,7 +53,7 @@ func mustPostRef(t *testing.T, in ledger.PostInput) (ledger.Transaction, bool) {
 	return posted, duplicate
 }
 
-// countByRef cuenta las transacciones de la entidad con la referencia ref y sus entries.
+// countByRef counts the entity's transactions with reference ref and their entries.
 func countByRef(t *testing.T, ref string) (transactions, entries int) {
 	t.Helper()
 	err := testPool.QueryRow(t.Context(), `SELECT count(DISTINCT t.id), count(e.id) FROM ledger.transactions t
@@ -65,35 +65,35 @@ func countByRef(t *testing.T, ref string) (transactions, entries int) {
 	return transactions, entries
 }
 
-// TestARepeatedExternalRefReturnsTheOriginal: el segundo Post con el mismo (entidad, source,
-// external_ref) devuelve la transacción original como repetida y no escribe nada, aunque ya no cabría
-// (el productor reintenta algo que ya pasó).
+// TestARepeatedExternalRefReturnsTheOriginal: the second Post with the same (entity, source,
+// external_ref) returns the original transaction as a duplicate and writes nothing, even though it would
+// no longer fit (the producer retries something that already went through).
 func TestARepeatedExternalRefReturnsTheOriginal(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	ref := ids.New().String()
-	if _, duplicate := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String())); duplicate { // fondea la caja
-		t.Fatal("el fondeo no es repetido")
+	if _, duplicate := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String())); duplicate { // funds the cash account
+		t.Fatal("the funding is not a duplicate")
 	}
-	original, duplicate := mustPostRef(t, transfer(t, deposit.ID, cash.ID, ref)) // vacía la caja
+	original, duplicate := mustPostRef(t, transfer(t, deposit.ID, cash.ID, ref)) // empties the cash account
 	if duplicate {
-		t.Fatal("el primer Post no es repetido")
+		t.Fatal("the first Post is not a duplicate")
 	}
 
-	again, duplicate := mustPostRef(t, transfer(t, deposit.ID, cash.ID, ref)) // ya no habría fondos
+	again, duplicate := mustPostRef(t, transfer(t, deposit.ID, cash.ID, ref)) // there would be no funds anymore
 
 	if !duplicate || again.ID != original.ID || !again.PostedAt.Equal(original.PostedAt) || len(again.Entries) != 2 {
-		t.Fatalf("segundo Post = %+v (repetido: %v), se esperaba la original %s", again, duplicate, original.ID)
+		t.Fatalf("second Post = %+v (duplicate: %v), want the original %s", again, duplicate, original.ID)
 	}
 	if txs, entries := countByRef(t, ref); txs != 1 || entries != 2 {
-		t.Fatalf("con la referencia hay %d transacciones y %d entries, se esperaban 1 y 2", txs, entries)
+		t.Fatalf("the reference has %d transactions and %d entries, want 1 and 2", txs, entries)
 	}
 	if got := postedOf(t, cash.ID); got != 0 {
-		t.Fatalf("saldo de la caja = %d, se esperaba 0: el repetido no mueve dinero", got)
+		t.Fatalf("cash balance = %d, want 0: the duplicate moves no money", got)
 	}
 }
 
-// TestConcurrentPostsWithTheSameRefPostOnce: 10 productores a la vez con la misma referencia asientan
-// una sola transacción; los demás reciben esa misma como repetida, nunca un error.
+// TestConcurrentPostsWithTheSameRefPostOnce: 10 producers at once with the same reference post a single
+// transaction; the others receive that same one as a duplicate, never an error.
 func TestConcurrentPostsWithTheSameRefPostOnce(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	ref := ids.New().String()
@@ -113,11 +113,11 @@ func TestConcurrentPostsWithTheSameRefPostOnce(t *testing.T) {
 			fresh++
 		}
 		if p.ID != posted[0].ID {
-			t.Errorf("productor %d recibió %s, se esperaba %s", i, p.ID, posted[0].ID)
+			t.Errorf("producer %d received %s, want %s", i, p.ID, posted[0].ID)
 		}
 	}
 	if txs, entries := countByRef(t, ref); fresh != 1 || txs != 1 || entries != 2 {
-		t.Fatalf("%d productores asentaron; hay %d transacciones y %d entries; se esperaban 1, 1 y 2", fresh, txs, entries)
+		t.Fatalf("%d producers posted; there are %d transactions and %d entries; want 1, 1 and 2", fresh, txs, entries)
 	}
 }
 
@@ -125,15 +125,15 @@ func TestTheSameRefFromAnotherSourceIsAnotherTransaction(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	in := transfer(t, cash.ID, deposit.ID, ids.New().String())
 	first, _ := mustPostRef(t, in)
-	in.Source = "otra-fuente"
+	in.Source = "other-source"
 
 	if second, duplicate := mustPostRef(t, in); duplicate || second.ID == first.ID {
-		t.Fatalf("la misma referencia de otra fuente = %s (repetido: %v); se esperaba otra transacción", second.ID, duplicate)
+		t.Fatalf("the same reference from another source = %s (duplicate: %v); want another transaction", second.ID, duplicate)
 	}
 }
 
-// TestTheSameRefInAnotherEntityIsAnotherTransaction: la unicidad es por entidad legal, también cuando
-// las dos entidades ya tienen la referencia.
+// TestTheSameRefInAnotherEntityIsAnotherTransaction: uniqueness is per legal entity, also when both
+// entities already have the reference.
 func TestTheSameRefInAnotherEntityIsAnotherTransaction(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	ref := ids.New().String()
@@ -146,17 +146,17 @@ func TestTheSameRefInAnotherEntityIsAnotherTransaction(t *testing.T) {
 
 	second, duplicate := mustPostRef(t, in)
 	if duplicate || second.ID == first.ID {
-		t.Fatalf("la misma referencia en otra entidad = %s (repetido: %v); se esperaba otra transacción", second.ID, duplicate)
+		t.Fatalf("the same reference in another entity = %s (duplicate: %v); want another transaction", second.ID, duplicate)
 	}
 	if again, duplicate := mustPostRef(t, in); !duplicate || again.ID != second.ID {
-		t.Fatalf("repetir en la otra entidad = %s (repetido: %v); se esperaba su original %s", again.ID, duplicate, second.ID)
+		t.Fatalf("repeating in the other entity = %s (duplicate: %v); want its original %s", again.ID, duplicate, second.ID)
 	}
 }
 
 func accountOf(t *testing.T, legalEntity ids.ID, kind ledger.Kind) ledger.Account {
 	t.Helper()
 	a, err := tryCreateAccount(t, ledger.CreateAccountInput{
-		LegalEntityID: legalEntity, Code: "cta-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: ledger.BalanceModeSync,
+		LegalEntityID: legalEntity, Code: "acct-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: ledger.BalanceModeSync,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -164,12 +164,12 @@ func accountOf(t *testing.T, legalEntity ids.ID, kind ledger.Kind) ledger.Accoun
 	return a
 }
 
-// postAndHold asienta in en una transacción que queda abierta y devuelve el pid de su sesión y una
-// función que la termina (con commit o con rollback) y devuelve lo asentado.
+// postAndHold posts in in a transaction that stays open and returns its session's pid and a function that
+// ends it (with commit or rollback) and returns what was posted.
 func postAndHold(t *testing.T, in ledger.PostInput) (int32, func(commit bool) (ledger.Transaction, error)) {
 	t.Helper()
 	pids, done, release := make(chan int32, 1), make(chan error, 1), make(chan bool, 1)
-	t.Cleanup(sync.OnceFunc(func() { release <- false })) // si la prueba falla antes, la transacción no queda abierta
+	t.Cleanup(sync.OnceFunc(func() { release <- false })) // if the test fails earlier, the transaction is not left open
 	var posted ledger.Transaction
 	go func() {
 		done <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
@@ -183,7 +183,7 @@ func postAndHold(t *testing.T, in ledger.PostInput) (int32, func(commit bool) (l
 			}
 			pids <- pid
 			if !<-release {
-				return errors.New("la primera se revierte")
+				return errors.New("the first one rolls back")
 			}
 			return nil
 		})
@@ -196,13 +196,13 @@ func postAndHold(t *testing.T, in ledger.PostInput) (int32, func(commit bool) (l
 			return posted, err
 		}
 	case err := <-done:
-		t.Fatalf("el primer productor no asentó: %v", err)
+		t.Fatalf("the first producer did not post: %v", err)
 		return 0, nil
 	}
 }
 
-// raceAgainst asienta second mientras first sigue abierto, espera a que second quede bloqueado por
-// first, termina first (commit o rollback) y devuelve lo que obtuvo second.
+// raceAgainst posts second while first is still open, waits for second to be blocked by first, ends first
+// (commit or rollback) and returns what second got.
 func raceAgainst(t *testing.T, first, second ledger.PostInput, commit bool) (firstTx, secondTx ledger.Transaction, duplicate bool) {
 	t.Helper()
 	pid, finish := postAndHold(t, first)
@@ -221,48 +221,48 @@ func raceAgainst(t *testing.T, first, second ledger.PostInput, commit bool) (fir
 
 	firstTx, err := finish(commit)
 	if (err == nil) != commit {
-		t.Fatalf("la primera transacción terminó con %v", err)
+		t.Fatalf("the first transaction ended with %v", err)
 	}
 	r := <-results
 	if r.err != nil {
-		t.Fatalf("el segundo productor = %v", r.err)
+		t.Fatalf("the second producer = %v", r.err)
 	}
 	return firstTx, r.posted, r.duplicate
 }
 
-// TestAProducerThatLosesTheRaceGetsTheOriginal: si otro productor asienta la misma referencia después
-// de la búsqueda inicial, el segundo recibe la original como repetida y no escribe nada. Sobre las
-// mismas cuentas espera los locks de los saldos y, con el commit del primero, ya no le alcanza: es el
-// caso real de un reintento. Sobre otras cuentas espera el INSERT de la referencia.
+// TestAProducerThatLosesTheRaceGetsTheOriginal: if another producer posts the same reference after the
+// initial lookup, the second receives the original as a duplicate and writes nothing. On the same accounts
+// it waits for the balance locks and, with the first one's commit, no longer has enough: the real case of
+// a retry. On other accounts it waits for the reference's INSERT.
 func TestAProducerThatLosesTheRaceGetsTheOriginal(t *testing.T) {
-	for name, sameAccounts := range map[string]bool{"mismas cuentas": true, "otras cuentas": false} {
+	for name, sameAccounts := range map[string]bool{"same accounts": true, "other accounts": false} {
 		t.Run(name, func(t *testing.T) {
 			cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
-			if _, duplicate := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String())); duplicate { // fondea 100
-				t.Fatal("el fondeo no es repetido")
+			if _, duplicate := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String())); duplicate { // funds 100
+				t.Fatal("the funding is not a duplicate")
 			}
 			ref := ids.New().String()
-			firstIn := transfer(t, deposit.ID, cash.ID, ref) // vacía la caja
-			secondIn := firstIn                              // el reintento: ya no le alcanza
+			firstIn := transfer(t, deposit.ID, cash.ID, ref) // empties the cash account
+			secondIn := firstIn                              // the retry: no longer has enough
 			if !sameAccounts {
 				otherCash, otherDeposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
-				secondIn = transfer(t, otherCash.ID, otherDeposit.ID, ref) // fondea: solo espera el INSERT
+				secondIn = transfer(t, otherCash.ID, otherDeposit.ID, ref) // funds: only waits for the INSERT
 			}
 
 			first, second, duplicate := raceAgainst(t, firstIn, secondIn, true)
 
 			if !duplicate || second.ID != first.ID {
-				t.Fatalf("el segundo = %s (repetido: %v), se esperaba la original %s", second.ID, duplicate, first.ID)
+				t.Fatalf("the second = %s (duplicate: %v), want the original %s", second.ID, duplicate, first.ID)
 			}
 			if txs, entries := countByRef(t, ref); txs != 1 || entries != 2 {
-				t.Fatalf("con la referencia hay %d transacciones y %d entries, se esperaban 1 y 2", txs, entries)
+				t.Fatalf("the reference has %d transactions and %d entries, want 1 and 2", txs, entries)
 			}
 		})
 	}
 }
 
-// TestIfTheFirstRollsBackTheSecondPosts: si el primero que tenía la referencia se revierte, el segundo,
-// que esperaba su INSERT, la asienta.
+// TestIfTheFirstRollsBackTheSecondPosts: if the first one holding the reference rolls back, the second,
+// which was waiting for its INSERT, posts it.
 func TestIfTheFirstRollsBackTheSecondPosts(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	otherCash, otherDeposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
@@ -271,9 +271,9 @@ func TestIfTheFirstRollsBackTheSecondPosts(t *testing.T) {
 	_, second, duplicate := raceAgainst(t, transfer(t, cash.ID, deposit.ID, ref), transfer(t, otherCash.ID, otherDeposit.ID, ref), false)
 
 	if duplicate || second.ID == (ids.ID{}) || postedOf(t, otherCash.ID) != 100 {
-		t.Fatalf("el segundo = %s (repetido: %v); se esperaba que asentara", second.ID, duplicate)
+		t.Fatalf("the second = %s (duplicate: %v); want it to post", second.ID, duplicate)
 	}
 	if txs, _ := countByRef(t, ref); txs != 1 {
-		t.Fatalf("con la referencia hay %d transacciones, se esperaba 1", txs)
+		t.Fatalf("the reference has %d transactions, want 1", txs)
 	}
 }

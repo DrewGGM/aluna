@@ -1,5 +1,5 @@
-// Package httpapi es el adaptador de entrada HTTP: servidor, middleware, errores RFC 9457 y los
-// handlers que traducen la API a las fachadas de los módulos.
+// Package httpapi is the inbound HTTP adapter: server, middleware, RFC 9457 errors and the handlers that
+// translate the API to the module facades.
 package httpapi
 
 //go:generate go tool oapi-codegen -config ../../api/oapi-codegen.yaml ../../api/openapi.yaml
@@ -13,8 +13,8 @@ import (
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 )
 
-// API reúne los handlers de todos los módulos: el contrato genera una sola interfaz con todas sus
-// operaciones y cada módulo aporta las suyas por embedding.
+// API gathers the handlers of every module: the contract generates a single interface with all its
+// operations and each module contributes its own by embedding.
 type API struct {
 	*LedgerHandlers
 	*ApprovalHandlers
@@ -23,8 +23,7 @@ type API struct {
 
 var _ gen.StrictServerInterface = API{}
 
-// Routes registra todas las operaciones del contrato en mux, una sola vez, con los errores en
-// problem+json.
+// Routes registers every operation of the contract in mux, once, with errors as problem+json.
 func Routes(api gen.StrictServerInterface, log *slog.Logger) func(*http.ServeMux) {
 	return func(mux *http.ServeMux) {
 		strict := gen.NewStrictHandlerWithOptions(api, nil, gen.StrictHTTPServerOptions{
@@ -35,27 +34,28 @@ func Routes(api gen.StrictServerInterface, log *slog.Logger) func(*http.ServeMux
 	}
 }
 
-// Rutas de los probes del orquestador.
+// Paths of the orchestrator probes.
 const (
 	pathHealthz = "/healthz"
 	pathReadyz  = "/readyz"
 )
 
-// ServerConfig configura el servidor HTTP.
+// ServerConfig configures the HTTP server.
 type ServerConfig struct {
-	// Ready dice si el proceso puede atender tráfico (base de datos, dependencias). Nil es "listo".
+	// Ready reports whether the process can serve traffic (database, dependencies). Nil means "ready".
 	Ready func(ctx context.Context) error
-	// Audit registra los comandos (POST); nil solo en un servidor sin rutas de comandos.
+	// Audit records the commands (POST); nil only in a server without command routes.
 	Audit *CommandAudit
-	// Verifier verifica el token de cada request que no es un probe; nil solo en un servidor sin rutas de
-	// negocio (los handlers no corren sin principal).
+	// Verifier verifies the token of every request that is not a probe; nil only in a server without
+	// business routes (the handlers do not run without a principal).
 	Verifier TokenVerifier
-	// Authorizer autoriza cada request autenticado; con Verifier y sin Authorizer, toda ruta se niega.
+	// Authorizer authorizes every authenticated request; with Verifier and without Authorizer, every route is
+	// denied.
 	Authorizer *Authorizer
 }
 
-// NewServer arma el servidor con /healthz, /readyz, las rutas que registra routes (puede ser nil) y
-// el middleware común. Quien lo usa le da el listener con Serve.
+// NewServer builds the server with /healthz, /readyz, the routes that routes registers (it may be nil) and
+// the common middleware. The caller hands it the listener with Serve.
 func NewServer(cfg ServerConfig, routes func(*http.ServeMux), log *slog.Logger) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+pathHealthz, healthz)
@@ -75,16 +75,16 @@ func NewServer(cfg ServerConfig, routes func(*http.ServeMux), log *slog.Logger) 
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok"}` + "\n")) //nolint:errcheck,gosec // si el cliente cortó, no hay a quién responder
+	w.Write([]byte(`{"status":"ok"}` + "\n")) //nolint:errcheck,gosec // if the client hung up, there is no one to answer
 }
 
 func readyz(ready func(context.Context) error, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ready != nil {
 			if err := ready(r.Context()); err != nil {
-				log.LogAttrs(r.Context(), slog.LevelWarn, "no listo", slog.String("error", err.Error()))
+				log.LogAttrs(r.Context(), slog.LevelWarn, "not ready", slog.String("error", err.Error()))
 				WriteProblem(w, r, Problem{
-					Title: "Servicio no disponible", Code: "not_ready", Status: http.StatusServiceUnavailable,
+					Title: "Service unavailable", Code: "not_ready", Status: http.StatusServiceUnavailable,
 				})
 				return
 			}

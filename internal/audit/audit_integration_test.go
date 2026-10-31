@@ -24,7 +24,7 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
 func record() audit.Record {
 	return audit.Record{
-		Actor: "operador", Role: "tesorero", Channel: "api", IP: "10.0.0.7", CorrelationID: ids.New().String(),
+		Actor: "operator", Role: "treasurer", Channel: "api", IP: "10.0.0.7", CorrelationID: ids.New().String(),
 		Command: "POST /v1/transactions", Targets: []string{ids.New().String()}, Result: "ok",
 		Before: map[string]any{"status": "pending"}, After: map[string]any{"status": "posted", "entries": []any{map[string]any{"amount": 100}}},
 	}
@@ -35,7 +35,7 @@ func save(t *testing.T, r audit.Record) error {
 	return postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error { return audit.New().Record(t.Context(), tx, r) })
 }
 
-// stored lee como dueño (aluna_app solo inserta) el registro de la correlación.
+// stored reads the correlation's record as the owner (aluna_app can only insert).
 func stored(t *testing.T, correlation string) (audit.Record, bool) {
 	t.Helper()
 	var r audit.Record
@@ -53,7 +53,7 @@ func stored(t *testing.T, correlation string) (audit.Record, bool) {
 	return r, found
 }
 
-// TestARecordIsStored: Record guarda el registro completo en la transacción que recibe.
+// TestARecordIsStored: Record stores the full record in the transaction it receives.
 func TestARecordIsStored(t *testing.T) {
 	want := record()
 
@@ -62,21 +62,21 @@ func TestARecordIsStored(t *testing.T) {
 	}
 
 	got, found := stored(t, want.CorrelationID)
-	want.After["entries"] = []any{map[string]any{"amount": float64(100)}} // así vuelve un número de jsonb
+	want.After["entries"] = []any{map[string]any{"amount": float64(100)}} // how a number comes back from jsonb
 	if !found || !reflect.DeepEqual(got, want) {
-		t.Fatalf("registro guardado = %+v (encontrado %v), se esperaba %+v", got, found, want)
+		t.Fatalf("stored record = %+v (found %v), want %+v", got, found, want)
 	}
 }
 
-// TestPersonalDataIsRejected: un Before o un After con una clave de datos personales, también anidada, se
-// rechaza con ErrPersonalData y no se guarda nada.
+// TestPersonalDataIsRejected: a Before or an After with a personal data key, nested too, is rejected with
+// ErrPersonalData and nothing is stored.
 func TestPersonalDataIsRejected(t *testing.T) {
 	for _, key := range []string{"name", "document_number", "email", "phone"} {
 		cases := map[string]func(r *audit.Record){
-			"after":          func(r *audit.Record) { r.After[key] = "x" },
-			"after anidado":  func(r *audit.Record) { r.After["party"] = map[string]any{key: "x"} },
-			"after en lista": func(r *audit.Record) { r.After["parties"] = []any{map[string]any{key: "x"}} },
-			"before":         func(r *audit.Record) { r.Before[key] = "x" },
+			"after":         func(r *audit.Record) { r.After[key] = "x" },
+			"nested after":  func(r *audit.Record) { r.After["party"] = map[string]any{key: "x"} },
+			"after in list": func(r *audit.Record) { r.After["parties"] = []any{map[string]any{key: "x"}} },
+			"before":        func(r *audit.Record) { r.Before[key] = "x" },
 		}
 		for name, mutate := range cases {
 			t.Run(key+"/"+name, func(t *testing.T) {
@@ -86,50 +86,50 @@ func TestPersonalDataIsRejected(t *testing.T) {
 				err := save(t, r)
 
 				if _, found := stored(t, r.CorrelationID); !errors.Is(err, audit.ErrPersonalData) || found {
-					t.Fatalf("Record = %v (guardado %v), se esperaba ErrPersonalData y nada guardado", err, found)
+					t.Fatalf("Record = %v (stored %v), want ErrPersonalData and nothing stored", err, found)
 				}
 			})
 		}
 	}
 }
 
-// TestRecordsAreImmutable: aluna_app no puede cambiar ni borrar un registro, y el trigger se lo impide
-// también al dueño de las tablas.
+// TestRecordsAreImmutable: aluna_app cannot change or delete a record, and the trigger prevents the table
+// owner from doing it too.
 func TestRecordsAreImmutable(t *testing.T) {
 	r := record()
 	if err := save(t, r); err != nil {
 		t.Fatal(err)
 	}
 	for _, stmt := range []string{
-		`UPDATE audit.records SET result = 'otro' WHERE correlation_id = $1`,
+		`UPDATE audit.records SET result = 'other' WHERE correlation_id = $1`,
 		`DELETE FROM audit.records WHERE correlation_id = $1`,
 	} {
 		if _, err := testPool.Exec(t.Context(), stmt, r.CorrelationID); sqlState(err) != "42501" {
-			t.Errorf("%s como aluna_app = %v, se esperaba permiso denegado", stmt, err)
+			t.Errorf("%s as aluna_app = %v, want permission denied", stmt, err)
 		}
 		if state := ownerSQLState(t, stmt, r.CorrelationID); state != "2F003" {
-			t.Errorf("%s como dueño = SQLSTATE %q, se esperaba el trigger (2F003)", stmt, state)
+			t.Errorf("%s as owner = SQLSTATE %q, want the trigger (2F003)", stmt, state)
 		}
 	}
 	if state := ownerSQLState(t, `TRUNCATE audit.records`); state != "2F003" {
-		t.Errorf("TRUNCATE como dueño = SQLSTATE %q, se esperaba el trigger (2F003)", state)
+		t.Errorf("TRUNCATE as owner = SQLSTATE %q, want the trigger (2F003)", state)
 	}
 	if _, found := stored(t, r.CorrelationID); !found {
-		t.Fatal("el registro desapareció")
+		t.Fatal("the record disappeared")
 	}
 }
 
-// ownerSQLState corre stmt como dueño en su propia transacción y devuelve el SQLSTATE con que falló.
+// ownerSQLState runs stmt as the owner in its own transaction and returns the SQLSTATE it failed with.
 func ownerSQLState(t *testing.T, stmt string, args ...any) string {
 	t.Helper()
 	var state string
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(t.Context(), "SAVEPOINT intento"); err != nil {
+		if _, err := tx.Exec(t.Context(), "SAVEPOINT attempt"); err != nil {
 			return err
 		}
 		_, err := tx.Exec(t.Context(), stmt, args...)
 		state = sqlState(err)
-		_, rbErr := tx.Exec(t.Context(), "ROLLBACK TO SAVEPOINT intento")
+		_, rbErr := tx.Exec(t.Context(), "ROLLBACK TO SAVEPOINT attempt")
 		return rbErr
 	})
 	return state

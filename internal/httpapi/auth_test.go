@@ -28,9 +28,9 @@ import (
 
 const testAudience = "aluna-api"
 
-// testIssuer es un emisor OIDC de prueba cuyas claves se pueden rotar. Cuenta las veces que le piden las
-// claves (cacheable, las que no llegan con Cache-Control: no-cache) y no responde las siguientes hangs
-// hasta que el cliente se va.
+// testIssuer is a test OIDC issuer whose keys can be rotated. It counts the times the keys are requested
+// (cacheable, those that do not come with Cache-Control: no-cache) and does not answer the next hangs
+// requests until the client leaves.
 type testIssuer struct {
 	mu        sync.Mutex
 	server    *oidctest.Server
@@ -67,7 +67,7 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	return iss
 }
 
-// rotate cambia la clave del emisor: la anterior deja de publicarse.
+// rotate changes the issuer's key: the previous one is no longer published.
 func (iss *testIssuer) rotate(t *testing.T) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -81,11 +81,11 @@ func (iss *testIssuer) rotate(t *testing.T) {
 	iss.mu.Unlock()
 }
 
-// claims son los de un token de la entidad entity con la vida máxima, 15 min.
+// claims are those of a token of the entity entity with the maximum lifetime, 15 min.
 func (iss *testIssuer) claims(entity ids.ID) map[string]any {
 	now := time.Now()
 	return map[string]any{
-		"iss": iss.url, "aud": testAudience, "sub": "operador-1", "iat": now.Unix(), "exp": now.Add(maxTokenLifetime).Unix(),
+		"iss": iss.url, "aud": testAudience, "sub": "operator-1", "iat": now.Unix(), "exp": now.Add(maxTokenLifetime).Unix(),
 		"legal_entity_id": entity.String(), "roles": []string{"operator"},
 	}
 }
@@ -101,29 +101,29 @@ func (iss *testIssuer) sign(t *testing.T, claims map[string]any) string {
 	return oidctest.SignIDToken(iss.key, iss.keyID, oidc.RS256, string(b))
 }
 
-// bearerOf es el header Authorization con el token de claims firmado por iss.
+// bearerOf is the Authorization header with the token of claims signed by iss.
 func (iss *testIssuer) bearerOf(t *testing.T, claims map[string]any) map[string]string {
 	t.Helper()
 	return map[string]string{"Authorization": "Bearer " + iss.sign(t, claims)}
 }
 
-// authenticated es un servidor con Authenticate que responde 200 con el principal del request.
+// authenticated is a server with Authenticate that answers 200 with the request's principal.
 func authenticated(t *testing.T, verifier TokenVerifier) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(Authenticate(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := access.PrincipalFrom(r.Context())
 		if !ok {
-			http.Error(w, "sin principal", http.StatusInternalServerError)
+			http.Error(w, "no principal", http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(p) //nolint:errcheck,gosec // respuesta de prueba
+		json.NewEncoder(w).Encode(p) //nolint:errcheck,gosec // test response
 	})))
 	t.Cleanup(ts.Close)
 	return ts
 }
 
-// get hace GET url con header y devuelve el status, los headers de la respuesta y, si fue 200, el
-// principal que respondió el handler.
+// get does GET url with header and returns the status, the response headers and, if it was 200, the
+// principal the handler answered.
 func get(t *testing.T, url string, header map[string]string) (int, http.Header, access.Principal) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
@@ -137,7 +137,7 @@ func get(t *testing.T, url string, header map[string]string) (int, http.Header, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close() //nolint:errcheck // cierre en prueba
+	defer resp.Body.Close() //nolint:errcheck // close in a test
 	var p access.Principal
 	if resp.StatusCode == http.StatusOK {
 		if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
@@ -161,7 +161,7 @@ func verifierLogging(t *testing.T, iss *testIssuer, now func() time.Time, logs i
 	return v
 }
 
-// testClock es un reloj que la prueba adelanta.
+// testClock is a clock the test moves forward.
 type testClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -179,8 +179,8 @@ func (c *testClock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
-// TestAValidTokenGivesThePrincipal (FR-41, TH-14): un token válido da el principal de sus claims; la
-// entidad legal sale solo del token, aunque el request traiga un header que diga otra.
+// TestAValidTokenGivesThePrincipal (FR-41, TH-14): a valid token gives the principal of its claims; the
+// legal entity comes only from the token, even if the request carries a header that says otherwise.
 func TestAValidTokenGivesThePrincipal(t *testing.T) {
 	iss := newTestIssuer(t)
 	ts := authenticated(t, verifierFor(t, iss, time.Now))
@@ -190,35 +190,36 @@ func TestAValidTokenGivesThePrincipal(t *testing.T) {
 
 	status, _, got := get(t, ts.URL, header)
 
-	want := access.Principal{Subject: "operador-1", LegalEntityID: entity, PartyID: &party, Roles: []string{"operator"}}
+	want := access.Principal{Subject: "operator-1", LegalEntityID: entity, PartyID: &party, Roles: []string{"operator"}}
 	if status != http.StatusOK || !reflect.DeepEqual(got, want) {
-		t.Fatalf("respuesta %d con principal %+v, se esperaba %+v", status, got, want)
+		t.Fatalf("response %d with principal %+v, want %+v", status, got, want)
 	}
 }
 
-// TestAnInvalidTokenIs401 (TH-1): sin token, o con uno vencido, aún no válido, sin iat, con iat futuro o de
-// vida mayor a 15 min, de otra audiencia u otro emisor, firmado con otra clave, sin sujeto o con entidad o
-// parte que no son UUID, la respuesta es 401 problem+json.
+// TestAnInvalidTokenIs401 (TH-1): without a token, or with one that is expired, not yet valid, without iat,
+// with a future iat or a lifetime over 15 min, for another audience or from another issuer, signed with
+// another key, without a subject or with an entity or party that is not a UUID, the response is 401
+// problem+json.
 func TestAnInvalidTokenIs401(t *testing.T) {
 	iss := newTestIssuer(t)
 	other := newTestIssuer(t)
 	ts := authenticated(t, verifierFor(t, iss, time.Now))
 	valid := func() map[string]any { return iss.claims(ids.New()) }
-	cases := map[string]string{ //nolint:gosec // credenciales y tokens falsos de prueba
-		"sin token":              "",
-		"no es Bearer":           "Basic dXNlcjpwYXNz",
-		"vencido":                "Bearer " + iss.sign(t, with(valid(), "exp", time.Now().Add(-time.Minute).Unix())),
-		"aún no válido":          "Bearer " + iss.sign(t, with(valid(), "nbf", time.Now().Add(time.Hour).Unix())),
-		"sin iat":                "Bearer " + iss.sign(t, without(valid(), "iat")),
-		"iat futuro":             "Bearer " + iss.sign(t, with(with(valid(), "iat", time.Now().Add(time.Hour).Unix()), "exp", time.Now().Add(time.Hour+maxTokenLifetime).Unix())),
-		"vida de más de 15 min":  "Bearer " + iss.sign(t, with(valid(), "exp", time.Now().Add(maxTokenLifetime+time.Minute).Unix())),
-		"otra audiencia":         "Bearer " + iss.sign(t, with(valid(), "aud", "otra-api")),
-		"otro emisor":            "Bearer " + iss.sign(t, with(valid(), "iss", other.url)),
-		"firma de otra clave":    "Bearer " + other.sign(t, valid()),
-		"sin entidad legal":      "Bearer " + iss.sign(t, without(valid(), "legal_entity_id")),
-		"entidad que no es UUID": "Bearer " + iss.sign(t, with(valid(), "legal_entity_id", "entidad-1")),
-		"parte que no es UUID":   "Bearer " + iss.sign(t, with(valid(), "party_id", "cliente-1")),
-		"sin sujeto":             "Bearer " + iss.sign(t, without(valid(), "sub")),
+	cases := map[string]string{ //nolint:gosec // fake test credentials and tokens
+		"no token":                "",
+		"not Bearer":              "Basic dXNlcjpwYXNz",
+		"expired":                 "Bearer " + iss.sign(t, with(valid(), "exp", time.Now().Add(-time.Minute).Unix())),
+		"not yet valid":           "Bearer " + iss.sign(t, with(valid(), "nbf", time.Now().Add(time.Hour).Unix())),
+		"no iat":                  "Bearer " + iss.sign(t, without(valid(), "iat")),
+		"future iat":              "Bearer " + iss.sign(t, with(with(valid(), "iat", time.Now().Add(time.Hour).Unix()), "exp", time.Now().Add(time.Hour+maxTokenLifetime).Unix())),
+		"lifetime over 15 min":    "Bearer " + iss.sign(t, with(valid(), "exp", time.Now().Add(maxTokenLifetime+time.Minute).Unix())),
+		"another audience":        "Bearer " + iss.sign(t, with(valid(), "aud", "other-api")),
+		"another issuer":          "Bearer " + iss.sign(t, with(valid(), "iss", other.url)),
+		"signed with another key": "Bearer " + other.sign(t, valid()),
+		"no legal entity":         "Bearer " + iss.sign(t, without(valid(), "legal_entity_id")),
+		"entity that is not UUID": "Bearer " + iss.sign(t, with(valid(), "legal_entity_id", "entity-1")),
+		"party that is not UUID":  "Bearer " + iss.sign(t, with(valid(), "party_id", "customer-1")),
+		"no subject":              "Bearer " + iss.sign(t, without(valid(), "sub")),
 	}
 	for name, authorization := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -230,7 +231,7 @@ func TestAnInvalidTokenIs401(t *testing.T) {
 			status, got, _ := get(t, ts.URL, header)
 
 			if status != http.StatusUnauthorized || got.Get("Content-Type") != "application/problem+json" || got.Get("WWW-Authenticate") == "" {
-				t.Fatalf("respuesta %d %q (WWW-Authenticate %q), se esperaba 401 problem+json con WWW-Authenticate",
+				t.Fatalf("response %d %q (WWW-Authenticate %q), want 401 problem+json with WWW-Authenticate",
 					status, got.Get("Content-Type"), got.Get("WWW-Authenticate"))
 			}
 		})
@@ -247,61 +248,61 @@ func without(claims map[string]any, key string) map[string]any {
 	return claims
 }
 
-// TestProbesNeedNoToken: el orquestador sondea /healthz y /readyz sin token, y el verificador ni se
-// consulta.
+// TestProbesNeedNoToken: the orchestrator probes /healthz and /readyz without a token, and the verifier is
+// not even consulted.
 func TestProbesNeedNoToken(t *testing.T) {
 	ts := httptest.NewServer(Authenticate(probeVerifier{t})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("{}")) //nolint:errcheck,gosec // respuesta de prueba
+		w.Write([]byte("{}")) //nolint:errcheck,gosec // test response
 	})))
 	t.Cleanup(ts.Close)
 
 	for _, path := range []string{pathHealthz, pathReadyz} {
 		if status, _, _ := get(t, ts.URL+path, nil); status != http.StatusOK {
-			t.Errorf("%s sin token = %d, se esperaba 200", path, status)
+			t.Errorf("%s without token = %d, want 200", path, status)
 		}
 	}
 }
 
-// probeVerifier falla la prueba si se le pide verificar un token.
+// probeVerifier fails the test if it is asked to verify a token.
 type probeVerifier struct{ t *testing.T }
 
 func (v probeVerifier) Verify(context.Context, string) (access.Principal, error) {
-	v.t.Error("un probe pasó por el verificador")
+	v.t.Error("a probe went through the verifier")
 	return access.Principal{}, errInvalidToken
 }
 
-// TestARetiredKeyStopsWorkingWithin10Minutes: las claves del emisor valen 10 min; un token firmado con una
-// clave que el emisor ya no publica vale mientras siguen vigentes (a los 4 min, antes de la renovación de
-// los 5) y a los 11 min ya no, aunque nadie las haya renovado.
+// TestARetiredKeyStopsWorkingWithin10Minutes: the issuer's keys are valid for 10 min; a token signed with a
+// key the issuer no longer publishes is valid while they are current (at 4 min, before the renewal at 5)
+// and at 11 min it is not, even if no one renewed them.
 func TestARetiredKeyStopsWorkingWithin10Minutes(t *testing.T) {
 	iss := newTestIssuer(t)
 	clock := &testClock{now: time.Now()}
 	ts := authenticated(t, verifierFor(t, iss, clock.Now))
 	token := iss.bearerOf(t, iss.claims(ids.New()))
 	if status, _, _ := get(t, ts.URL, token); status != http.StatusOK {
-		t.Fatalf("token recién emitido = %d", status)
+		t.Fatalf("freshly issued token = %d", status)
 	}
 
 	iss.rotate(t)
 	clock.advance(4 * time.Minute)
 	if status, _, _ := get(t, ts.URL, token); status != http.StatusOK {
-		t.Fatalf("a los 4 min, con la clave aún en caché = %d, se esperaba 200", status)
+		t.Fatalf("at 4 min, with the key still cached = %d, want 200", status)
 	}
 	clock.advance(7 * time.Minute)
 
 	if status, _, _ := get(t, ts.URL, token); status != http.StatusUnauthorized {
-		t.Fatalf("a los 11 min, con la clave retirada = %d, se esperaba 401", status)
+		t.Fatalf("at 11 min, with the key retired = %d, want 401", status)
 	}
 }
 
-// TestForgedTokensDoNotFloodTheIssuer: un token que las claves guardadas no verifican las vuelve a pedir,
-// pero a lo sumo una vez cada 30 s; pasado ese lapso, una clave nueva del emisor se aprende.
+// TestForgedTokensDoNotFloodTheIssuer: a token the stored keys do not verify fetches them again, but at most
+// once every 30 s; after that span, a new key of the issuer is learned.
 func TestForgedTokensDoNotFloodTheIssuer(t *testing.T) {
 	iss, forger := newTestIssuer(t), newTestIssuer(t)
 	clock := &testClock{now: time.Now()}
 	ts := authenticated(t, verifierFor(t, iss, clock.Now))
 	if status, _, _ := get(t, ts.URL, iss.bearerOf(t, iss.claims(ids.New()))); status != http.StatusOK {
-		t.Fatalf("token válido = %d", status)
+		t.Fatalf("valid token = %d", status)
 	}
 	calls := iss.keyCalls.Load()
 	clock.advance(jwksMinRefetch / 3)
@@ -309,25 +310,25 @@ func TestForgedTokensDoNotFloodTheIssuer(t *testing.T) {
 	forged := forger.bearerOf(t, iss.claims(ids.New()))
 	for range 20 {
 		if status, _, _ := get(t, ts.URL, forged); status != http.StatusUnauthorized {
-			t.Fatalf("token falsificado = %d, se esperaba 401", status)
+			t.Fatalf("forged token = %d, want 401", status)
 		}
 	}
 	if got := iss.keyCalls.Load() - calls; got != 0 {
-		t.Fatalf("20 tokens falsos 10 s después de pedir las claves las pidieron %d veces más, se esperaba 0", got)
+		t.Fatalf("20 forged tokens 10 s after fetching the keys fetched them %d more times, want 0", got)
 	}
 
 	iss.rotate(t)
 	clock.advance(jwksMinRefetch)
 	if status, _, _ := get(t, ts.URL, iss.bearerOf(t, iss.claims(ids.New()))); status != http.StatusOK {
-		t.Fatalf("token con la clave nueva, 30 s después = %d, se esperaba 200", status)
+		t.Fatalf("token with the new key, 30 s later = %d, want 200", status)
 	}
 	if n := iss.cacheable.Load(); n != 0 {
-		t.Fatalf("%d descargas sin Cache-Control: no-cache; tras una rotación un proxy daría el JWKS viejo", n)
+		t.Fatalf("%d downloads without Cache-Control: no-cache; after a rotation a proxy would serve the old JWKS", n)
 	}
 }
 
-// TestAHungIssuerIsCutAndLogged: una descarga de claves que el emisor no responde se corta a los 5 s y
-// queda en log; sin claves vigentes, se vuelve a intentar al segundo y el token vale.
+// TestAHungIssuerIsCutAndLogged: a key download the issuer does not answer is cut at 5 s and logged; with no
+// current keys, it is retried after a second and the token is valid.
 func TestAHungIssuerIsCutAndLogged(t *testing.T) {
 	iss := newTestIssuer(t)
 	clock := &testClock{now: time.Now()}
@@ -339,20 +340,20 @@ func TestAHungIssuerIsCutAndLogged(t *testing.T) {
 	start := time.Now()
 	status, _, _ := get(t, ts.URL, token)
 	if took := time.Since(start); status != http.StatusUnauthorized || took < issuerTimeout || took > issuerTimeout+time.Second {
-		t.Fatalf("con el emisor colgado = %d en %s, se esperaba 401 en unos %s", status, took, issuerTimeout)
+		t.Fatalf("with the issuer hung = %d in %s, want 401 in about %s", status, took, issuerTimeout)
 	}
-	if !strings.Contains(logs.String(), "pedir las claves del emisor OIDC") {
-		t.Fatalf("la falla del emisor no quedó en log:\n%s", logs.String())
+	if !strings.Contains(logs.String(), "fetch OIDC issuer keys") {
+		t.Fatalf("the issuer failure was not logged:\n%s", logs.String())
 	}
 
 	clock.advance(jwksRetry)
 	if status, _, _ := get(t, ts.URL, token); status != http.StatusOK {
-		t.Fatalf("con el emisor de vuelta, 1 s después = %d, se esperaba 200", status)
+		t.Fatalf("with the issuer back, 1 s later = %d, want 200", status)
 	}
 }
 
-// TestAFetchDoesNotHoldBackCachedTokens: mientras una descarga de claves espera a un emisor colgado, un token
-// que las claves guardadas verifican no la espera.
+// TestAFetchDoesNotHoldBackCachedTokens: while a key download waits on a hung issuer, a token the stored keys
+// verify does not wait for it.
 func TestAFetchDoesNotHoldBackCachedTokens(t *testing.T) {
 	iss, forger := newTestIssuer(t), newTestIssuer(t)
 	clock := &testClock{now: time.Now()}
@@ -371,7 +372,7 @@ func TestAFetchDoesNotHoldBackCachedTokens(t *testing.T) {
 	}()
 	for deadline := time.Now().Add(2 * time.Second); iss.keyCalls.Load() == calls; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatal("el token falsificado no pidió las claves")
+			t.Fatal("the forged token did not fetch the keys")
 		}
 	}
 
@@ -379,15 +380,15 @@ func TestAFetchDoesNotHoldBackCachedTokens(t *testing.T) {
 	_, err := keys.VerifySignature(t.Context(), valid)
 
 	if took := time.Since(start); err != nil || took > 200*time.Millisecond {
-		t.Fatalf("token en caché durante una descarga colgada = %v en %s, se esperaba válido sin esperarla", err, took)
+		t.Fatalf("cached token during a hung download = %v in %s, want valid without waiting for it", err, took)
 	}
 	if err := <-forged; err == nil {
-		t.Fatal("el token falsificado se verificó")
+		t.Fatal("the forged token was verified")
 	}
 }
 
-// TestKeysAreRenewedBeforeTheyExpire: pasada la mitad de su vida, un token que verifican renueva las claves
-// en segundo plano; a los 10 min de la primera descarga siguen vigentes sin volver a pedirlas.
+// TestKeysAreRenewedBeforeTheyExpire: past half of their life, a token they verify renews the keys in the
+// background; 10 min after the first download they are still current without fetching them again.
 func TestKeysAreRenewedBeforeTheyExpire(t *testing.T) {
 	iss := newTestIssuer(t)
 	clock := &testClock{now: time.Now()}
@@ -401,24 +402,24 @@ func TestKeysAreRenewedBeforeTheyExpire(t *testing.T) {
 	if _, err := keys.VerifySignature(t.Context(), jwt); err != nil {
 		t.Fatal(err)
 	}
-	keys.fetching.Lock() // espera la renovación en segundo plano
+	keys.fetching.Lock() // waits for the background renewal
 	renewed := iss.keyCalls.Load()
 	keys.fetching.Unlock()
 	if renewed != 2 {
-		t.Fatalf("a los 6 min las claves se pidieron %d veces en total, se esperaba 2", renewed)
+		t.Fatalf("at 6 min the keys were fetched %d times in total, want 2", renewed)
 	}
 	clock.advance(4 * time.Minute)
 
 	_, err := keys.VerifySignature(t.Context(), jwt)
 
 	if err != nil || iss.keyCalls.Load() != renewed {
-		t.Fatalf("a los 10 min, con las claves renovadas a los 6 = %v tras %d descargas, se esperaba válida sin descargar",
+		t.Fatalf("at 10 min, with the keys renewed at 6 = %v after %d downloads, want valid without downloading",
 			err, iss.keyCalls.Load())
 	}
 }
 
-// TestAFailedRenewalWaitsBeforeRetrying: una renovación en segundo plano que falla no se repite con cada
-// token hasta pasados 30 s.
+// TestAFailedRenewalWaitsBeforeRetrying: a background renewal that fails is not repeated with every token
+// until 30 s have passed.
 func TestAFailedRenewalWaitsBeforeRetrying(t *testing.T) {
 	iss := newTestIssuer(t)
 	clock := &testClock{now: time.Now()}
@@ -432,7 +433,7 @@ func TestAFailedRenewalWaitsBeforeRetrying(t *testing.T) {
 	if _, err := keys.VerifySignature(t.Context(), jwt); err != nil {
 		t.Fatal(err)
 	}
-	keys.fetching.Lock() // espera la renovación fallida
+	keys.fetching.Lock() // waits for the failed renewal
 	failed := iss.keyCalls.Load()
 	keys.fetching.Unlock()
 
@@ -445,15 +446,15 @@ func TestAFailedRenewalWaitsBeforeRetrying(t *testing.T) {
 	keys.fetching.Lock()
 	defer keys.fetching.Unlock()
 	if failed != 2 || iss.keyCalls.Load() != failed {
-		t.Fatalf("descargas = %d tras la renovación fallida y %d después, se esperaba 2 y ninguna más", failed, iss.keyCalls.Load())
+		t.Fatalf("downloads = %d after the failed renewal and %d afterwards, want 2 and no more", failed, iss.keyCalls.Load())
 	}
 }
 
-// TestAHungIssuerIsAskedOnce: sin claves vigentes y con el emisor colgado, los requests que esperan la
-// descarga no la repiten uno tras otro: hay una sola y todos terminan con ella.
+// TestAHungIssuerIsAskedOnce: with no current keys and the issuer hung, the requests waiting on the download
+// do not repeat it one after another: there is only one and they all finish with it.
 func TestAHungIssuerIsAskedOnce(t *testing.T) {
 	iss := newTestIssuer(t)
-	const timeout = jwksRetry + 200*time.Millisecond // más que jwksRetry, como issuerTimeout
+	const timeout = jwksRetry + 200*time.Millisecond // more than jwksRetry, like issuerTimeout
 	keys := keysOf(iss, time.Now, timeout)
 	jwt := iss.sign(t, iss.claims(ids.New()))
 	iss.hangs.Store(100)
@@ -463,18 +464,18 @@ func TestAHungIssuerIsAskedOnce(t *testing.T) {
 	for range 4 {
 		wg.Go(func() {
 			if _, err := keys.VerifySignature(context.Background(), jwt); err == nil {
-				t.Error("con el emisor colgado, una firma se verificó")
+				t.Error("with the issuer hung, a signature was verified")
 			}
 		})
 	}
 	wg.Wait()
 
 	if took := time.Since(start); iss.keyCalls.Load() != 1 || took > 2*timeout {
-		t.Fatalf("4 requests sin claves = %d descargas en %s, se esperaba 1 en unos %s", iss.keyCalls.Load(), took, timeout)
+		t.Fatalf("4 requests without keys = %d downloads in %s, want 1 in about %s", iss.keyCalls.Load(), took, timeout)
 	}
 }
 
-// keysOf son las claves de iss con el reloj now y un timeout por descarga.
+// keysOf are the keys of iss with the clock now and a timeout per download.
 func keysOf(iss *testIssuer, now func() time.Time, timeout time.Duration) *issuerKeys {
 	return &issuerKeys{
 		url: iss.url + "/keys", client: &http.Client{Timeout: timeout}, now: now,
@@ -482,42 +483,42 @@ func keysOf(iss *testIssuer, now func() time.Time, timeout time.Duration) *issue
 	}
 }
 
-// TestAResponseWithoutKeysIsAnError: un 200 que no es un JWKS no cuenta como un juego de claves vacío.
+// TestAResponseWithoutKeysIsAnError: a 200 that is not a JWKS does not count as an empty key set.
 func TestAResponseWithoutKeysIsAnError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`{"error":"arrancando"}`)) //nolint:errcheck,gosec // respuesta de prueba
+		w.Write([]byte(`{"error":"starting"}`)) //nolint:errcheck,gosec // test response
 	}))
 	t.Cleanup(ts.Close)
 
 	if _, err := fetchKeys(t.Context(), http.DefaultClient, ts.URL); !errors.Is(err, errBadJWKS) {
-		t.Fatalf("= %v, se esperaba errBadJWKS", err)
+		t.Fatalf("= %v, want errBadJWKS", err)
 	}
 }
 
-// TestUnreadableAndEncryptionKeysAreSkipped: del JWKS quedan solo las claves de firma que se pueden leer;
-// una clave de otra curva (Ed448) o de cifrado no tumba las demás.
+// TestUnreadableAndEncryptionKeysAreSkipped: only the readable signing keys are kept from the JWKS; a key of
+// another curve (Ed448) or an encryption key does not break the rest.
 func TestUnreadableAndEncryptionKeysAreSkipped(t *testing.T) {
 	sig, enc := jwkOf(t, "sig"), jwkOf(t, "enc")
 	ed448 := `{"kty":"OKP","crv":"Ed448","alg":"EdDSA","use":"sig","x":"` + strings.Repeat("A", 76) + `"}`
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`{"keys":[` + ed448 + `,` + enc.json + `,` + sig.json + `]}`)) //nolint:errcheck,gosec // respuesta de prueba
+		w.Write([]byte(`{"keys":[` + ed448 + `,` + enc.json + `,` + sig.json + `]}`)) //nolint:errcheck,gosec // test response
 	}))
 	t.Cleanup(ts.Close)
 
 	keys, err := fetchKeys(t.Context(), http.DefaultClient, ts.URL)
 
 	if err != nil || len(keys.PublicKeys) != 1 || !sig.key.Equal(keys.PublicKeys[0]) {
-		t.Fatalf("claves = %v, %v; se esperaba solo la de firma", keys, err)
+		t.Fatalf("keys = %v, %v; want only the signing one", keys, err)
 	}
 }
 
-// testJWK es una clave pública y su JWK.
+// testJWK is a public key and its JWK.
 type testJWK struct {
 	key  *rsa.PublicKey
 	json string
 }
 
-// jwkOf es una clave RSA pública nueva con uso use.
+// jwkOf is a new public RSA key with use use.
 func jwkOf(t *testing.T, use string) testJWK {
 	t.Helper()
 	private, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -531,7 +532,7 @@ func jwkOf(t *testing.T, use string) testJWK {
 	return testJWK{key: &private.PublicKey, json: string(b)}
 }
 
-// syncBuffer es un bytes.Buffer que escribe el servidor y lee la prueba.
+// syncBuffer is a bytes.Buffer the server writes and the test reads.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -549,11 +550,11 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// TestAnIssuerWithoutJWKSIsRejected: un emisor que no publica jwks_uri no sirve para verificar tokens.
+// TestAnIssuerWithoutJWKSIsRejected: an issuer that does not publish jwks_uri cannot verify tokens.
 func TestAnIssuerWithoutJWKSIsRejected(t *testing.T) {
 	var issuer string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"issuer": issuer}) //nolint:errcheck,gosec // respuesta de prueba
+		json.NewEncoder(w).Encode(map[string]string{"issuer": issuer}) //nolint:errcheck,gosec // test response
 	}))
 	t.Cleanup(ts.Close)
 	issuer = ts.URL
@@ -561,6 +562,6 @@ func TestAnIssuerWithoutJWKSIsRejected(t *testing.T) {
 	_, err := newOIDCVerifier(t.Context(), issuer, testAudience, time.Now, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 
 	if !errors.Is(err, errNoJWKS) {
-		t.Fatalf("emisor sin jwks_uri = %v, se esperaba errNoJWKS", err)
+		t.Fatalf("issuer without jwks_uri = %v, want errNoJWKS", err)
 	}
 }

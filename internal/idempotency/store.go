@@ -1,7 +1,6 @@
-// Package idempotency guarda la respuesta de cada comando con clave de idempotencia (architecture §9):
-// un reintento con la misma clave y el mismo payload recibe la respuesta original sin repetir el
-// efecto. La clave se escribe en la misma transacción del efecto, así que los dos se confirman o se
-// pierden juntos.
+// Package idempotency stores the response of each command with an idempotency key (architecture §9): a
+// retry with the same key and the same payload gets the original response without repeating the effect.
+// The key is written in the same transaction as the effect, so both commit or are lost together.
 package idempotency
 
 import (
@@ -18,44 +17,45 @@ import (
 )
 
 var (
-	// ErrKeyReused indica una clave ya usada con otro payload (422 idempotency_key_reused).
-	ErrKeyReused = errors.New("clave de idempotencia reutilizada con otro payload")
-	// ErrInProgress indica que otra solicitud con la misma clave no ha terminado (409 request_in_progress).
-	ErrInProgress = errors.New("solicitud con la misma clave en curso")
-	// ErrNotClaimed indica un Complete sobre una clave que no se reclamó en la transacción, o que ya
-	// se completó.
-	ErrNotClaimed = errors.New("clave de idempotencia no reclamada")
-	// ErrNotStorable indica una respuesta que no se guarda: solo se guardan 2xx y 4xx.
-	ErrNotStorable = errors.New("respuesta no guardable")
+	// ErrKeyReused means a key already used with another payload (422 idempotency_key_reused).
+	ErrKeyReused = errors.New("idempotency key reused with a different payload")
+	// ErrInProgress means another request with the same key has not finished (409 request_in_progress).
+	ErrInProgress = errors.New("request with the same key in progress")
+	// ErrNotClaimed means a Complete on a key that was not claimed in the transaction, or that was already
+	// completed.
+	ErrNotClaimed = errors.New("idempotency key not claimed")
+	// ErrNotStorable means a response that is not stored: only 2xx and 4xx are stored.
+	ErrNotStorable = errors.New("response not storable")
 )
 
 const (
-	// lockNotAvailable es el SQLSTATE de lock_timeout y de NOWAIT sobre una fila bloqueada.
+	// lockNotAvailable is the SQLSTATE of lock_timeout and of NOWAIT on a locked row.
 	lockNotAvailable = "55P03"
-	// purgeBatch acota cada DELETE de Purge para que quepa en el statement_timeout del pool.
+	// purgeBatch bounds each Purge DELETE so that it fits in the pool's statement_timeout.
 	purgeBatch = 10_000
 )
 
-// Claim es el resultado de reclamar una clave: Fresh si es nueva y el comando debe ejecutarse; si no,
-// Status y Body son la respuesta guardada.
+// Claim is the result of claiming a key: Fresh if it is new and the command must run; otherwise, Status
+// and Body are the stored response.
 type Claim struct {
 	Fresh  bool
 	Status int
 	Body   []byte
 }
 
-// Store es el almacén de claves sobre infra.idempotency_keys.
+// Store is the key store over infra.idempotency_keys.
 type Store struct {
-	db postgres.Querier // para Purge, que corre fuera de una transacción de negocio
+	db postgres.Querier // for Purge, which runs outside a business transaction
 }
 
-// NewStore crea el almacén.
+// NewStore creates the store.
 func NewStore(db postgres.Querier) *Store { return &Store{db: db} }
 
-// Claim reclama (scope, key) dentro de tx. Una clave nueva queda reservada hasta el commit, que exige
-// haberla completado. Una clave completada con el mismo requestHash devuelve su respuesta; con otro,
-// ErrKeyReused. Si otra transacción insertó la misma clave y no ha terminado, el INSERT la espera hasta
-// el lock_timeout del pool: si termina antes, este reintento ve su respuesta; si no, ErrInProgress.
+// Claim claims (scope, key) within tx. A new key stays reserved until the commit, which requires it to
+// be completed. A completed key with the same requestHash returns its response; with another one,
+// ErrKeyReused. If another transaction inserted the same key and has not finished, the INSERT waits for
+// it up to the pool's lock_timeout: if it finishes first, this retry sees its response; otherwise,
+// ErrInProgress.
 func (s *Store) Claim(ctx context.Context, tx postgres.Tx, scope, key string, requestHash [32]byte) (Claim, error) {
 	tag, err := tx.Exec(ctx, `INSERT INTO infra.idempotency_keys (scope, key, request_hash) VALUES ($1, $2, $3)
 		ON CONFLICT DO NOTHING`, scope, key, requestHash[:])
@@ -63,7 +63,7 @@ func (s *Store) Claim(ctx context.Context, tx postgres.Tx, scope, key string, re
 		return Claim{}, ErrInProgress
 	}
 	if err != nil {
-		return Claim{}, fmt.Errorf("reclamar la clave de idempotencia: %w", err)
+		return Claim{}, fmt.Errorf("claim idempotency key: %w", err)
 	}
 	if tag.RowsAffected() == 1 {
 		return Claim{Fresh: true}, nil
@@ -71,12 +71,12 @@ func (s *Store) Claim(ctx context.Context, tx postgres.Tx, scope, key string, re
 	return stored(ctx, tx, scope, key, requestHash)
 }
 
-// stored lee la respuesta guardada de una clave que ya existe. FOR KEY SHARE NOWAIT no deja leer una
-// fila que otra transacción está borrando (una purga), porque la respuesta podría desaparecer con su
-// commit, pero sí deja que varios reintentos la lean a la vez: con FOR UPDATE, uno de ellos recibiría
-// 409 aunque la respuesta ya exista. Una fila que ya no está (la purga confirmó entre el INSERT y esta
-// lectura) o que sigue in_progress (un segundo Claim de la misma clave en la misma transacción)
-// también es ErrInProgress.
+// stored reads the stored response of a key that already exists. FOR KEY SHARE NOWAIT does not allow
+// reading a row another transaction is deleting (a purge), because the response could vanish with its
+// commit, but it does let several retries read it at once: with FOR UPDATE, one of them would get 409
+// even though the response exists. A row that is gone (the purge committed between the INSERT and this
+// read) or that is still in_progress (a second Claim of the same key in the same transaction) is also
+// ErrInProgress.
 func stored(ctx context.Context, tx postgres.Tx, scope, key string, requestHash [32]byte) (Claim, error) {
 	var (
 		hash   []byte
@@ -90,7 +90,7 @@ func stored(ctx context.Context, tx postgres.Tx, scope, key string, requestHash 
 		return Claim{}, ErrInProgress
 	}
 	if err != nil {
-		return Claim{}, fmt.Errorf("leer la clave de idempotencia: %w", err)
+		return Claim{}, fmt.Errorf("read idempotency key: %w", err)
 	}
 	if !bytes.Equal(hash, requestHash[:]) {
 		return Claim{}, ErrKeyReused
@@ -107,18 +107,18 @@ func isLockNotAvailable(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == lockNotAvailable
 }
 
-// Complete guarda la respuesta de una clave reclamada con Claim en la misma tx. Solo guarda 2xx y 4xx.
+// Complete stores the response of a key claimed with Claim in the same tx. It only stores 2xx and 4xx.
 func (s *Store) Complete(ctx context.Context, tx postgres.Tx, scope, key string, status int, body []byte) error {
 	if status < 200 || status > 499 {
 		return fmt.Errorf("%w: status %d", ErrNotStorable, status)
 	}
 	if body == nil {
-		body = []byte{} // pgx manda nil como NULL, y una clave completada guarda un cuerpo (aunque vacío)
+		body = []byte{} // pgx sends nil as NULL, and a completed key stores a body (even an empty one)
 	}
 	tag, err := tx.Exec(ctx, `UPDATE infra.idempotency_keys SET status = 'completed', response_code = $3, response_body = $4
 		WHERE scope = $1 AND key = $2 AND status = 'in_progress'`, scope, key, status, body)
 	if err != nil {
-		return fmt.Errorf("completar la clave de idempotencia: %w", err)
+		return fmt.Errorf("complete idempotency key: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("%w: %s %s", ErrNotClaimed, scope, key)
@@ -126,9 +126,9 @@ func (s *Store) Complete(ctx context.Context, tx postgres.Tx, scope, key string,
 	return nil
 }
 
-// Purge borra las claves de todos los scopes creadas antes de before (architecture §9: 7 días para las
-// HTTP) y dice cuántas borró. Borra por lotes, cada uno en su propia sentencia, y salta las filas que
-// otra transacción tiene bloqueadas (un reintento leyendo su respuesta): las borrará la próxima purga.
+// Purge deletes the keys of every scope created before before (architecture §9: 7 days for HTTP ones)
+// and reports how many it deleted. It deletes in batches, each in its own statement, and skips rows
+// another transaction has locked (a retry reading its response): the next purge will delete them.
 func (s *Store) Purge(ctx context.Context, before time.Time) (int64, error) {
 	var total int64
 	for {
@@ -136,7 +136,7 @@ func (s *Store) Purge(ctx context.Context, before time.Time) (int64, error) {
 			SELECT scope, key FROM infra.idempotency_keys WHERE created_at < $1
 			ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)`, before, purgeBatch)
 		if err != nil {
-			return total, fmt.Errorf("purgar claves de idempotencia: %w", err)
+			return total, fmt.Errorf("purge idempotency keys: %w", err)
 		}
 		total += tag.RowsAffected()
 		if tag.RowsAffected() < purgeBatch {

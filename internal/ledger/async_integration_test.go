@@ -24,7 +24,7 @@ func aggregate(t *testing.T, batch int) int {
 	return n
 }
 
-// unaggregated cuenta las cuentas async cuyo saldo no es la suma de sus entries.
+// unaggregated counts the async accounts whose balance is not the sum of their entries.
 func unaggregated(t *testing.T) int {
 	t.Helper()
 	var n int
@@ -38,42 +38,43 @@ func unaggregated(t *testing.T) int {
 	return n
 }
 
-// catchUp agrega hasta que todas las cuentas async cuadran. El agregador solo toma lo que asentaron
-// transacciones anteriores a la más vieja en curso en el servidor, y en CI el servidor lo comparten
-// otros paquetes: puede necesitar más de una corrida.
+// catchUp aggregates until every async account adds up. The aggregator only takes what was posted by
+// transactions older than the oldest one in progress on the server, and in CI the server is shared with
+// other packages: it may need more than one run.
 func catchUp(t *testing.T, batch int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for aggregate(t, batch); unaggregated(t) > 0; aggregate(t, batch) {
 		if time.Now().After(deadline) {
-			t.Fatalf("tras 10 s quedan %d cuentas async sin cuadrar", unaggregated(t))
+			t.Fatalf("after 10 s, %d async accounts still do not add up", unaggregated(t))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-// TestPostDoesNotCheckNorUpdateAsyncAccounts: un posting saca de una cuenta async más de lo que tiene
-// sin que se valide su límite, y su saldo materializado no cambia hasta que corre el agregador, que no
-// toca el de la cuenta sync. Que Post no la bloquea lo prueba TestPostSkipsAsyncAccounts, en app.
+// TestPostDoesNotCheckNorUpdateAsyncAccounts: a posting takes more out of an async account than it has
+// without its limit being checked, and its materialized balance does not change until the aggregator
+// runs, which does not touch the sync account's. TestPostSkipsAsyncAccounts, in app, covers that Post
+// does not lock it.
 func TestPostDoesNotCheckNorUpdateAsyncAccounts(t *testing.T) {
 	cash, settlement := createAccount(t, ledger.KindAsset), asyncAccount(t, ledger.KindAsset)
 
-	mustPostRef(t, transfer(t, cash.ID, settlement.ID, ids.New().String())) // el activo async queda en -100
+	mustPostRef(t, transfer(t, cash.ID, settlement.ID, ids.New().String())) // the async asset ends at -100
 
 	if b := balanceOf(t, settlement.ID); b.Posted != 0 || b.Version != 0 {
-		t.Fatalf("saldo de la cuenta async antes de agregar = %+v, se esperaba intacto", b)
+		t.Fatalf("async account balance before aggregating = %+v, want untouched", b)
 	}
 	catchUp(t, 100)
 	if b := balanceOf(t, settlement.ID); b.Posted != -100 {
-		t.Fatalf("saldo de la cuenta async tras agregar = %+v, se esperaba -100", b)
+		t.Fatalf("async account balance after aggregating = %+v, want -100", b)
 	}
 	if b := balanceOf(t, cash.ID); b.Posted != 100 {
-		t.Fatalf("caja (sync) tras agregar = %+v, se esperaba 100: el agregador solo toca cuentas async", b)
+		t.Fatalf("cash (sync) after aggregating = %+v, want 100: the aggregator only touches async accounts", b)
 	}
 }
 
-// TestAggregationMatchesTheEntries: tras agregar en lotes chicos, el saldo de cada cuenta async es la
-// suma de sus entries, y una segunda corrida no encuentra nada ni duplica.
+// TestAggregationMatchesTheEntries: after aggregating in small batches, each async account's balance is
+// the sum of its entries, and a second run finds nothing and does not duplicate.
 func TestAggregationMatchesTheEntries(t *testing.T) {
 	clearing, income := asyncAccount(t, ledger.KindLiability), asyncAccount(t, ledger.KindIncome)
 	for range 3 {
@@ -86,18 +87,18 @@ func TestAggregationMatchesTheEntries(t *testing.T) {
 	before := balanceOf(t, clearing.ID)
 
 	if n := aggregate(t, 2); n != 0 {
-		t.Fatalf("la segunda corrida agregó %d entries, se esperaba 0", n)
+		t.Fatalf("the second run aggregated %d entries, want 0", n)
 	}
 	if after := balanceOf(t, clearing.ID); after != before || unaggregated(t) != 0 {
-		t.Fatalf("saldo tras agregar otra vez = %+v, antes %+v: se duplicó", after, before)
+		t.Fatalf("balance after aggregating again = %+v, before %+v: it was duplicated", after, before)
 	}
 	if b := balanceOf(t, income.ID); b.Posted != -300 {
-		t.Fatalf("ingresos = %+v, se esperaba -300", b)
+		t.Fatalf("income = %+v, want -300", b)
 	}
 }
 
-// TestAPostingInFlightIsNotSkipped: un posting que tomó su id de entry antes que otro pero confirma
-// después no queda atrás del cursor: el agregador no pasa de la transacción más vieja en curso.
+// TestAPostingInFlightIsNotSkipped: a posting that took its entry id before another but commits later is
+// not left behind the cursor: the aggregator does not go past the oldest transaction in progress.
 func TestAPostingInFlightIsNotSkipped(t *testing.T) {
 	clearing := asyncAccount(t, ledger.KindLiability)
 	first, second := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindAsset)
@@ -111,22 +112,22 @@ func TestAPostingInFlightIsNotSkipped(t *testing.T) {
 
 	catchUp(t, 100)
 	if b := balanceOf(t, clearing.ID); b.Posted != -200 {
-		t.Fatalf("clearing = %+v, se esperaban los dos postings (-200)", b)
+		t.Fatalf("clearing = %+v, want both postings (-200)", b)
 	}
 }
 
-// TestAnOlderTransactionWithNewerEntriesIsAggregated: una transacción de base que empezó antes (xid
-// menor) pero asienta sus entries después que otra tiene ids mayores; el cursor sigue el orden de los
-// xid y no la deja atrás.
+// TestAnOlderTransactionWithNewerEntriesIsAggregated: a database transaction that started earlier (lower
+// xid) but posts its entries after another one has higher ids; the cursor follows xid order and does not
+// leave it behind.
 func TestAnOlderTransactionWithNewerEntriesIsAggregated(t *testing.T) {
 	clearing := asyncAccount(t, ledger.KindLiability)
 	older, newer := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindAsset)
 	started, release, done := make(chan error, 1), make(chan struct{}), make(chan error, 1)
 	unblock := sync.OnceFunc(func() { close(release) })
-	t.Cleanup(unblock) // si la prueba falla antes, la transacción no queda abierta frenando al agregador
+	t.Cleanup(unblock) // if the test fails earlier, the transaction is not left open stalling the aggregator
 	go func() {
 		done <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
-			_, err := tx.Exec(t.Context(), `SELECT pg_current_xact_id()`) // toma su xid ya
+			_, err := tx.Exec(t.Context(), `SELECT pg_current_xact_id()`) // takes its xid now
 			started <- err
 			<-release
 			_, err = svc().Post(t.Context(), tx, transfer(t, older.ID, clearing.ID, ids.New().String()))
@@ -144,29 +145,29 @@ func TestAnOlderTransactionWithNewerEntriesIsAggregated(t *testing.T) {
 
 	catchUp(t, 1)
 	if b := balanceOf(t, clearing.ID); b.Posted != -200 {
-		t.Fatalf("clearing = %+v, se esperaban los dos postings (-200)", b)
+		t.Fatalf("clearing = %+v, want both postings (-200)", b)
 	}
 }
 
-// TestTheCursorOnlyMovesForward: ni con SQL directo el rol de la aplicación retrocede el cursor ni
-// borra su fila.
+// TestTheCursorOnlyMovesForward: not even with direct SQL can the application role move the cursor back
+// or delete its row.
 func TestTheCursorOnlyMovesForward(t *testing.T) {
 	cases := map[string]struct{ sql, sqlState string }{
-		"retroceder": {`UPDATE ledger.async_cursor SET posted_xact = '0', entry_id = 0`, "2F003"},
-		"borrar":     {`DELETE FROM ledger.async_cursor`, "42501"},
+		"move back": {`UPDATE ledger.async_cursor SET posted_xact = '0', entry_id = 0`, "2F003"},
+		"delete":    {`DELETE FROM ledger.async_cursor`, "42501"},
 	}
-	catchUp(t, 100) // el cursor ya avanzó sobre los entries de las cuentas async de este paquete
+	catchUp(t, 100) // the cursor already moved past the entries of this package's async accounts
 	for name, tc := range cases {
 		_, err := testPool.Exec(t.Context(), tc.sql)
 		var pgErr *pgconn.PgError
 		if !errors.As(err, &pgErr) || pgErr.Code != tc.sqlState {
-			t.Errorf("%s = %v, se esperaba SQLSTATE %s", name, err, tc.sqlState)
+			t.Errorf("%s = %v, want SQLSTATE %s", name, err, tc.sqlState)
 		}
 	}
 }
 
 func TestAggregateRejectsAnEmptyBatch(t *testing.T) {
 	if _, err := svc().AggregateAsyncBalances(t.Context(), postgres.NewUnitOfWork(testPool), 0); err == nil {
-		t.Fatal("un lote de 0 debe fallar: no avanzaría nunca")
+		t.Fatal("a batch of 0 must fail: it would never advance")
 	}
 }

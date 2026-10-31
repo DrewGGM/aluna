@@ -1,5 +1,6 @@
-// Package telemetry configura las señales del proceso (quality-reliability §Observabilidad): logs JSON
-// con el trace_id del request y OpenTelemetry (trazas y métricas) exportado por OTLP cuando hay dónde.
+// Package telemetry configures the process's signals (quality-reliability §Observabilidad): JSON logs
+// with the request's trace_id and OpenTelemetry (traces and metrics) exported over OTLP when there is
+// somewhere to send them.
 package telemetry
 
 import (
@@ -21,34 +22,34 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Shutdown vacía y cierra los exportadores; se llama al apagar el proceso.
+// Shutdown flushes and closes the exporters; it is called when the process shuts down.
 type Shutdown func(context.Context) error
 
-// Setup deja un logger JSON en out que agrega trace_id y span_id del contexto, y propaga traceparent
-// (W3C); los errores internos de OTel (un colector caído) salen por ese logger. Si
-// OTEL_EXPORTER_OTLP_ENDPOINT existe, registra los providers globales de trazas y métricas
-// con exportadores OTLP/HTTP, configurados por las variables OTEL_* estándar (OTEL_SERVICE_NAME y
-// OTEL_RESOURCE_ATTRIBUTES mandan sobre service y version); si no, OTel queda en no-op y nada sale
-// del proceso.
+// Setup sets up a JSON logger on out that adds the context's trace_id and span_id, and propagates
+// traceparent (W3C); OTel's internal errors (a collector that is down) go out through that logger. If
+// OTEL_EXPORTER_OTLP_ENDPOINT is set, it registers the global trace and metric providers with OTLP/HTTP
+// exporters, configured by the standard OTEL_* variables (OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES
+// take precedence over service and version); otherwise, OTel stays no-op and nothing leaves the
+// process.
 func Setup(ctx context.Context, service, version string, out io.Writer) (*slog.Logger, Shutdown, error) {
 	log := slog.New(traceHandler{slog.NewJSONHandler(out, nil)})
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { log.Error("telemetría", "error", err) }))
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { log.Error("telemetry", "error", err) }))
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" {
 		return log, func(context.Context) error { return nil }, nil
 	}
 	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName(service), semconv.ServiceVersion(version)),
 		resource.WithFromEnv(), resource.WithTelemetrySDK())
 	if err != nil {
-		return nil, nil, fmt.Errorf("recurso de OTel: %w", err)
+		return nil, nil, fmt.Errorf("otel resource: %w", err)
 	}
 	traces, err := otlptracehttp.New(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("exportador de trazas: %w", err)
+		return nil, nil, fmt.Errorf("trace exporter: %w", err)
 	}
 	metrics, err := otlpmetrichttp.New(ctx)
 	if err != nil {
-		return nil, nil, errors.Join(fmt.Errorf("exportador de métricas: %w", err), traces.Shutdown(ctx))
+		return nil, nil, errors.Join(fmt.Errorf("metric exporter: %w", err), traces.Shutdown(ctx))
 	}
 	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traces), sdktrace.WithResource(res))
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metrics)), sdkmetric.WithResource(res))
@@ -57,8 +58,8 @@ func Setup(ctx context.Context, service, version string, out io.Writer) (*slog.L
 	return log, func(ctx context.Context) error { return errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx)) }, nil
 }
 
-// traceHandler agrega trace_id y span_id a cada registro que llega con un span en el contexto, para
-// unir logs y trazas.
+// traceHandler adds trace_id and span_id to every record that arrives with a span in its context, to
+// join logs and traces.
 type traceHandler struct{ slog.Handler }
 
 func (h traceHandler) Handle(ctx context.Context, r slog.Record) error {

@@ -27,7 +27,8 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
 var entity = ids.New()
 
-// svc es el ledger de las pruebas, con sus eventos al outbox; se crea la primera vez, cuando ya hay base.
+// svc is the tests' ledger, with its events going to the outbox; it is created the first time, once the
+// database exists.
 var svc = sync.OnceValue(func() *ledger.Service {
 	events, err := outbox.New(testPool)
 	if err != nil {
@@ -48,7 +49,7 @@ func cop(t *testing.T) money.Currency {
 func createAccount(t *testing.T, kind ledger.Kind) ledger.Account {
 	t.Helper()
 	account, err := tryCreateAccount(t, ledger.CreateAccountInput{
-		LegalEntityID: entity, Code: "cta-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: ledger.BalanceModeSync,
+		LegalEntityID: entity, Code: "acct-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: ledger.BalanceModeSync,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +68,7 @@ func tryCreateAccount(t *testing.T, in ledger.CreateAccountInput) (ledger.Accoun
 	return account, err
 }
 
-// move asienta units desde from (crédito) hacia to (débito) y devuelve el resultado de Post.
+// move posts units from from (credit) to to (debit) and returns Post's result.
 func move(ctx context.Context, tx postgres.Tx, c money.Currency, to, from ids.ID, units int64, ref string) (ledger.Transaction, error) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	return svc().Post(ctx, tx, ledger.PostInput{
@@ -103,21 +104,21 @@ func TestPostUpdatesBalancesWithTheDatabaseClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := postedOf(t, cash.ID); got != 10_000_000 {
-		t.Errorf("caja posted = %d, se esperaba 10.000.000", got)
+		t.Errorf("cash posted = %d, want 10,000,000", got)
 	}
-	if got := postedOf(t, deposit.ID); got != -10_000_000 { // pasivo: saldo natural 10.000.000
-		t.Errorf("depósito posted = %d, se esperaba -10.000.000", got)
+	if got := postedOf(t, deposit.ID); got != -10_000_000 { // liability: natural balance 10,000,000
+		t.Errorf("deposit posted = %d, want -10,000,000", got)
 	}
 	var stored time.Time
 	if err := testPool.QueryRow(t.Context(), `SELECT posted_at FROM ledger.transactions WHERE id = $1`, posted.ID).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
 	if !stored.Equal(posted.PostedAt) || posted.PostedAt.Before(before.Add(-time.Minute)) {
-		t.Errorf("posted_at devuelto %v, guardado %v: debe venir de la base", posted.PostedAt, stored)
+		t.Errorf("posted_at returned %v, stored %v: it must come from the database", posted.PostedAt, stored)
 	}
 	b, err := svc().Balance(t.Context(), testPool, cash.ID)
 	if err != nil || b.Version != 1 {
-		t.Errorf("version = %d (%v), se esperaba 1 tras un posting", b.Version, err)
+		t.Errorf("version = %d (%v), want 1 after a posting", b.Version, err)
 	}
 }
 
@@ -132,28 +133,28 @@ func TestPostRejectsOverdraftAndPersistsNothing(t *testing.T) {
 	}
 	ref := ids.New().String()
 
-	// Retiro de 100.001 unidades: débito al depósito del cliente, crédito a caja.
+	// Withdrawal of 100,001 units: debit to the customer's deposit, credit to cash.
 	err := uow.Do(t.Context(), func(tx postgres.Tx) error {
 		_, err := move(t.Context(), tx, cop(t), deposit.ID, cash.ID, 100_001, ref)
 		return err
 	})
 
 	if !errors.Is(err, ledger.ErrInsufficientFunds) {
-		t.Fatalf("error = %v, se esperaba ErrInsufficientFunds", err)
+		t.Fatalf("error = %v, want ErrInsufficientFunds", err)
 	}
 	var n int
 	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM ledger.transactions WHERE external_ref = $1`, ref).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("el retiro rechazado dejó %d transacciones (err = %v)", n, err)
+		t.Fatalf("the rejected withdrawal left %d transactions (err = %v)", n, err)
 	}
 	if got := postedOf(t, deposit.ID); got != -100_000 {
-		t.Fatalf("el saldo del depósito cambió a %d", got)
+		t.Fatalf("the deposit balance changed to %d", got)
 	}
 }
 
 func TestPostRejectsAccountsOfAnotherEntityOrCurrency(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	foreign, err := tryCreateAccount(t, ledger.CreateAccountInput{
-		LegalEntityID: ids.New(), Code: "ajena", Kind: ledger.KindAsset, Currency: cop(t), Mode: ledger.BalanceModeSync,
+		LegalEntityID: ids.New(), Code: "foreign", Kind: ledger.KindAsset, Currency: cop(t), Mode: ledger.BalanceModeSync,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -167,9 +168,9 @@ func TestPostRejectsAccountsOfAnotherEntityOrCurrency(t *testing.T) {
 		to       ids.ID
 		want     error
 	}{
-		"cuenta inexistente":          {cop(t), ids.New(), ledger.ErrAccountNotFound},
-		"cuenta de otra entidad":      {cop(t), foreign.ID, ledger.ErrAccountNotFound},
-		"moneda distinta a la cuenta": {usd, cash.ID, ledger.ErrCurrencyMismatch},
+		"nonexistent account":               {cop(t), ids.New(), ledger.ErrAccountNotFound},
+		"another entity's account":          {cop(t), foreign.ID, ledger.ErrAccountNotFound},
+		"currency other than the account's": {usd, cash.ID, ledger.ErrCurrencyMismatch},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -179,28 +180,28 @@ func TestPostRejectsAccountsOfAnotherEntityOrCurrency(t *testing.T) {
 			})
 
 			if !errors.Is(err, tc.want) {
-				t.Fatalf("error = %v, se esperaba %v", err, tc.want)
+				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
 		})
 	}
 }
 
-// TestDeadlockIsRetried provoca un deadlock real: otra transacción toma los saldos en el orden inverso
-// al de Post. PostgreSQL aborta a quien detecta el ciclo primero (Post, que empezó a esperar antes) y
-// UnitOfWork.Do repite el posting completo.
+// TestDeadlockIsRetried causes a real deadlock: another transaction takes the balances in the reverse
+// order of Post. PostgreSQL aborts whoever detects the cycle first (Post, which started waiting earlier)
+// and UnitOfWork.Do repeats the whole posting.
 func TestDeadlockIsRetried(t *testing.T) {
 	first, second := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	other, err := testPool.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer other.Rollback(context.WithoutCancel(t.Context())) //nolint:errcheck // no hace nada tras el commit
+	defer other.Rollback(context.WithoutCancel(t.Context())) //nolint:errcheck // a no-op after the commit
 	var otherPID int32
 	if err := other.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&otherPID); err != nil {
 		t.Fatal(err)
 	}
 	lock := `SELECT 1 FROM ledger.balances WHERE account_id = $1 FOR UPDATE`
-	if _, err := other.Exec(t.Context(), lock, second.ID); err != nil { // Post bloquea first y luego second
+	if _, err := other.Exec(t.Context(), lock, second.ID); err != nil { // Post locks first and then second
 		t.Fatal(err)
 	}
 	attempts := 0
@@ -212,22 +213,22 @@ func TestDeadlockIsRetried(t *testing.T) {
 			return err
 		})
 	}()
-	waitForBlockedBy(t, otherPID) // Post ya tiene first y espera second, que tiene other
+	waitForBlockedBy(t, otherPID) // Post already holds first and waits for second, which other holds
 
-	if _, err := other.Exec(t.Context(), lock, first.ID); err != nil { // cierra el ciclo
-		t.Fatalf("la otra transacción no debía ser la abortada: %v", err)
+	if _, err := other.Exec(t.Context(), lock, first.ID); err != nil { // closes the cycle
+		t.Fatalf("the other transaction should not have been the aborted one: %v", err)
 	}
 	if err := other.Commit(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := <-done; err != nil || attempts != 2 {
-		t.Fatalf("Post terminó con %v tras %d intentos; se esperaba éxito en el segundo", err, attempts)
+		t.Fatalf("Post ended with %v after %d attempts; want success on the second", err, attempts)
 	}
 }
 
-// waitForBlockedBy espera hasta 10 s a que alguna sesión quede bloqueada por la sesión pid. El servidor
-// puede ser compartido con otros paquetes en paralelo: contar cualquier espera no bastaría.
+// waitForBlockedBy waits up to 10 s for some session to be blocked by session pid. The server may be
+// shared with other packages in parallel: counting any wait would not be enough.
 func waitForBlockedBy(t *testing.T, pid int32) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -243,7 +244,7 @@ func waitForBlockedBy(t *testing.T, pid int32) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("Post nunca quedó esperando el lock de la otra transacción")
+	t.Fatal("Post never ended up waiting for the other transaction's lock")
 }
 
 func TestCreateAccountRejectsADuplicateCode(t *testing.T) {
@@ -254,7 +255,7 @@ func TestCreateAccountRejectsADuplicateCode(t *testing.T) {
 	})
 
 	if !errors.Is(err, ledger.ErrInvalidAccount) {
-		t.Fatalf("error = %v, se esperaba ErrInvalidAccount por el código repetido", err)
+		t.Fatalf("error = %v, want ErrInvalidAccount for the repeated code", err)
 	}
 }
 
@@ -268,9 +269,9 @@ func TestBalance(t *testing.T) {
 	}
 
 	if _, err := svc().Balance(t.Context(), testPool, clearing.ID); err != nil {
-		t.Errorf("una cuenta async también tiene saldo materializado: %v", err)
+		t.Errorf("an async account also has a materialized balance: %v", err)
 	}
 	if _, err := svc().Balance(t.Context(), testPool, ids.New()); !errors.Is(err, ledger.ErrAccountNotFound) {
-		t.Errorf("error = %v, se esperaba ErrAccountNotFound para una cuenta que no existe", err)
+		t.Errorf("error = %v, want ErrAccountNotFound for an account that does not exist", err)
 	}
 }

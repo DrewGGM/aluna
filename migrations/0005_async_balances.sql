@@ -1,28 +1,28 @@
--- Agregación de saldos de cuentas async (FR-9, ADR-0004): un posting no bloquea ni actualiza el saldo
--- de una cuenta async; el agregador suma después sus entries y guarda hasta dónde llegó.
+-- Balance aggregation for async accounts (FR-9, ADR-0004): a posting neither locks nor updates an async
+-- account's balance; the aggregator sums its entries later and records how far it got.
 --
--- El cursor es (posted_xact, entries.id) y no solo entries.id: los ids se asignan al insertar pero las
--- transacciones confirman en otro orden, así que un posting lento con un id menor confirmaría detrás
--- de un cursor por id y quedaría fuera del saldo para siempre. El agregador solo toma transacciones de
--- base anteriores a la más vieja en curso (pg_snapshot_xmin), que ya no pueden sumar entries; las que
--- confirmen después tienen un posted_xact mayor que el cursor.
+-- The cursor is (posted_xact, entries.id) and not just entries.id: ids are assigned on insert but
+-- transactions commit in a different order, so a slow posting with a lower id would commit behind an
+-- id-based cursor and stay out of the balance forever. The aggregator only takes database transactions
+-- older than the oldest one in progress (pg_snapshot_xmin), which can no longer add entries; those that
+-- commit later have a posted_xact greater than the cursor.
 
 -- +goose Up
 CREATE TABLE ledger.async_cursor (
-    singleton   boolean PRIMARY KEY DEFAULT true CHECK (singleton), -- una sola fila
+    singleton   boolean PRIMARY KEY DEFAULT true CHECK (singleton), -- a single row
     posted_xact xid8 NOT NULL DEFAULT '0',
     entry_id    bigint NOT NULL DEFAULT 0
 );
 INSERT INTO ledger.async_cursor DEFAULT VALUES;
 
-CREATE INDEX transactions_posted_xact_idx ON ledger.transactions (posted_xact); -- lotes del agregador
+CREATE INDEX transactions_posted_xact_idx ON ledger.transactions (posted_xact); -- aggregator batches
 
--- El cursor solo avanza: retrocederlo volvería a sumar entries ya agregados.
+-- The cursor only moves forward: rewinding it would add already aggregated entries again.
 -- +goose StatementBegin
 CREATE FUNCTION ledger.forbid_cursor_rewind() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF (NEW.posted_xact, NEW.entry_id) <= (OLD.posted_xact, OLD.entry_id) THEN
-        RAISE EXCEPTION 'el cursor de agregación solo avanza'
+        RAISE EXCEPTION 'the aggregation cursor only moves forward'
             USING ERRCODE = 'prohibited_sql_statement_attempted', TABLE = 'async_cursor';
     END IF;
     RETURN NEW;

@@ -30,8 +30,8 @@ func countSchemas(t *testing.T) int {
 	return n
 }
 
-// migrate corre una dirección por el mismo camino que aluna migrate y devuelve las migraciones
-// pendientes según status.
+// migrate runs a direction through the same path as aluna migrate and returns the pending migrations
+// according to status.
 func migrate(t *testing.T, direction string) []string {
 	t.Helper()
 	db, err := OpenForMigrations(testPool.Config().ConnConfig.ConnString())
@@ -64,25 +64,25 @@ func lastMigration(t *testing.T) string {
 	t.Helper()
 	files, err := fs.Glob(migrations.FS, "*.sql")
 	if err != nil || len(files) == 0 {
-		t.Fatalf("migraciones embebidas: %v %v", files, err)
+		t.Fatalf("embedded migrations: %v %v", files, err)
 	}
 	return slices.Max(files)
 }
 
 func TestMigrateUpStatusDownUp(t *testing.T) {
 	if pending := migrate(t, "up"); len(pending) != 0 {
-		t.Fatalf("tras up quedan pendientes: %v", pending)
+		t.Fatalf("pending after up: %v", pending)
 	}
 	if n := countSchemas(t); n != len(moduleSchemas) {
-		t.Fatalf("tras up hay %d de %d esquemas", n, len(moduleSchemas))
+		t.Fatalf("after up there are %d of %d schemas", n, len(moduleSchemas))
 	}
 
 	if pending := migrate(t, "down"); !slices.Equal(pending, []string{lastMigration(t)}) {
-		t.Fatalf("down debe dejar pendiente solo %s, quedó %v", lastMigration(t), pending)
+		t.Fatalf("down must leave only %s pending, got %v", lastMigration(t), pending)
 	}
 
 	if pending := migrate(t, "up"); len(pending) != 0 {
-		t.Fatalf("tras el segundo up quedan pendientes: %v", pending)
+		t.Fatalf("pending after the second up: %v", pending)
 	}
 }
 
@@ -91,14 +91,14 @@ func TestAppRoleOwnsNothingAndCannotLogIn(t *testing.T) {
 	ctx := context.Background()
 	var canLogin, ownsSchemas bool
 	if err := testPool.QueryRow(ctx, `SELECT rolcanlogin FROM pg_roles WHERE rolname = 'aluna_app'`).Scan(&canLogin); err != nil {
-		t.Fatalf("el rol aluna_app debe existir: %v", err)
+		t.Fatalf("the aluna_app role must exist: %v", err)
 	}
 	if err := testPool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspowner = 'aluna_app'::regrole)`).Scan(&ownsSchemas); err != nil {
 		t.Fatal(err)
 	}
 	if canLogin || ownsSchemas {
-		t.Fatalf("aluna_app: login = %v, dueño de esquemas = %v; se esperaba ninguno", canLogin, ownsSchemas)
+		t.Fatalf("aluna_app: login = %v, owns schemas = %v; want neither", canLogin, ownsSchemas)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestOpenForMigrationsHasNoStatementTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close() //nolint:errcheck // cierre en prueba
+	defer db.Close() //nolint:errcheck // close in test
 	want := map[string]string{"statement_timeout": "0", "lock_timeout": "10s"}
 	for setting, value := range want {
 		var got string
@@ -115,13 +115,13 @@ func TestOpenForMigrationsHasNoStatementTimeout(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got != value {
-			t.Errorf("%s = %q, se esperaba %q", setting, got, value)
+			t.Errorf("%s = %q, want %q", setting, got, value)
 		}
 	}
 }
 
-// TestAppRoleCreationToleratesConcurrentDatabases corre el bloque de 0001 que crea el rol en dos
-// sesiones a la vez, como pasa cuando varias bases del mismo servidor migran en paralelo.
+// TestAppRoleCreationToleratesConcurrentDatabases runs the 0001 block that creates the role in two
+// sessions at once, as happens when several databases on the same server migrate in parallel.
 func TestAppRoleCreationToleratesConcurrentDatabases(t *testing.T) {
 	ctx := context.Background()
 	createRole := roleBlockOf(t, "0001_schemas.sql")
@@ -138,27 +138,27 @@ func TestAppRoleCreationToleratesConcurrentDatabases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Rollback(ctx) //nolint:errcheck // se confirma abajo; si la prueba falla antes, se revierte
+	defer first.Rollback(ctx) //nolint:errcheck // committed below; if the test fails earlier, it rolls back
 	if _, err := first.Exec(ctx, probe); err != nil {
 		t.Fatal(err)
 	}
 	second := make(chan error, 1)
-	go func() { // espera el lock de pg_authid de la primera sesión y recibe unique_violation
+	go func() { // waits for the first session's pg_authid lock and gets unique_violation
 		_, err := testPool.Exec(ctx, probe)
 		second <- err
 	}()
-	time.Sleep(200 * time.Millisecond) // la segunda sesión queda esperando
+	time.Sleep(200 * time.Millisecond) // the second session is left waiting
 	if err := first.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := <-second; err != nil {
-		t.Fatalf("la segunda base no debe fallar al crear un rol que ya existe: %v", err)
+		t.Fatalf("the second database must not fail when creating a role that already exists: %v", err)
 	}
 }
 
-// roleBlockOf saca de la migración el bloque entre StatementBegin y StatementEnd, para probar el SQL
-// real y no una copia.
+// roleBlockOf extracts from the migration the block between StatementBegin and StatementEnd, to test the
+// real SQL and not a copy.
 func roleBlockOf(t *testing.T, file string) string {
 	t.Helper()
 	sql, err := fs.ReadFile(migrations.FS, file)
@@ -168,7 +168,7 @@ func roleBlockOf(t *testing.T, file string) string {
 	_, rest, okBegin := strings.Cut(string(sql), "-- +goose StatementBegin")
 	block, _, okEnd := strings.Cut(rest, "-- +goose StatementEnd")
 	if !okBegin || !okEnd || !strings.Contains(block, "CREATE ROLE aluna_app") {
-		t.Fatalf("%s no tiene el bloque que crea aluna_app", file)
+		t.Fatalf("%s lacks the block that creates aluna_app", file)
 	}
 	return block
 }

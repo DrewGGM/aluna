@@ -1,6 +1,6 @@
-// Package anchorfs es el ancla de los bloques de auditoría en un directorio, para desarrollo y pruebas
-// (ADR-0012): un archivo de solo lectura por bloque con su hash en hexadecimal, que no se sobrescribe. En
-// producción el ancla es un almacenamiento WORM (Q-6).
+// Package anchorfs anchors the audit blocks in a directory, for development and testing (ADR-0012): one
+// read-only file per block with its hash in hex, never overwritten. In production the anchor is WORM
+// storage (Q-6).
 package anchorfs
 
 import (
@@ -17,16 +17,16 @@ import (
 )
 
 var (
-	// ErrAnchored indica que el bloque ya tiene otro hash anclado: el ancla no se reescribe.
-	ErrAnchored = errors.New("el bloque ya tiene otro hash anclado")
-	// errNotADir indica una ruta de ancla que no es un directorio existente.
-	errNotADir = errors.New("el ancla de auditoría no es un directorio existente")
+	// ErrAnchored means the block already has a different anchored hash: the anchor is not rewritten.
+	ErrAnchored = errors.New("the block already has a different anchored hash")
+	// errNotADir means an anchor path that is not an existing directory.
+	errNotADir = errors.New("the audit anchor is not an existing directory")
 )
 
-// Dir es el ancla en un directorio.
+// Dir is the anchor in a directory.
 type Dir struct{ path string }
 
-// New abre el ancla en path, que debe existir: un nombre mal escrito no crea un ancla vacía.
+// New opens the anchor at path, which must exist: a misspelled name does not create an empty anchor.
 func New(path string) (*Dir, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -42,35 +42,35 @@ func (d *Dir) file(blockID int64) string {
 	return filepath.Join(d.path, fmt.Sprintf("%020d.sha256", blockID))
 }
 
-// Put ancla hash para blockID. Escribe un temporal, lo baja a disco y lo enlaza con el nombre del bloque:
-// el enlace falla si ya existe, así que un ancla nunca se reescribe ni queda a medio escribir. Repetirlo
-// con el mismo hash no hace nada (un sellado reintentado); con otro es ErrAnchored.
+// Put anchors hash for blockID. It writes a temporary file, syncs it to disk and links it under the block's
+// name: the link fails if it already exists, so an anchor is never rewritten or left half written.
+// Repeating it with the same hash does nothing (a retried seal); with a different one it is ErrAnchored.
 func (d *Dir) Put(ctx context.Context, blockID int64, hash [32]byte) error {
 	tmp, err := d.written(hash)
 	if err != nil {
-		return fmt.Errorf("anclar el bloque %d: %w", blockID, err)
+		return fmt.Errorf("anchor block %d: %w", blockID, err)
 	}
-	defer os.Remove(tmp) //nolint:errcheck // un temporal que quede no es un ancla: nadie lo lee
+	defer os.Remove(tmp) //nolint:errcheck // a leftover temporary file is not an anchor: nobody reads it
 	final := d.file(blockID)
 	err = os.Link(tmp, final)
 	if errors.Is(err, fs.ErrExist) {
 		return d.checkAnchored(ctx, blockID, hash)
 	}
 	if err != nil {
-		return fmt.Errorf("anclar el bloque %d: %w", blockID, err)
+		return fmt.Errorf("anchor block %d: %w", blockID, err)
 	}
-	if err := os.Remove(tmp); err != nil { // antes del chmod: en Windows un archivo de solo lectura no se borra
-		return fmt.Errorf("anclar el bloque %d: %w", blockID, err)
+	if err := os.Remove(tmp); err != nil { // before the chmod: on Windows a read-only file cannot be deleted
+		return fmt.Errorf("anchor block %d: %w", blockID, err)
 	}
 	if err := os.Chmod(final, 0o400); err != nil {
-		return fmt.Errorf("anclar el bloque %d: %w", blockID, err)
+		return fmt.Errorf("anchor block %d: %w", blockID, err)
 	}
 	return nil
 }
 
-// written es un temporal en el directorio con el hash en hex, ya en disco.
+// written is a temporary file in the directory with the hash in hex, already on disk.
 func (d *Dir) written(hash [32]byte) (string, error) {
-	f, err := os.CreateTemp(d.path, "ancla-*.tmp")
+	f, err := os.CreateTemp(d.path, "anchor-*.tmp")
 	if err != nil {
 		return "", err
 	}
@@ -87,7 +87,7 @@ func (d *Dir) written(hash [32]byte) (string, error) {
 	return f.Name(), nil
 }
 
-// checkAnchored es nil si blockID ya tiene anclado hash y ErrAnchored si tiene otro.
+// checkAnchored is nil if blockID already has hash anchored and ErrAnchored if it has a different one.
 func (d *Dir) checkAnchored(ctx context.Context, blockID int64, hash [32]byte) error {
 	anchored, err := d.Get(ctx, blockID)
 	if err != nil {
@@ -99,22 +99,22 @@ func (d *Dir) checkAnchored(ctx context.Context, blockID int64, hash [32]byte) e
 	return nil
 }
 
-// Get es el hash anclado para blockID; sin archivo es app.ErrNotAnchored.
+// Get is the hash anchored for blockID; with no file it is app.ErrNotAnchored.
 func (d *Dir) Get(_ context.Context, blockID int64) ([32]byte, error) {
 	b, err := os.ReadFile(d.file(blockID))
 	if errors.Is(err, fs.ErrNotExist) {
 		return [32]byte{}, fmt.Errorf("%w: %d", app.ErrNotAnchored, blockID)
 	}
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("leer el ancla del bloque %d: %w", blockID, err)
+		return [32]byte{}, fmt.Errorf("read anchor of block %d: %w", blockID, err)
 	}
 	var hash [32]byte
 	text := strings.TrimSpace(string(b))
 	if len(text) != hex.EncodedLen(len(hash)) {
-		return [32]byte{}, fmt.Errorf("ancla del bloque %d ilegible: %d caracteres", blockID, len(text))
+		return [32]byte{}, fmt.Errorf("unreadable anchor of block %d: %d characters", blockID, len(text))
 	}
 	if _, err := hex.Decode(hash[:], []byte(text)); err != nil {
-		return [32]byte{}, fmt.Errorf("ancla del bloque %d ilegible: %w", blockID, err)
+		return [32]byte{}, fmt.Errorf("unreadable anchor of block %d: %w", blockID, err)
 	}
 	return hash, nil
 }

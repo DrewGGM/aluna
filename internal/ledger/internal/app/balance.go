@@ -2,9 +2,9 @@ package app
 
 import "time"
 
-// BalanceAsOf es el corte del saldo bitemporal (FR-8, ADR-0006): los entries con fecha valor hasta
-// ValueDate (su día calendario, en su zona) y asentados (posted_at) hasta KnownAt. Un corte nil no
-// filtra ese eje.
+// BalanceAsOf is the bitemporal balance cut (FR-8, ADR-0006): entries with a value date up to ValueDate
+// (its calendar day, in its zone) and posted (posted_at) up to KnownAt. A nil cut does not filter that
+// axis.
 type BalanceAsOf struct {
 	ValueDate, KnownAt *time.Time
 }

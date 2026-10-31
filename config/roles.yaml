@@ -1,16 +1,16 @@
-# Roles y permisos del core (ADR-0014). Cada permiso es el x-aluna-permission de una operación de
-# api/openapi.yaml; lo que no está aquí se niega. "all" da el permiso sobre cualquier recurso de la entidad
-# legal del token; "own", solo sobre los de su party_id (un canal que actúa por un cliente, TH-3).
+# Core roles and permissions (ADR-0014). Each permission is the x-aluna-permission of an operation in
+# api/openapi.yaml; anything not listed here is denied. "all" grants the permission over any resource of the
+# token's legal entity; "own", only over those of its party_id (a channel acting for a customer, TH-3).
 
-# App o canal de un cliente: lee sus propias cuentas. Mientras ningún recurso tenga dueño (las cuentas de
-# depósito, T-047), "own" responde 404 a todo.
+# A customer's app or channel: reads its own accounts. As long as no resource has an owner (deposit
+# accounts, T-047), "own" answers 404 to everything.
 channel:
   own:
     - ledger.accounts.read
     - ledger.balances.read
 
-# Operaciones del día: parties, cuentas, asientos manuales y holds, y decidir solicitudes de
-# maker-checker (el permiso del tipo de cada solicitud se exige aparte).
+# Day-to-day operations: parties, accounts, manual entries and holds, and deciding maker-checker requests
+# (the permission for each request's type is required separately).
 operator:
   all:
     - approvals.read
@@ -27,7 +27,7 @@ operator:
     - ledger.holds.capture
     - ledger.holds.release
 
-# Finanzas: consulta, ajustes contables, reversas y decisión de solicitudes.
+# Finance: queries, accounting adjustments, reversals and deciding requests.
 finance:
   all:
     - approvals.read
@@ -38,7 +38,7 @@ finance:
     - ledger.transactions.read
     - ledger.transactions.reverse
 
-# Cumplimiento: consulta y decisión de solicitudes.
+# Compliance: queries and deciding requests.
 compliance:
   all:
     - approvals.read
@@ -48,7 +48,7 @@ compliance:
     - ledger.balances.read
     - ledger.transactions.read
 
-# Auditoría interna o revisoría fiscal: solo lectura.
+# Internal audit or statutory auditor: read only.
 auditor:
   all:
     - approvals.read
@@ -57,7 +57,7 @@ auditor:
     - ledger.balances.read
     - ledger.transactions.read
 
-# Servicios internos (rails, jobs): mueven dinero con holds y asientos.
+# Internal services (rails, jobs): move money with holds and entries.
 system:
   all:
     - ledger.accounts.read

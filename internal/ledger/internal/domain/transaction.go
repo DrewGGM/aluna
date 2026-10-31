@@ -10,41 +10,41 @@ import (
 )
 
 var (
-	// ErrTooFewEntries indica una transacción con menos de dos entries.
-	ErrTooFewEntries = errors.New("una transacción necesita al menos dos entries")
-	// ErrZeroAmount indica un entry de importe cero.
-	ErrZeroAmount = errors.New("un entry no puede tener importe cero")
-	// ErrUnbalanced indica que los entries no suman cero en alguna moneda.
-	ErrUnbalanced = errors.New("la transacción no suma cero")
+	// ErrTooFewEntries means a transaction has fewer than two entries.
+	ErrTooFewEntries = errors.New("a transaction needs at least two entries")
+	// ErrZeroAmount means an entry has a zero amount.
+	ErrZeroAmount = errors.New("an entry cannot have a zero amount")
+	// ErrUnbalanced means the entries do not sum to zero in some currency.
+	ErrUnbalanced = errors.New("the transaction does not sum to zero")
 )
 
-// EntryInput es una línea de una transacción. Amount lleva signo: débito positivo, crédito negativo.
+// EntryInput is one line of a transaction. Amount is signed: debit positive, credit negative.
 type EntryInput struct {
 	AccountID ids.ID
 	Amount    money.Amount
 }
 
-// NewTransactionInput son los datos para armar una transacción.
+// NewTransactionInput is the data to build a transaction.
 type NewTransactionInput struct {
 	ID      ids.ID
 	Entries []EntryInput
 }
 
-// Transaction es una transacción que ya cumple la partida doble: al menos dos entries, ninguno en
-// cero, y suma cero en cada moneda.
+// Transaction is a transaction that already satisfies double entry: at least two entries, none of them
+// zero, and a zero sum in each currency.
 type Transaction struct {
 	id      ids.ID
 	entries []EntryInput
 }
 
-// NewTransaction valida la partida doble y devuelve la transacción; el dinero no se crea ni se
-// destruye.
+// NewTransaction validates double entry and returns the transaction; money is neither created nor
+// destroyed.
 func NewTransaction(in NewTransactionInput) (Transaction, error) {
 	if len(in.Entries) < 2 {
-		return Transaction{}, fmt.Errorf("%w: tiene %d", ErrTooFewEntries, len(in.Entries))
+		return Transaction{}, fmt.Errorf("%w: has %d", ErrTooFewEntries, len(in.Entries))
 	}
 	sums := map[money.Currency]money.Amount{}
-	var order []money.Currency // para que el error nombre siempre la misma moneda
+	var order []money.Currency // so the error always names the same currency
 	for i, e := range in.Entries {
 		if e.Amount.IsZero() {
 			return Transaction{}, fmt.Errorf("%w: entry %d", ErrZeroAmount, i)
@@ -52,7 +52,7 @@ func NewTransaction(in NewTransactionInput) (Transaction, error) {
 		cur := e.Amount.Currency()
 		sum, ok := sums[cur]
 		if !ok {
-			sum = money.New(0, cur) // el valor cero de Amount no tiene moneda y Add lo rechaza
+			sum = money.New(0, cur) // the zero Amount has no currency and Add rejects it
 			order = append(order, cur)
 		}
 		next, err := sum.Add(e.Amount)
@@ -63,14 +63,14 @@ func NewTransaction(in NewTransactionInput) (Transaction, error) {
 	}
 	for _, cur := range order {
 		if sum := sums[cur]; !sum.IsZero() {
-			return Transaction{}, fmt.Errorf("%w: %s suma %d", ErrUnbalanced, cur.Code(), sum.Units())
+			return Transaction{}, fmt.Errorf("%w: %s sums to %d", ErrUnbalanced, cur.Code(), sum.Units())
 		}
 	}
 	return Transaction{id: in.ID, entries: slices.Clone(in.Entries)}, nil
 }
 
-// ID es el identificador de la transacción.
+// ID is the transaction's identifier.
 func (t Transaction) ID() ids.ID { return t.id }
 
-// Entries devuelve una copia de los entries: la transacción validada no se puede alterar desde afuera.
+// Entries returns a copy of the entries: the validated transaction cannot be altered from outside.
 func (t Transaction) Entries() []EntryInput { return slices.Clone(t.entries) }

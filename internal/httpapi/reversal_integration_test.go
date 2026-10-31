@@ -20,8 +20,8 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// reversalWorld es una entidad con dos operadores, A (el de apiServer) y B, y una transacción asentada de
-// 100 de la caja contra un depósito.
+// reversalWorld is an entity with two operators, A (apiServer's) and B, and a posted transaction of 100 from
+// the cash account against a deposit.
 type reversalWorld struct {
 	a, b                   *httptest.Server
 	cash, deposit, posting string
@@ -34,101 +34,101 @@ func newReversalWorld(t *testing.T) reversalWorld {
 		t.Fatal(err)
 	}
 	entity := ids.New()
-	w := reversalWorld{a: apiServerWith(t, entity, events), b: apiServerAs(t, entity, events, "operador-b")}
+	w := reversalWorld{a: apiServerWith(t, entity, events), b: apiServerAs(t, entity, events, "operator-b")}
 	w.cash, w.deposit = createAccount(t, w.a, "asset"), createAccount(t, w.a, "liability")
 	var posted gen.Transaction
 	if status := call(t, w.a, http.MethodPost, "/v1/transactions", postingBody(t, w.cash, w.deposit, 100, 100, ""), &posted); status != http.StatusCreated {
-		t.Fatalf("asentar = %d", status)
+		t.Fatalf("post = %d", status)
 	}
 	w.posting = posted.Id.String()
 	return w
 }
 
-// requestReversal pide, como A, la reversa de la transacción; devuelve la respuesta.
+// requestReversal requests, as A, the reversal of the transaction; it returns the response.
 func (w reversalWorld) requestReversal(t *testing.T, body string) response {
 	t.Helper()
 	return postTo(t, w.a, "/v1/transactions/"+w.posting+"/reversal", ids.New().String(), body)
 }
 
-// requested pide la reversa como requestReversal y devuelve la solicitud, que debe quedar pendiente (202).
+// requested requests the reversal like requestReversal and returns the request, which must be pending (202).
 func (w reversalWorld) requested(t *testing.T) testApproval {
 	t.Helper()
 	r := w.requestReversal(t, reversalBody)
 	if r.status != http.StatusAccepted {
-		t.Fatalf("pedir la reversa = %d %s, se esperaba 202", r.status, r.body)
+		t.Fatalf("request reversal = %d %s, want 202", r.status, r.body)
 	}
 	return decodeApproval(t, r)
 }
 
-const reversalBody = `{"reason": "asentada dos veces", "business_date": "` + postingValueDate + `"}`
+const reversalBody = `{"reason": "posted twice", "business_date": "` + postingValueDate + `"}`
 
-// TestAReversalNeedsAnotherOperator (FR-3, FR-39): A pide la reversa (202, pendiente) y no puede aprobarla;
-// B la aprueba, se asienta la reversa con los entries de signo contrario y los saldos vuelven a cero.
+// TestAReversalNeedsAnotherOperator (FR-3, FR-39): A requests the reversal (202, pending) and cannot approve
+// it; B approves it, the reversal is posted with entries of opposite sign and the balances return to zero.
 func TestAReversalNeedsAnotherOperator(t *testing.T) {
 	w := newReversalWorld(t)
 
 	requested := w.requestReversal(t, reversalBody)
 	approval := decodeApproval(t, requested)
 	if requested.status != http.StatusAccepted || approval.Status != "pending" || approval.Kind != reversalKind {
-		t.Fatalf("pedir la reversa = %d %s, se esperaba 202 pendiente", requested.status, requested.body)
+		t.Fatalf("request reversal = %d %s, want 202 pending", requested.status, requested.body)
 	}
 	path := "/v1/approvals/" + approval.ID + "/approval"
 
 	self := postTo(t, w.a, path, ids.New().String(), "")
 	approved := postTo(t, w.b, path, ids.New().String(), "")
 
-	expectProblem(t, "A aprueba su reversa", self, http.StatusForbidden, "self_approval_forbidden")
+	expectProblem(t, "A approves its own reversal", self, http.StatusForbidden, "self_approval_forbidden")
 	got := decodeApproval(t, approved)
 	var reversal gen.Transaction
 	if err := json.Unmarshal(got.Result, &reversal); approved.status != http.StatusOK || got.Status != "approved" || err != nil ||
 		len(reversal.Entries) != 2 {
-		t.Fatalf("B aprueba = %d %s", approved.status, approved.body)
+		t.Fatalf("B approves = %d %s", approved.status, approved.body)
 	}
 	if cash, deposit := balanceOf(t, w.a, w.cash), balanceOf(t, w.a, w.deposit); cash != 0 || deposit != 0 {
-		t.Fatalf("saldos tras la reversa = %d y %d, se esperaba 0 y 0", cash, deposit)
+		t.Fatalf("balances after the reversal = %d and %d, want 0 and 0", cash, deposit)
 	}
 }
 
-// TestAReversalTheLedgerRejectsFails: si al aprobarse el ledger rechaza la reversa (la transacción ya
-// tiene una), la solicitud queda failed y no se asienta nada más.
+// TestAReversalTheLedgerRejectsFails: if on approval the ledger rejects the reversal (the transaction already
+// has one), the request ends up failed and nothing else is posted.
 func TestAReversalTheLedgerRejectsFails(t *testing.T) {
 	w := newReversalWorld(t)
 	first, second := w.requested(t), w.requested(t)
 	if r := postTo(t, w.b, "/v1/approvals/"+first.ID+"/approval", ids.New().String(), ""); r.status != http.StatusOK {
-		t.Fatalf("aprobar la primera = %d %s", r.status, r.body)
+		t.Fatalf("approve the first = %d %s", r.status, r.body)
 	}
 
 	again := postTo(t, w.b, "/v1/approvals/"+second.ID+"/approval", ids.New().String(), "")
 
 	if got := decodeApproval(t, again); again.status != http.StatusOK || got.Status != "failed" {
-		t.Fatalf("aprobar la segunda = %d %s, se esperaba 200 failed", again.status, again.body)
+		t.Fatalf("approve the second = %d %s, want 200 failed", again.status, again.body)
 	}
 	if cash := balanceOf(t, w.a, w.cash); cash != 0 {
-		t.Fatalf("saldo de la caja = %d, se esperaba 0: la segunda reversa no debía asentarse", cash)
+		t.Fatalf("cash balance = %d, want 0: the second reversal must not be posted", cash)
 	}
 }
 
-// TestAReversalIsNotReversed: la reversa de una reversa se rechaza al pedirla (409 reversal_of_reversal):
-// aprobarla volvería a aplicar la original sin que el checker lo viera.
+// TestAReversalIsNotReversed: the reversal of a reversal is rejected when requested (409
+// reversal_of_reversal): approving it would apply the original again without the checker seeing it.
 func TestAReversalIsNotReversed(t *testing.T) {
 	w := newReversalWorld(t)
 	first := w.requested(t)
 	approved := decodeApproval(t, postTo(t, w.b, "/v1/approvals/"+first.ID+"/approval", ids.New().String(), ""))
 	var reversal gen.Transaction
 	if err := json.Unmarshal(approved.Result, &reversal); err != nil || approved.Status != "approved" {
-		t.Fatalf("aprobar la reversa = %+v (%v)", approved, err)
+		t.Fatalf("approve the reversal = %+v (%v)", approved, err)
 	}
 
 	again := postTo(t, w.a, "/v1/transactions/"+reversal.Id.String()+"/reversal", ids.New().String(), reversalBody)
 
-	expectProblem(t, "reversa de la reversa", again, http.StatusConflict, "reversal_of_reversal")
+	expectProblem(t, "reversal of the reversal", again, http.StatusConflict, "reversal_of_reversal")
 }
 
-// TestAnUnexpectedLedgerErrorIsNotARejection: un error del ledger que no es una regla de negocio (aquí, el
-// contexto cancelado) sube sin envolver en ErrCommandRejected: la solicitud no queda failed.
+// TestAnUnexpectedLedgerErrorIsNotARejection: a ledger error that is not a business rule (here, the canceled
+// context) goes up without being wrapped in ErrCommandRejected: the request does not end up failed.
 func TestAnUnexpectedLedgerErrorIsNotARejection(t *testing.T) {
 	exec := reverseOnApproval(ledger.New(calendar.New(), failingEvents{}))
-	payload, err := json.Marshal(reversalRequest{TransactionID: ids.New(), Reason: "prueba"})
+	payload, err := json.Marshal(reversalRequest{TransactionID: ids.New(), Reason: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,17 +136,17 @@ func TestAnUnexpectedLedgerErrorIsNotARejection(t *testing.T) {
 	cancel()
 
 	err = postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
-		_, err := exec(ctx, tx, payload, access.Principal{Subject: "operador-b", LegalEntityID: ids.New()})
+		_, err := exec(ctx, tx, payload, access.Principal{Subject: "operator-b", LegalEntityID: ids.New()})
 		return err
 	})
 
 	if err == nil || errors.Is(err, approvals.ErrCommandRejected) {
-		t.Fatalf("= %v, se esperaba un error que no fuera un rechazo", err)
+		t.Fatalf("= %v, want an error that is not a rejection", err)
 	}
 }
 
-// TestARequestForAReversalIsValidated: pedir la reversa de una transacción que no existe, o que es de otra
-// entidad, es 404, y sin motivo es 422; ninguna deja una solicitud.
+// TestARequestForAReversalIsValidated: requesting the reversal of a transaction that does not exist, or that
+// belongs to another entity, is 404, and without a reason it is 422; none leaves a request.
 func TestARequestForAReversalIsValidated(t *testing.T) {
 	w, other := newReversalWorld(t), newReversalWorld(t)
 
@@ -154,11 +154,11 @@ func TestARequestForAReversalIsValidated(t *testing.T) {
 	foreign := postTo(t, w.a, "/v1/transactions/"+other.posting+"/reversal", ids.New().String(), reversalBody)
 	noReason := w.requestReversal(t, `{"reason": "  "}`)
 
-	expectProblem(t, "transacción desconocida", unknown, http.StatusNotFound, "not_found")
-	expectProblem(t, "transacción de otra entidad", foreign, http.StatusNotFound, "not_found")
-	expectProblem(t, "sin motivo", noReason, http.StatusUnprocessableEntity, "invalid_posting")
+	expectProblem(t, "unknown transaction", unknown, http.StatusNotFound, "not_found")
+	expectProblem(t, "another entity's transaction", foreign, http.StatusNotFound, "not_found")
+	expectProblem(t, "no reason", noReason, http.StatusUnprocessableEntity, "invalid_posting")
 	var list struct{ Items []testApproval }
 	if status := getJSON(t, w.a, "/v1/approvals", &list); status != http.StatusOK || len(list.Items) != 0 {
-		t.Fatalf("solicitudes = %d %+v, se esperaba ninguna", status, list.Items)
+		t.Fatalf("requests = %d %+v, want none", status, list.Items)
 	}
 }

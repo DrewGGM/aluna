@@ -1,8 +1,8 @@
 //go:build integration || e2e
 
-// Package pgtest prepara la base de las pruebas de integración y E2E de un paquete. Cada paquete
-// recibe una base propia: en CI los paquetes corren en paralelo contra el mismo servidor y no deben
-// verse los datos ni las migraciones entre sí.
+// Package pgtest sets up the database for a package's integration and E2E tests. Each package gets its
+// own database: in CI packages run in parallel against the same server and must not see each other's
+// data or migrations.
 package pgtest
 
 import (
@@ -23,9 +23,9 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// Run es el cuerpo de TestMain: crea la base, deja en *pool un pool que se conecta como aluna_app
-// (así una migración sin su GRANT falla en las pruebas y no en producción), corre las pruebas y borra
-// la base. El servidor es ALUNA_TEST_DATABASE_URL (CI) o un PostgreSQL 16 de testcontainers.
+// Run is the body of TestMain: it creates the database, leaves in *pool a pool that connects as
+// aluna_app (so a migration missing its GRANT fails in the tests and not in production), runs the tests
+// and drops the database. The server is ALUNA_TEST_DATABASE_URL (CI) or a testcontainers PostgreSQL 16.
 //
 //	func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 func Run(m *testing.M, pool **pgxpool.Pool) int {
@@ -44,9 +44,9 @@ func Run(m *testing.M, pool **pgxpool.Pool) int {
 	return m.Run()
 }
 
-// Start crea una base propia ya migrada y devuelve su DSN, con el usuario dueño de las tablas (no
-// aluna_app: quien la use no ejercita los GRANT), y la función que la borra. Es para pruebas que
-// necesitan el DSN en vez de un pool.
+// Start creates a dedicated, already migrated database and returns its DSN, with the user that owns the
+// tables (not aluna_app: whoever uses it does not exercise the GRANTs), and the function that drops it.
+// It is for tests that need the DSN instead of a pool.
 func Start(ctx context.Context) (string, func(), error) {
 	dsn, cleanup, err := StartEmpty(ctx)
 	if err != nil {
@@ -59,9 +59,9 @@ func Start(ctx context.Context) (string, func(), error) {
 	return dsn, cleanup, nil
 }
 
-// StartEmpty es Start sin migrar, para cuando lo que se prueba es la migración misma. La función que
-// devuelve borra la base y detiene el contenedor aunque ctx ya esté cancelado, como pasa con
-// t.Context() en t.Cleanup.
+// StartEmpty is Start without migrating, for when the migration itself is under test. The function it
+// returns drops the database and stops the container even if ctx is already canceled, as happens with
+// t.Context() in t.Cleanup.
 func StartEmpty(ctx context.Context) (string, func(), error) {
 	serverDSN, stop, err := server(ctx)
 	if err != nil {
@@ -84,17 +84,17 @@ func server(ctx context.Context) (string, func(), error) {
 		tcpostgres.WithDatabase("aluna_test"), tcpostgres.WithUsername("aluna"), tcpostgres.WithPassword("aluna"),
 		tcpostgres.BasicWaitStrategies())
 	if err != nil {
-		return "", nil, fmt.Errorf("levantar PostgreSQL: %w", err)
+		return "", nil, fmt.Errorf("start PostgreSQL: %w", err)
 	}
 	stop := func() {
 		if err := container.Terminate(context.WithoutCancel(ctx)); err != nil {
-			fmt.Fprintln(os.Stderr, "pgtest: detener el contenedor (Ryuk lo recoge):", err)
+			fmt.Fprintln(os.Stderr, "pgtest: stop container (Ryuk will reap it):", err)
 		}
 	}
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
 		stop()
-		return "", nil, fmt.Errorf("dirección de PostgreSQL: %w", err)
+		return "", nil, fmt.Errorf("PostgreSQL address: %w", err)
 	}
 	return dsn, stop, nil
 }
@@ -103,7 +103,7 @@ type database struct {
 	name, serverDSN, dsn string
 }
 
-// createDatabase crea una base vacía con nombre aleatorio (solo [a-z2-7]: no admite inyección).
+// createDatabase creates an empty database with a random name (only [a-z2-7]: no injection possible).
 func createDatabase(ctx context.Context, serverDSN string) (*database, error) {
 	db := &database{name: "aluna_test_" + strings.ToLower(rand.Text()), serverDSN: serverDSN}
 	var err error
@@ -111,7 +111,7 @@ func createDatabase(ctx context.Context, serverDSN string) (*database, error) {
 		return nil, err
 	}
 	if err := db.exec(ctx, "CREATE DATABASE "+db.name); err != nil {
-		return nil, fmt.Errorf("crear la base %s: %w", db.name, err)
+		return nil, fmt.Errorf("create database %s: %w", db.name, err)
 	}
 	return db, nil
 }
@@ -124,9 +124,8 @@ func openAsApp(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	return postgres.Open(ctx, appDSN)
 }
 
-// AsOwner corre fn en una transacción como el dueño de las tablas (SET LOCAL ROLE NONE sobre el pool de
-// Run), para sembrar o envejecer lo que aluna_app no puede escribir: entidades, periodos, fechas de
-// creación. Un error detiene la prueba.
+// AsOwner runs fn in a transaction as the tables' owner (SET LOCAL ROLE NONE on Run's pool), to seed or
+// age what aluna_app cannot write: entities, periods, creation dates. An error stops the test.
 func AsOwner(t testing.TB, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) {
 	t.Helper()
 	err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
@@ -140,39 +139,40 @@ func AsOwner(t testing.TB, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) {
 	}
 }
 
-// AppDSN convierte el DSN del dueño en uno que se conecta con el rol aluna_app, como el proceso real.
+// AppDSN turns the owner's DSN into one that connects with the aluna_app role, like the real process.
 func AppDSN(dsn string) (string, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return "", errors.New("DSN de la base de prueba inválido")
+		return "", errors.New("invalid test database DSN")
 	}
 	query := u.Query()
 	query.Set("options", "-c role=aluna_app")
-	u.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20") // pgx no lee "+" como espacio
+	u.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20") // pgx does not read "+" as a space
 	return u.String(), nil
 }
 
-// drop borra la base. Un fallo se avisa: con un servidor compartido la base quedaría viva.
+// drop drops the database. A failure is reported: with a shared server the database would stay alive.
 func (db *database) drop(ctx context.Context) {
 	if err := db.exec(ctx, "DROP DATABASE IF EXISTS "+db.name+" WITH (FORCE)"); err != nil {
-		fmt.Fprintf(os.Stderr, "pgtest: borrar la base %s: %v\n", db.name, err)
+		fmt.Fprintf(os.Stderr, "pgtest: drop database %s: %v\n", db.name, err)
 	}
 }
 
 func (db *database) exec(ctx context.Context, sql string) error {
 	conn, err := pgx.Connect(ctx, db.serverDSN)
 	if err != nil {
-		return fmt.Errorf("conectar al servidor: %w", err)
+		return fmt.Errorf("connect to server: %w", err)
 	}
 	_, err = conn.Exec(ctx, sql)
 	return errors.Join(err, conn.Close(ctx))
 }
 
-// withDatabase cambia la base de un DSN postgres://. No incluye el DSN en el error: lleva la contraseña.
+// withDatabase changes the database of a postgres:// DSN. It leaves the DSN out of the error: it carries
+// the password.
 func withDatabase(serverDSN, name string) (string, error) {
 	u, err := url.Parse(serverDSN)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
-		return "", errors.New("el DSN del servidor de prueba debe ser una URL postgres://")
+		return "", errors.New("test server DSN must be a postgres:// URL")
 	}
 	u.Path = "/" + name
 	return u.String(), nil

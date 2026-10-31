@@ -15,13 +15,13 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-const reason = "error de digitación"
+const reason = "typing error"
 
-// reversalDay es la fecha de negocio de las reversas: dos días después de la original, para que una
-// reversa con la fecha valor equivocada se note.
+// reversalDay is the reversals' business date: two days after the original, so that a reversal with the
+// wrong value date stands out.
 var reversalDay = time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 2)
 
-// tryReverse revierte in en su propia transacción. No llama t.Fatal: sirve desde otras goroutines.
+// tryReverse reverses in in its own transaction. It does not call t.Fatal: it works from other goroutines.
 func tryReverse(t *testing.T, in ledger.ReverseInput) (ledger.Transaction, error) {
 	t.Helper()
 	var reversal ledger.Transaction
@@ -36,12 +36,12 @@ func tryReverse(t *testing.T, in ledger.ReverseInput) (ledger.Transaction, error
 func reverse(t *testing.T, original ids.ID) (ledger.Transaction, error) {
 	t.Helper()
 	return tryReverse(t, ledger.ReverseInput{
-		LegalEntityID: entity, TransactionID: original, Reason: reason, Actor: "operador", BusinessDate: reversalDay,
+		LegalEntityID: entity, TransactionID: original, Reason: reason, Actor: "operator", BusinessDate: reversalDay,
 	})
 }
 
-// TestReverseUndoesATransaction: la reversa invierte el signo de cada entry, apunta a la original y
-// deja los saldos como estaban; leída de la base es la misma que devolvió Reverse.
+// TestReverseUndoesATransaction: the reversal inverts the sign of each entry, points to the original and
+// leaves the balances as they were; read from the database it is the same one Reverse returned.
 func TestReverseUndoesATransaction(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	original, _ := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String()))
@@ -55,25 +55,25 @@ func TestReverseUndoesATransaction(t *testing.T) {
 	checkReversal(t, original, reversal,
 		[]ledger.EntryInput{{AccountID: cash.ID, Amount: money.New(-100, c)}, {AccountID: deposit.ID, Amount: money.New(100, c)}})
 	if pc, pd := postedOf(t, cash.ID), postedOf(t, deposit.ID); pc != 0 || pd != 0 {
-		t.Fatalf("saldos tras la reversa = %d y %d, se esperaban 0 y 0", pc, pd)
+		t.Fatalf("balances after the reversal = %d and %d, want 0 and 0", pc, pd)
 	}
-	for _, posted := range []ledger.Transaction{original, reversal} { // sin metadata y con metadata
+	for _, posted := range []ledger.Transaction{original, reversal} { // without metadata and with metadata
 		stored, err := svc().Transaction(t.Context(), testPool, entity, posted.ID)
 		if err != nil || !reflect.DeepEqual(stored, posted) {
-			t.Fatalf("leída de la base = %+v (%v), se esperaba la misma que se asentó %+v", stored, err, posted)
+			t.Fatalf("read from the database = %+v (%v), want the same one that was posted %+v", stored, err, posted)
 		}
 	}
 }
 
-// checkReversal verifica que reversal apunte a original, guarde el motivo, tenga los entries want y
-// lleve la fecha valor de la original y la de negocio de la reversa.
+// checkReversal checks that reversal points to original, stores the reason, has the entries want and
+// carries the original's value date and the reversal's business date.
 func checkReversal(t *testing.T, original, reversal ledger.Transaction, want []ledger.EntryInput) {
 	t.Helper()
 	if reversal.ReversesID != original.ID || reversal.Metadata["reason"] != reason || !slices.Equal(reversal.Entries, want) {
-		t.Errorf("la reversa = %+v, debe apuntar a %s, guardar el motivo y tener los entries %+v", reversal, original.ID, want)
+		t.Errorf("the reversal = %+v, it must point to %s, store the reason and have the entries %+v", reversal, original.ID, want)
 	}
 	if !reversal.ValueDate.Equal(original.ValueDate) || !reversal.BusinessDate.Equal(reversalDay) {
-		t.Errorf("fechas de la reversa = valor %v, negocio %v; se esperaban la fecha valor de la original %v y el negocio %v",
+		t.Errorf("reversal dates = value %v, business %v; want the original's value date %v and business %v",
 			reversal.ValueDate, reversal.BusinessDate, original.ValueDate, reversalDay)
 	}
 }
@@ -89,16 +89,16 @@ func TestATransactionIsReversedOnlyOnce(t *testing.T) {
 	again, err := reverse(t, original.ID)
 
 	if !errors.Is(err, ledger.ErrAlreadyReversed) || again.ID != first.ID {
-		t.Fatalf("segunda reversa = %s, %v; se esperaba ErrAlreadyReversed con la primera %s", again.ID, err, first.ID)
+		t.Fatalf("second reversal = %s, %v; want ErrAlreadyReversed with the first one %s", again.ID, err, first.ID)
 	}
 	if pc := postedOf(t, cash.ID); pc != 0 {
-		t.Fatalf("saldo de la caja = %d, se esperaba 0: la segunda reversa no mueve dinero", pc)
+		t.Fatalf("cash balance = %d, want 0: the second reversal moves no money", pc)
 	}
 }
 
-// TestConcurrentReversalsOfAsyncAccountsReverseOnce: sin saldos que bloquear (cuentas async), las
-// reversas concurrentes de una transacción chocan solo en la base; una pasa y las demás reciben
-// ErrAlreadyReversed, nunca un 23505.
+// TestConcurrentReversalsOfAsyncAccountsReverseOnce: with no balances to lock (async accounts), the
+// concurrent reversals of a transaction conflict only in the database; one goes through and the rest get
+// ErrAlreadyReversed, never a 23505.
 func TestConcurrentReversalsOfAsyncAccountsReverseOnce(t *testing.T) {
 	a, b := asyncAccount(t, ledger.KindAsset), asyncAccount(t, ledger.KindLiability)
 	original, _ := mustPostRef(t, transfer(t, a.ID, b.ID, ids.New().String()))
@@ -111,18 +111,18 @@ func TestConcurrentReversalsOfAsyncAccountsReverseOnce(t *testing.T) {
 		case err == nil:
 			reversed++
 		case !errors.Is(err, ledger.ErrAlreadyReversed):
-			t.Errorf("reversa concurrente con un error inesperado: %v", err)
+			t.Errorf("concurrent reversal with an unexpected error: %v", err)
 		}
 	}
 	if reversed != 1 {
-		t.Fatalf("%d reversas pasaron, se esperaba 1", reversed)
+		t.Fatalf("%d reversals went through, want 1", reversed)
 	}
 }
 
 func asyncAccount(t *testing.T, kind ledger.Kind) ledger.Account {
 	t.Helper()
 	a, err := tryCreateAccount(t, ledger.CreateAccountInput{
-		LegalEntityID: entity, Code: "cta-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: ledger.BalanceModeAsync,
+		LegalEntityID: entity, Code: "acct-" + ids.New().String(), Kind: kind, Currency: cop(t), Mode: ledger.BalanceModeAsync,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,8 +130,8 @@ func asyncAccount(t *testing.T, kind ledger.Kind) ledger.Account {
 	return a
 }
 
-// TestOnlyReversalsUseTheReversalSource: un posting cualquiera, también uno manual por la API, no puede
-// ocupar el lugar de la reversa de otra transacción ni marcarse como reversa por su cuenta.
+// TestOnlyReversalsUseTheReversalSource: an arbitrary posting, including a manual one through the API,
+// cannot take the place of another transaction's reversal or mark itself as a reversal on its own.
 func TestOnlyReversalsUseTheReversalSource(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	original, _ := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String()))
@@ -143,33 +143,33 @@ func TestOnlyReversalsUseTheReversalSource(t *testing.T) {
 	otherRef.Source, otherRef.ReversesID = "ledger.reversal", original.ID
 
 	for name, in := range map[string]ledger.PostInput{
-		"fuente de reversas": squatter, "ReversesID a mano": selfReversal, "reversa con otra referencia": otherRef,
+		"reversal source": squatter, "hand-set ReversesID": selfReversal, "reversal with another reference": otherRef,
 	} {
 		if _, _, err := postRef(t, in); !errors.Is(err, ledger.ErrInvalidPosting) {
-			t.Errorf("%s = %v, se esperaba ErrInvalidPosting", name, err)
+			t.Errorf("%s = %v, want ErrInvalidPosting", name, err)
 		}
 	}
 	if _, err := reverse(t, original.ID); err != nil {
-		t.Fatalf("la original debe poder revertirse: %v", err)
+		t.Fatalf("the original must be reversible: %v", err)
 	}
 }
 
-// TestReversingASpentDepositRespectsTheLimits: revertir un depósito cuyo dinero ya salió dejaría la
-// cuenta en negativo: ErrInsufficientFunds, como cualquier posting, y los saldos no cambian.
+// TestReversingASpentDepositRespectsTheLimits: reversing a deposit whose money already left would leave
+// the account negative: ErrInsufficientFunds, like any posting, and the balances do not change.
 func TestReversingASpentDepositRespectsTheLimits(t *testing.T) {
 	cash, deposit, clearing := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability), createAccount(t, ledger.KindLiability)
 	credited, _ := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String()))
 	mustPostRef(t, transfer(t, deposit.ID, clearing.ID, ids.New().String()))
 
 	if _, err := reverse(t, credited.ID); !errors.Is(err, ledger.ErrInsufficientFunds) {
-		t.Fatalf("revertir un depósito gastado = %v, se esperaba ErrInsufficientFunds", err)
+		t.Fatalf("reversing a spent deposit = %v, want ErrInsufficientFunds", err)
 	}
 	if pc, pd := postedOf(t, cash.ID), postedOf(t, deposit.ID); pc != 100 || pd != 0 {
-		t.Fatalf("saldos = %d y %d, se esperaban 100 y 0: la reversa rechazada no mueve dinero", pc, pd)
+		t.Fatalf("balances = %d and %d, want 100 and 0: the rejected reversal moves no money", pc, pd)
 	}
 }
 
-// TestAReversalCanBeReversed: revertir una reversa vuelve a aplicar la original.
+// TestAReversalCanBeReversed: reversing a reversal applies the original again.
 func TestAReversalCanBeReversed(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	original, _ := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String()))
@@ -179,7 +179,7 @@ func TestAReversalCanBeReversed(t *testing.T) {
 	}
 
 	if _, err := reverse(t, reversal.ID); err != nil || postedOf(t, cash.ID) != 100 {
-		t.Fatalf("revertir la reversa = %v, caja %d; se esperaba la caja en 100", err, postedOf(t, cash.ID))
+		t.Fatalf("reversing the reversal = %v, cash %d; want cash at 100", err, postedOf(t, cash.ID))
 	}
 }
 
@@ -190,25 +190,25 @@ func TestReverseRejects(t *testing.T) {
 		in   ledger.ReverseInput
 		want error
 	}{
-		"transacción inexistente": {ledger.ReverseInput{LegalEntityID: entity, TransactionID: ids.New(), Reason: "r", Actor: "a", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
-		"de otra entidad":         {ledger.ReverseInput{LegalEntityID: ids.New(), TransactionID: original.ID, Reason: "r", Actor: "a", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
-		"sin motivo":              {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Actor: "a", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
-		"sin actor":               {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: "r", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
+		"nonexistent transaction": {ledger.ReverseInput{LegalEntityID: entity, TransactionID: ids.New(), Reason: "r", Actor: "a", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
+		"of another entity":       {ledger.ReverseInput{LegalEntityID: ids.New(), TransactionID: original.ID, Reason: "r", Actor: "a", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
+		"no reason":               {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Actor: "a", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
+		"no actor":                {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: "r", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			if _, err := tryReverse(t, tc.in); !errors.Is(err, tc.want) {
-				t.Fatalf("= %v, se esperaba %v", err, tc.want)
+				t.Fatalf("= %v, want %v", err, tc.want)
 			}
 		})
 	}
 	if pc := postedOf(t, cash.ID); pc != 100 {
-		t.Fatalf("saldo de la caja = %d, se esperaba 100: ninguna reversa rechazada mueve dinero", pc)
+		t.Fatalf("cash balance = %d, want 100: no rejected reversal moves money", pc)
 	}
 }
 
-// TestAReversalRefTakenBySQLFailsClosed: si alguien ocupa la referencia de la reversa por SQL directo
-// (la base no lo impide), Reverse no da la transacción por revertida.
+// TestAReversalRefTakenBySQLFailsClosed: if someone takes the reversal's reference through direct SQL
+// (the database does not prevent it), Reverse does not consider the transaction reversed.
 func TestAReversalRefTakenBySQLFailsClosed(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	original, _ := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String()))
@@ -229,6 +229,6 @@ func TestAReversalRefTakenBySQLFailsClosed(t *testing.T) {
 	}
 
 	if _, err := reverse(t, original.ID); err == nil || errors.Is(err, ledger.ErrAlreadyReversed) {
-		t.Fatalf("= %v; con la referencia ocupada por otra transacción, Reverse debe fallar sin darla por revertida", err)
+		t.Fatalf("= %v; with the reference taken by another transaction, Reverse must fail without considering it reversed", err)
 	}
 }

@@ -10,18 +10,18 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger/internal/domain"
 )
 
-// ErrAlreadyReversed indica una transacción que ya tiene su reversa: Reverse devuelve la reversa
-// existente junto con este error.
-var ErrAlreadyReversed = errors.New("la transacción ya se revirtió")
+// ErrAlreadyReversed means a transaction that already has its reversal: Reverse returns the existing
+// reversal together with this error.
+var ErrAlreadyReversed = errors.New("the transaction was already reversed")
 
-// Cabecera de las reversas.
+// Reversal header.
 const (
 	reversalSource  = "ledger.reversal"
 	reversalCode    = "reversal"
 	reversalChannel = "ledger"
 )
 
-// ReverseInput pide revertir la transacción TransactionID de la entidad LegalEntityID.
+// ReverseInput asks to reverse transaction TransactionID of entity LegalEntityID.
 type ReverseInput struct {
 	LegalEntityID ids.ID
 	TransactionID ids.ID
@@ -29,19 +29,19 @@ type ReverseInput struct {
 	BusinessDate  time.Time
 }
 
-// ReversalStore es la persistencia de Reverse: la de Post y la lectura de la transacción revertida.
+// ReversalStore is the persistence of Reverse: Post's plus reading the reversed transaction.
 type ReversalStore interface {
 	PostingStore
 	TransactionOf(ctx context.Context, entity, id ids.ID) (Transaction, error)
 }
 
-// Reverse asienta la reversa de una transacción (FR-3): sus entries con el signo contrario, con la
-// fecha valor de la original y la fecha de negocio de in. Pasa por Post, así que respeta los límites:
-// revertir un depósito ya gastado es ErrInsufficientFunds. Si la transacción ya tiene reversa, la
-// devuelve con ErrAlreadyReversed y no escribe nada; si la asienta, emite transaction.reversed.
+// Reverse posts the reversal of a transaction (FR-3): its entries with the opposite sign, with the
+// original's value date and in's business date. It goes through Post, so it honors the limits: reversing
+// an already spent deposit is ErrInsufficientFunds. If the transaction already has a reversal, it returns
+// it with ErrAlreadyReversed and writes nothing; if it posts it, it emits transaction.reversed.
 func Reverse(ctx context.Context, store ReversalStore, guard PeriodGuard, events Events, in ReverseInput) (Transaction, error) {
 	if in.Reason == "" {
-		return Transaction{}, fmt.Errorf("%w: falta el motivo de la reversa", ErrInvalidPosting)
+		return Transaction{}, fmt.Errorf("%w: missing reversal reason", ErrInvalidPosting)
 	}
 	original, err := store.TransactionOf(ctx, in.LegalEntityID, in.TransactionID)
 	if err != nil {
@@ -51,8 +51,8 @@ func Reverse(ctx context.Context, store ReversalStore, guard PeriodGuard, events
 	if err != nil {
 		return Transaction{}, err
 	}
-	// La referencia externa es la transacción revertida: la unicidad de (source, external_ref) deja a lo
-	// sumo una reversa por transacción, también entre dos reversas concurrentes.
+	// The external reference is the reversed transaction: the uniqueness of (source, external_ref) allows
+	// at most one reversal per transaction, also between two concurrent reversals.
 	reversal, err := post(ctx, store, guard, PostInput{
 		LegalEntityID: in.LegalEntityID, Code: reversalCode, ValueDate: original.ValueDate, BusinessDate: in.BusinessDate,
 		Source: reversalSource, ExternalRef: original.ID.String(), Actor: in.Actor, Channel: reversalChannel,
@@ -68,8 +68,8 @@ func Reverse(ctx context.Context, store ReversalStore, guard PeriodGuard, events
 	if !errors.Is(err, ErrDuplicateExternalRef) {
 		return reversal, err
 	}
-	if reversal.ReversesID != original.ID { // la base no impide que SQL directo ocupe la referencia: se falla cerrado
-		return Transaction{}, fmt.Errorf("la referencia de la reversa de %s la tiene %s, que no la revierte", original.ID, reversal.ID)
+	if reversal.ReversesID != original.ID { // the database does not stop direct SQL from taking the reference: fail closed
+		return Transaction{}, fmt.Errorf("the reversal reference of %s is held by %s, which does not reverse it", original.ID, reversal.ID)
 	}
-	return reversal, fmt.Errorf("%w: %s ya la revierte %s", ErrAlreadyReversed, original.ID, reversal.ID)
+	return reversal, fmt.Errorf("%w: %s is already reversed by %s", ErrAlreadyReversed, original.ID, reversal.ID)
 }

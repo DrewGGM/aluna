@@ -21,18 +21,19 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 )
 
-// TokenVerifier verifica un token de acceso y devuelve su principal.
+// TokenVerifier verifies an access token and returns its principal.
 type TokenVerifier interface {
 	Verify(ctx context.Context, raw string) (access.Principal, error)
 }
 
-// Límites de la verificación (ADR-0014, TH-1). Las claves del emisor valen jwksTTL desde que se pidieron:
-// una clave que el IAM retira deja de valer en ese tiempo, y un IAM caído no tumba la API antes. Pasada la
-// mitad se renuevan en segundo plano, así un tropiezo del IAM en la renovación no deja la API sin claves.
-// Un token que las claves vigentes no verifican las vuelve a pedir, a lo sumo una vez cada jwksMinRefetch
-// (una lluvia de tokens falsos no se vuelve una lluvia de descargas), o cada jwksRetry si no hay claves
-// vigentes. issuerTimeout acota cada ida al emisor y maxJWKSBytes la respuesta del JWKS; maxTokenLifetime
-// es la vida máxima de un token, de iat a exp, e iatSkew lo que iat puede adelantarse al reloj del core.
+// Verification limits (ADR-0014, TH-1). The issuer's keys are valid for jwksTTL from when they were fetched:
+// a key the IAM retires stops being valid within that time, and an IAM that is down does not bring the API
+// down sooner. Past half of it they are renewed in the background, so an IAM hiccup during the renewal does
+// not leave the API without keys. A token that the current keys do not verify fetches them again, at most
+// once every jwksMinRefetch (a flood of fake tokens does not become a flood of downloads), or every jwksRetry
+// if there are no current keys. issuerTimeout bounds each trip to the issuer and maxJWKSBytes the JWKS
+// response; maxTokenLifetime is the maximum lifetime of a token, from iat to exp, and iatSkew how far iat may
+// run ahead of the core's clock.
 const (
 	jwksTTL          = 10 * time.Minute
 	jwksMinRefetch   = 30 * time.Second
@@ -44,23 +45,23 @@ const (
 )
 
 var (
-	errInvalidToken = errors.New("token inválido")
-	errNoJWKS       = errors.New("el emisor OIDC no publica jwks_uri")
-	errBadJWKS      = errors.New("el emisor OIDC no entregó sus claves")
-	errNoPrincipal  = errors.New("request sin principal autenticado")
+	errInvalidToken = errors.New("invalid token")
+	errNoJWKS       = errors.New("the OIDC issuer does not publish jwks_uri")
+	errBadJWKS      = errors.New("the OIDC issuer did not deliver its keys")
+	errNoPrincipal  = errors.New("request without an authenticated principal")
 )
 
-var unauthenticated = Problem{Status: http.StatusUnauthorized, Code: "unauthenticated", Title: "Falta un token de acceso válido"}
+var unauthenticated = Problem{Status: http.StatusUnauthorized, Code: "unauthenticated", Title: "A valid access token is missing"}
 
-// OIDCVerifier verifica tokens JWT de un emisor OIDC (ADR-0014): firma con las claves del emisor, iss, aud,
-// exp, nbf y la vida del token, y los claims sub y legal_entity_id.
+// OIDCVerifier verifies JWTs from an OIDC issuer (ADR-0014): the signature with the issuer's keys, iss, aud,
+// exp, nbf and the token lifetime, and the sub and legal_entity_id claims.
 type OIDCVerifier struct {
 	verifier *oidc.IDTokenVerifier
 	now      func() time.Time
 }
 
-// NewOIDCVerifier descubre el emisor issuer y verifica sus tokens para la audiencia audience. Las fallas al
-// pedir las claves del emisor van a log: un token rechazado por eso no es culpa de quien llama.
+// NewOIDCVerifier discovers the issuer issuer and verifies its tokens for the audience audience. Failures
+// fetching the issuer's keys go to the log: a token rejected because of them is not the caller's fault.
 func NewOIDCVerifier(ctx context.Context, issuer, audience string, log *slog.Logger) (*OIDCVerifier, error) {
 	return newOIDCVerifier(ctx, issuer, audience, time.Now, log)
 }
@@ -69,13 +70,13 @@ func newOIDCVerifier(ctx context.Context, issuer, audience string, now func() ti
 	client := &http.Client{Timeout: issuerTimeout}
 	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, client), issuer)
 	if err != nil {
-		return nil, fmt.Errorf("descubrir el emisor OIDC %s: %w", issuer, err)
+		return nil, fmt.Errorf("discover OIDC issuer %s: %w", issuer, err)
 	}
 	var meta struct {
 		JWKSURL string `json:"jwks_uri"`
 	}
 	if err := provider.Claims(&meta); err != nil {
-		return nil, fmt.Errorf("metadatos del emisor OIDC %s: %w", issuer, err)
+		return nil, fmt.Errorf("OIDC issuer metadata %s: %w", issuer, err)
 	}
 	if meta.JWKSURL == "" {
 		return nil, fmt.Errorf("%w: %s", errNoJWKS, issuer)
@@ -85,18 +86,19 @@ func newOIDCVerifier(ctx context.Context, issuer, audience string, now func() ti
 	return &OIDCVerifier{verifier: oidc.NewVerifier(issuer, keys, config), now: now}, nil
 }
 
-// Verify verifica raw y devuelve el principal de sus claims.
+// Verify verifies raw and returns the principal of its claims.
 func (v *OIDCVerifier) Verify(ctx context.Context, raw string) (access.Principal, error) {
 	token, err := v.verifier.Verify(ctx, raw)
 	if err != nil {
 		return access.Principal{}, fmt.Errorf("%w: %w", errInvalidToken, err)
 	}
-	// sin iat, IssuedAt es la fecha cero y la vida no cabe; un iat futuro estiraría la vida desde ahora
+	// without iat, IssuedAt is the zero time and the lifetime does not fit; a future iat would stretch the
+	// lifetime from now
 	if token.Expiry.Sub(token.IssuedAt) > maxTokenLifetime || token.IssuedAt.After(v.now().Add(iatSkew)) {
-		return access.Principal{}, fmt.Errorf("%w: iat ausente o futuro, o vida de más de %s", errInvalidToken, maxTokenLifetime)
+		return access.Principal{}, fmt.Errorf("%w: missing or future iat, or lifetime over %s", errInvalidToken, maxTokenLifetime)
 	}
 	if token.Subject == "" {
-		return access.Principal{}, fmt.Errorf("%w: sin sub", errInvalidToken)
+		return access.Principal{}, fmt.Errorf("%w: no sub", errInvalidToken)
 	}
 	var claims struct {
 		LegalEntityID string   `json:"legal_entity_id"`
@@ -121,25 +123,25 @@ func (v *OIDCVerifier) Verify(ctx context.Context, raw string) (access.Principal
 	return p, nil
 }
 
-// issuerKeys son las claves públicas de firma del emisor (ver jwksTTL).
+// issuerKeys are the issuer's public signing keys (see jwksTTL).
 type issuerKeys struct {
 	url    string
 	client *http.Client
 	now    func() time.Time
 	log    *slog.Logger
 
-	// fetching ordena las descargas; mu guarda las claves y se toma solo para leerlas o cambiarlas, así una
-	// descarga en curso no frena los tokens que las claves guardadas ya verifican.
+	// fetching serializes the downloads; mu guards the keys and is held only to read or change them, so a
+	// download in progress does not hold up the tokens the stored keys already verify.
 	fetching sync.Mutex
-	tried    time.Time // cuándo terminó el último intento de pedirlas, aunque fallara; con fetching tomado
+	tried    time.Time // when the last attempt to fetch them ended, even if it failed; with fetching held
 
 	mu      sync.Mutex
 	keys    *oidc.StaticKeySet
-	fetched time.Time // cuándo se pidieron las claves guardadas
+	fetched time.Time // when the stored keys were fetched
 }
 
-// VerifySignature verifica la firma de jwt con las claves vigentes y, si ninguna sirve, con las que el
-// emisor publique ahora.
+// VerifySignature verifies the signature of jwt with the current keys and, if none works, with those the
+// issuer publishes now.
 func (k *issuerKeys) VerifySignature(ctx context.Context, jwt string) ([]byte, error) {
 	keys, stale := k.current()
 	if payload, err := keys.VerifySignature(ctx, jwt); err == nil {
@@ -153,8 +155,8 @@ func (k *issuerKeys) VerifySignature(ctx context.Context, jwt string) ([]byte, e
 	return keys.VerifySignature(ctx, jwt)
 }
 
-// renewInBackground renueva las claves sin hacer esperar al request, si ya toca y no hay otra descarga. El
-// request toma fetching y la goroutine lo suelta al terminar: así no se lanzan dos.
+// renewInBackground renews the keys without making the request wait, if it is due and there is no other
+// download. The request takes fetching and the goroutine releases it when done: so two are never launched.
 func (k *issuerKeys) renewInBackground(ctx context.Context) {
 	if !k.fetching.TryLock() {
 		return
@@ -169,8 +171,8 @@ func (k *issuerKeys) renewInBackground(ctx context.Context) {
 	}()
 }
 
-// refresh vuelve a pedir las claves si ya toca; si no, las vigentes son las que otro request pudo acabar de
-// traer.
+// refresh fetches the keys again if it is due; if not, the current ones are those another request may have
+// just brought.
 func (k *issuerKeys) refresh(ctx context.Context) {
 	k.fetching.Lock()
 	defer k.fetching.Unlock()
@@ -179,8 +181,8 @@ func (k *issuerKeys) refresh(ctx context.Context) {
 	}
 }
 
-// due dice si pasó jwksMinRefetch desde el último intento, o jwksRetry si no hay claves vigentes. Se llama
-// con fetching tomado.
+// due reports whether jwksMinRefetch has passed since the last attempt, or jwksRetry if there are no current
+// keys. It is called with fetching held.
 func (k *issuerKeys) due() bool {
 	wait := jwksMinRefetch
 	if keys, _ := k.current(); len(keys.PublicKeys) == 0 {
@@ -189,16 +191,16 @@ func (k *issuerKeys) due() bool {
 	return k.now().Sub(k.tried) >= wait
 }
 
-// fetch pide las claves y, si llegan, las guarda; si no, la falla queda en log y siguen las vigentes. La
-// descarga no se corta si el cliente se va: la acota issuerTimeout. El intento cuenta desde que termina:
-// los requests que esperaban en fetching no repiten, uno tras otro, una descarga que se acaba de colgar. Se
-// llama con fetching tomado.
+// fetch fetches the keys and, if they arrive, stores them; if not, the failure is logged and the current ones
+// stay. The download is not cut if the client leaves: issuerTimeout bounds it. The attempt counts from when
+// it ends: the requests that were waiting on fetching do not repeat, one after another, a download that just
+// hung. It is called with fetching held.
 func (k *issuerKeys) fetch(ctx context.Context) {
 	now := k.now()
 	keys, err := fetchKeys(context.WithoutCancel(ctx), k.client, k.url)
 	k.tried = k.now()
 	if err != nil {
-		k.log.LogAttrs(ctx, slog.LevelWarn, "pedir las claves del emisor OIDC",
+		k.log.LogAttrs(ctx, slog.LevelWarn, "fetch OIDC issuer keys",
 			slog.String("jwks_uri", k.url), slog.String("error", err.Error()))
 		return
 	}
@@ -207,8 +209,8 @@ func (k *issuerKeys) fetch(ctx context.Context) {
 	k.mu.Unlock()
 }
 
-// current son las claves vigentes, o ninguna si ya pasaron jwksTTL desde que se pidieron; stale dice que
-// pasó la mitad y toca renovarlas.
+// current returns the current keys, or none if jwksTTL has passed since they were fetched; stale says half of
+// it has passed and they are due for renewal.
 func (k *issuerKeys) current() (keys *oidc.StaticKeySet, stale bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -219,19 +221,20 @@ func (k *issuerKeys) current() (keys *oidc.StaticKeySet, stale bool) {
 	return k.keys, age >= jwksTTL/2
 }
 
-// fetchKeys pide el JWKS del emisor y se queda con las claves públicas RSA y EC que no son de cifrado. Una
-// clave que no se puede leer (otro tipo u otra curva) se salta, como en go-oidc: no tumba las demás.
+// fetchKeys fetches the issuer's JWKS and keeps the RSA and EC public keys that are not for encryption. A
+// key that cannot be read (another type or another curve) is skipped, as in go-oidc: it does not break the
+// rest.
 func fetchKeys(ctx context.Context, client *http.Client, url string) (*oidc.StaticKeySet, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("claves del emisor OIDC: %w", err)
+		return nil, fmt.Errorf("OIDC issuer keys: %w", err)
 	}
-	req.Header.Set("Cache-Control", "no-cache") // tras una rotación, un proxy no debe dar el JWKS viejo
+	req.Header.Set("Cache-Control", "no-cache") // after a rotation, a proxy must not serve the old JWKS
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("claves del emisor OIDC: %w", err)
+		return nil, fmt.Errorf("OIDC issuer keys: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck // cerrarlo no cambia el resultado
+	defer resp.Body.Close() //nolint:errcheck // closing it does not change the result
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: status %d", errBadJWKS, resp.StatusCode)
 	}
@@ -239,10 +242,10 @@ func fetchKeys(ctx context.Context, client *http.Client, url string) (*oidc.Stat
 		Keys []json.RawMessage `json:"keys"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJWKSBytes)).Decode(&set); err != nil {
-		return nil, fmt.Errorf("claves del emisor OIDC: %w", err)
+		return nil, fmt.Errorf("OIDC issuer keys: %w", err)
 	}
-	if set.Keys == nil { // un 200 que no es un JWKS (un proxy, un IAM a medio arrancar) no borra las vigentes
-		return nil, fmt.Errorf("%w: respuesta sin keys", errBadJWKS)
+	if set.Keys == nil { // a 200 that is not a JWKS (a proxy, a half-started IAM) does not wipe the current ones
+		return nil, fmt.Errorf("%w: response without keys", errBadJWKS)
 	}
 	keys := &oidc.StaticKeySet{}
 	for _, raw := range set.Keys {
@@ -258,9 +261,9 @@ func fetchKeys(ctx context.Context, client *http.Client, url string) (*oidc.Stat
 	return keys, nil
 }
 
-// Authenticate exige en cada request, salvo los probes del orquestador, un token Bearer que verifier acepte,
-// y pone su principal en el contexto (FR-41: la entidad legal sale de ahí, nunca de un header). Sin token o
-// con uno inválido responde 401 problem+json.
+// Authenticate requires on every request, except the orchestrator probes, a Bearer token that verifier
+// accepts, and puts its principal in the context (FR-41: the legal entity comes from there, never from a
+// header). Without a token or with an invalid one it answers 401 problem+json.
 func Authenticate(verifier TokenVerifier) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -281,13 +284,13 @@ func Authenticate(verifier TokenVerifier) func(http.Handler) http.Handler {
 	}
 }
 
-// bearer es el token de una cabecera Authorization "Bearer <token>" (el esquema no distingue mayúsculas).
+// bearer is the token of an Authorization header "Bearer <token>" (the scheme is case-insensitive).
 func bearer(header string) (string, bool) {
 	scheme, token, ok := strings.Cut(header, " ")
 	return token, ok && strings.EqualFold(scheme, "Bearer") && token != ""
 }
 
-// principal es el principal del token del request; sin él, el handler no corre (falla cerrado).
+// principal is the principal of the request's token; without it, the handler does not run (fail closed).
 func principal(ctx context.Context) (access.Principal, error) {
 	p, ok := access.PrincipalFrom(ctx)
 	if !ok {

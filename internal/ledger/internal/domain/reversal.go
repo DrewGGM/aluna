@@ -2,11 +2,11 @@ package domain
 
 import "fmt"
 
-// ReversalRuleVersion es la versión de la regla de ReversalEntries: cambia si cambia la regla.
+// ReversalRuleVersion is the version of the ReversalEntries rule: it changes if the rule changes.
 const ReversalRuleVersion = "reversal.v1"
 
-// ReversalEntries son los entries que deshacen entries (FR-3): las mismas cuentas, en el mismo orden,
-// con el signo contrario. Lo asentado no se toca; se corrige asentando esto.
+// ReversalEntries are the entries that undo entries (FR-3): the same accounts, in the same order, with
+// the opposite sign. What was posted is not touched; it is corrected by posting this.
 func ReversalEntries(entries []EntryInput) ([]EntryInput, error) {
 	reversed := make([]EntryInput, len(entries))
 	for i, e := range entries {

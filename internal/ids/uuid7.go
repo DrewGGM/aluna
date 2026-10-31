@@ -1,5 +1,5 @@
-// Package ids genera y parsea identificadores UUIDv7 (RFC 9562 §5.7). Son ordenables por tiempo, así
-// que los índices B-tree de PostgreSQL crecen por el final en vez de fragmentarse.
+// Package ids generates and parses UUIDv7 identifiers (RFC 9562 §5.7). They sort by time, so
+// PostgreSQL's B-tree indexes grow at the end instead of fragmenting.
 package ids
 
 import (
@@ -12,25 +12,25 @@ import (
 	"time"
 )
 
-// ErrInvalid indica un texto que no es un UUID en formato canónico.
-var ErrInvalid = errors.New("uuid inválido")
+// ErrInvalid means text that is not a UUID in canonical form.
+var ErrInvalid = errors.New("invalid uuid")
 
-// ID es un UUID de 16 bytes.
+// ID is a 16-byte UUID.
 type ID [16]byte
 
 const (
-	maxCounter   = 0xFFF // rand_a tiene 12 bits
-	counterSeeds = 0x800 // el contador arranca en la mitad baja para dejar espacio a incrementos
+	maxCounter   = 0xFFF // rand_a has 12 bits
+	counterSeeds = 0x800 // the counter starts in the lower half to leave room for increments
 )
 
 var process = &generator{now: time.Now}
 
-// New genera un UUIDv7. Los IDs que genera un mismo proceso son estrictamente crecientes.
+// New generates a UUIDv7. The IDs a single process generates are strictly increasing.
 func New() ID { return process.next() }
 
-// generator aplica el método 1 de RFC 9562 §6.2: los 12 bits rand_a son un contador que arranca en
-// un valor aleatorio en cada milisegundo nuevo. Si el contador se agota o el reloj retrocede, avanza
-// el milisegundo lógico en vez de repetir o retroceder.
+// generator applies method 1 of RFC 9562 §6.2: the 12 rand_a bits are a counter that starts at a random
+// value on each new millisecond. If the counter runs out or the clock goes back, it advances the logical
+// millisecond instead of repeating or going back.
 type generator struct {
 	mu      sync.Mutex
 	now     func() time.Time
@@ -40,7 +40,7 @@ type generator struct {
 
 func (g *generator) next() ID {
 	var random [10]byte
-	rand.Read(random[:]) // nunca falla desde Go 1.24: si el SO no da entropía, el proceso aborta
+	rand.Read(random[:]) // never fails since Go 1.24: if the OS provides no entropy, the process aborts
 
 	g.mu.Lock()
 	ms := g.now().UnixMilli()
@@ -57,14 +57,14 @@ func (g *generator) next() ID {
 	g.mu.Unlock()
 
 	var id ID
-	binary.BigEndian.PutUint64(id[:8], uint64(ms)<<16)  //nolint:gosec // ms es un instante Unix positivo
-	binary.BigEndian.PutUint16(id[6:8], 0x7000|counter) // versión 7 + contador de 12 bits
+	binary.BigEndian.PutUint64(id[:8], uint64(ms)<<16)  //nolint:gosec // ms is a positive Unix instant
+	binary.BigEndian.PutUint16(id[6:8], 0x7000|counter) // version 7 + 12-bit counter
 	copy(id[8:], random[2:])
-	id[8] = id[8]&0x3F | 0x80 // variante RFC 9562
+	id[8] = id[8]&0x3F | 0x80 // RFC 9562 variant
 	return id
 }
 
-// String devuelve el formato canónico 8-4-4-4-12 en minúsculas.
+// String returns the canonical lowercase 8-4-4-4-12 form.
 func (id ID) String() string {
 	var buf [36]byte
 	hex.Encode(buf[0:8], id[0:4])
@@ -76,7 +76,7 @@ func (id ID) String() string {
 	return string(buf[:])
 }
 
-// Parse lee un UUID en formato canónico, en minúsculas o mayúsculas.
+// Parse reads a UUID in canonical form, lowercase or uppercase.
 func Parse(s string) (ID, error) {
 	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
 		return ID{}, fmt.Errorf("%w: %q", ErrInvalid, s)
@@ -89,10 +89,10 @@ func Parse(s string) (ID, error) {
 	return id, nil
 }
 
-// MarshalText implementa encoding.TextMarshaler (JSON y logs usan el formato canónico).
+// MarshalText implements encoding.TextMarshaler (JSON and logs use the canonical form).
 func (id ID) MarshalText() ([]byte, error) { return []byte(id.String()), nil }
 
-// UnmarshalText implementa encoding.TextUnmarshaler.
+// UnmarshalText implements encoding.TextUnmarshaler.
 func (id *ID) UnmarshalText(text []byte) error {
 	parsed, err := Parse(string(text))
 	if err != nil {

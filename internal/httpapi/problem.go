@@ -19,8 +19,8 @@ import (
 	"github.com/DrewGGM/aluna/internal/party"
 )
 
-// Problem es un error RFC 9457. Code es estable y para máquinas; Title y Detail son para personas y
-// nunca llevan detalles internos. TraceID une la respuesta con la traza y los logs del request.
+// Problem is an RFC 9457 error. Code is stable and meant for machines; Title and Detail are meant for people
+// and never carry internal details. TraceID ties the response to the trace and logs of the request.
 type Problem struct {
 	Type     string `json:"type"`
 	Title    string `json:"title"`
@@ -31,16 +31,16 @@ type Problem struct {
 	TraceID  string `json:"trace_id,omitempty"`
 }
 
-// WriteProblem responde p como application/problem+json, completado para la ruta pedida.
+// WriteProblem answers p as application/problem+json, completed for the requested path.
 func WriteProblem(w http.ResponseWriter, r *http.Request, p Problem) {
 	noteRejection(r.Context(), p.Code)
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(p.Status)
-	json.NewEncoder(w).Encode(p.complete(r.Context(), r.URL.Path)) //nolint:errcheck,gosec // si el cliente cortó, no hay a quién responder; el log de acceso ya tiene el status
+	json.NewEncoder(w).Encode(p.complete(r.Context(), r.URL.Path)) //nolint:errcheck,gosec // if the client hung up, there is no one to answer; the access log already has the status
 }
 
-// complete llena lo que falta: un Type vacío es about:blank, un Instance vacío es path y TraceID sale
-// del span de ctx, si hay.
+// complete fills in what is missing: an empty Type is about:blank, an empty Instance is path and TraceID
+// comes from the span in ctx, if any.
 func (p Problem) complete(ctx context.Context, path string) Problem {
 	if p.Type == "" {
 		p.Type = "about:blank"
@@ -54,14 +54,14 @@ func (p Problem) complete(ctx context.Context, path string) Problem {
 	return p
 }
 
-// requestError responde a un request que el código generado no pudo leer: un cuerpo que superó
-// maxBodyBytes (sin Content-Length lo corta withBodyLimit) es 413; una Idempotency-Key ausente o vacía
-// en un comando que mueve dinero (el código generado da RequiredHeaderError o InvalidParamFormatError),
-// 400 idempotency_key_required; el resto, 400 invalid_request.
+// requestError answers a request the generated code could not read: a body over maxBodyBytes (without
+// Content-Length, withBodyLimit cuts it) is 413; a missing or empty Idempotency-Key on a command that moves
+// money (the generated code gives RequiredHeaderError or InvalidParamFormatError) is 400
+// idempotency_key_required; anything else is 400 invalid_request.
 func requestError(w http.ResponseWriter, r *http.Request, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		WriteProblem(w, r, Problem{Title: "Cuerpo demasiado grande", Code: "body_too_large", Status: http.StatusRequestEntityTooLarge})
+		WriteProblem(w, r, Problem{Title: "Body too large", Code: "body_too_large", Status: http.StatusRequestEntityTooLarge})
 		return
 	}
 	var missing *gen.RequiredHeaderError
@@ -69,32 +69,32 @@ func requestError(w http.ResponseWriter, r *http.Request, err error) {
 	if (errors.As(err, &missing) && missing.ParamName == "Idempotency-Key") ||
 		(errors.As(err, &empty) && empty.ParamName == "Idempotency-Key") {
 		WriteProblem(w, r, Problem{
-			Title: "Falta Idempotency-Key", Code: "idempotency_key_required", Status: http.StatusBadRequest,
-			Detail: "Un comando que mueve dinero exige la cabecera Idempotency-Key.",
+			Title: "Missing Idempotency-Key", Code: "idempotency_key_required", Status: http.StatusBadRequest,
+			Detail: "A command that moves money requires the Idempotency-Key header.",
 		})
 		return
 	}
 	WriteProblem(w, r, Problem{
-		Title: "Request inválido", Code: "invalid_request", Status: http.StatusBadRequest,
-		Detail: "El cuerpo o los parámetros no cumplen el contrato.",
+		Title: "Invalid request", Code: "invalid_request", Status: http.StatusBadRequest,
+		Detail: "The body or the parameters do not match the contract.",
 	})
 }
 
-// responseError responde al error de un handler: el de un dominio conocido con su problem; cualquier
-// otro es un 500 que se registra con su detalle (que nunca sale en la respuesta).
+// responseError answers a handler error: one from a known domain with its problem; any other is a 500 that
+// is logged with its detail (which never goes out in the response).
 func responseError(log *slog.Logger) func(http.ResponseWriter, *http.Request, error) {
 	return func(w http.ResponseWriter, r *http.Request, err error) {
 		if p, ok := problemFor(err); ok {
 			WriteProblem(w, r, p)
 			return
 		}
-		log.LogAttrs(r.Context(), slog.LevelError, "error del handler",
+		log.LogAttrs(r.Context(), slog.LevelError, "handler error",
 			slog.String("error", err.Error()), slog.String("request_id", requestIDFrom(r.Context())))
-		WriteProblem(w, r, Problem{Title: "Error interno", Code: "internal_error", Status: http.StatusInternalServerError})
+		WriteProblem(w, r, Problem{Title: "Internal error", Code: "internal_error", Status: http.StatusInternalServerError})
 	}
 }
 
-var notFound = Problem{Status: http.StatusNotFound, Code: "not_found", Title: "Recurso no encontrado"}
+var notFound = Problem{Status: http.StatusNotFound, Code: "not_found", Title: "Resource not found"}
 
 func unprocessable(code, title string) Problem {
 	return Problem{Status: http.StatusUnprocessableEntity, Code: code, Title: title}
@@ -104,47 +104,47 @@ func conflict(code, title string) Problem {
 	return Problem{Status: http.StatusConflict, Code: code, Title: title}
 }
 
-// problems traduce los errores de dominio a la API, agrupados por módulo. Se recorre en orden porque un
-// error puede envolver dos sentinelas; gana el primero de la lista. Detail nunca lleva el texto
-// interno del error.
+// problems maps domain errors to the API, grouped by module. It is walked in order because an error can
+// wrap two sentinels; the first one in the list wins. Detail never carries the internal text of the
+// error.
 var problems = []struct {
 	err error
 	p   Problem
 }{
 	// httpapi
 	{errInvalidIdempotencyKey, Problem{
-		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Idempotency-Key inválida",
-		Detail: fmt.Sprintf("La clave debe ser texto UTF-8 de hasta %d caracteres.", maxIdempotencyKey),
+		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Invalid Idempotency-Key",
+		Detail: fmt.Sprintf("The key must be UTF-8 text of up to %d characters.", maxIdempotencyKey),
 	}},
-	{errReversalOfReversal, conflict("reversal_of_reversal", "La transacción ya es una reversa")},
+	{errReversalOfReversal, conflict("reversal_of_reversal", "The transaction is already a reversal")},
 	{errInvalidApprovalStatus, Problem{
-		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Estado de solicitud desconocido",
-		Detail: "status es pending, approved, rejected, failed o expired.",
+		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Unknown request status",
+		Detail: "status is pending, approved, rejected, failed or expired.",
 	}},
 	// idempotency
-	{idempotency.ErrKeyReused, unprocessable("idempotency_key_reused", "La Idempotency-Key ya se usó con otro payload")},
-	{idempotency.ErrInProgress, conflict("request_in_progress", "Hay una solicitud con la misma Idempotency-Key en curso")},
+	{idempotency.ErrKeyReused, unprocessable("idempotency_key_reused", "The Idempotency-Key was already used with another payload")},
+	{idempotency.ErrInProgress, conflict("request_in_progress", "A request with the same Idempotency-Key is in progress")},
 	// money
-	{money.ErrUnknownCurrency, unprocessable("unknown_currency", "Moneda no soportada")},
-	{money.ErrOverflow, unprocessable("amount_overflow", "El importe no cabe en el rango permitido")},
+	{money.ErrUnknownCurrency, unprocessable("unknown_currency", "Unsupported currency")},
+	{money.ErrOverflow, unprocessable("amount_overflow", "The amount does not fit in the allowed range")},
 	// ledger
-	{ledger.ErrDuplicateExternalRef, conflict("duplicate_external_ref", "La referencia externa ya se asentó")},
-	{ledger.ErrUnbalanced, unprocessable("unbalanced_transaction", "La transacción no suma cero en cada moneda")},
-	{ledger.ErrTooFewEntries, unprocessable("too_few_entries", "Una transacción necesita al menos dos entries")},
-	{ledger.ErrZeroAmount, unprocessable("zero_amount", "Un entry no puede tener importe cero")},
-	{ledger.ErrInsufficientFunds, unprocessable("insufficient_funds", "Fondos insuficientes")},
-	{ledger.ErrCurrencyMismatch, unprocessable("currency_mismatch", "El importe no está en la moneda de su cuenta o de su hold")},
-	{ledger.ErrInvalidAccount, unprocessable("invalid_account", "Datos de cuenta inválidos")},
-	{ledger.ErrInvalidPosting, unprocessable("invalid_posting", "Cabecera del posting incompleta")},
+	{ledger.ErrDuplicateExternalRef, conflict("duplicate_external_ref", "The external reference was already posted")},
+	{ledger.ErrUnbalanced, unprocessable("unbalanced_transaction", "The transaction does not sum to zero in each currency")},
+	{ledger.ErrTooFewEntries, unprocessable("too_few_entries", "A transaction needs at least two entries")},
+	{ledger.ErrZeroAmount, unprocessable("zero_amount", "An entry cannot have a zero amount")},
+	{ledger.ErrInsufficientFunds, unprocessable("insufficient_funds", "Insufficient funds")},
+	{ledger.ErrCurrencyMismatch, unprocessable("currency_mismatch", "The amount is not in the currency of its account or its hold")},
+	{ledger.ErrInvalidAccount, unprocessable("invalid_account", "Invalid account data")},
+	{ledger.ErrInvalidPosting, unprocessable("invalid_posting", "Incomplete posting header")},
 	{ledger.ErrAccountNotFound, notFound},
 	{ledger.ErrHoldNotFound, notFound},
-	{ledger.ErrHoldNotPending, conflict("hold_not_pending", "El hold ya no está pendiente")},
-	{ledger.ErrHoldExpired, conflict("hold_expired", "El hold venció")},
-	{ledger.ErrAmountExceedsHold, unprocessable("amount_exceeds_hold", "El importe supera lo retenido")},
-	{ledger.ErrInvalidHold, unprocessable("invalid_hold", "Datos del hold inválidos")},
+	{ledger.ErrHoldNotPending, conflict("hold_not_pending", "The hold is no longer pending")},
+	{ledger.ErrHoldExpired, conflict("hold_expired", "The hold expired")},
+	{ledger.ErrAmountExceedsHold, unprocessable("amount_exceeds_hold", "The amount exceeds the held amount")},
+	{ledger.ErrInvalidHold, unprocessable("invalid_hold", "Invalid hold data")},
 	{ledger.ErrTransactionNotFound, notFound},
-	{ledger.ErrPeriodClosed, conflict("period_closed", "El periodo contable de la fecha de negocio está cerrado")},
-	{ledger.ErrAlreadyReversed, conflict("already_reversed", "La transacción ya tiene reversa")},
+	{ledger.ErrPeriodClosed, conflict("period_closed", "The accounting period of the business date is closed")},
+	{ledger.ErrAlreadyReversed, conflict("already_reversed", "The transaction is already reversed")},
 	// access
 	{access.ErrForbidden, forbidden},
 	// party
@@ -153,12 +153,12 @@ var problems = []struct {
 	{party.ErrNotFound, notFound},
 	// approvals
 	{approvals.ErrSelfApproval, Problem{
-		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "Quien pide no puede decidir su propia solicitud",
+		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "The requester cannot decide their own request",
 	}},
 	{approvals.ErrNotFound, notFound},
-	{approvals.ErrNotPending, conflict("approval_not_pending", "La solicitud ya se decidió")},
-	{approvals.ErrExpired, conflict("approval_expired", "La solicitud venció")},
-	{approvals.ErrNoReason, unprocessable("rejection_reason_required", "Un rechazo necesita un motivo")},
+	{approvals.ErrNotPending, conflict("approval_not_pending", "The request was already decided")},
+	{approvals.ErrExpired, conflict("approval_expired", "The request expired")},
+	{approvals.ErrNoReason, unprocessable("rejection_reason_required", "A rejection needs a reason")},
 }
 
 func problemFor(err error) (Problem, bool) {

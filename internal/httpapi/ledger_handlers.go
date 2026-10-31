@@ -21,22 +21,22 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// Origen de los postings manuales que entran por POST /v1/transactions. Quedan guardados para siempre
-// en ledger.transactions: rule_version "manual.v1" dice que los entries vinieron armados por quien
-// llamó y no de una regla de posting versionada. Quién llamó queda en el registro de auditoría.
+// Origin of the manual postings that come in through POST /v1/transactions. They are stored forever in
+// ledger.transactions: rule_version "manual.v1" says the entries came built by the caller and not from a
+// versioned posting rule. Who called is kept in the audit record.
 const (
 	manualActor       = "api"
 	manualChannel     = "api"
 	manualRuleVersion = "manual.v1"
 )
 
-// Tipo de solicitud de maker-checker de una reversa (FR-3, FR-39) y el permiso que exige aprobarla.
+// Maker-checker request kind of a reversal (FR-3, FR-39) and the permission required to approve it.
 const (
 	reversalKind       = "ledger.reversal"
 	reversalPermission = "ledger.transactions.reverse"
 )
 
-// LedgerHandlers implementa las operaciones del ledger del contrato (api/openapi.yaml).
+// LedgerHandlers implements the contract's ledger operations (api/openapi.yaml).
 type LedgerHandlers struct {
 	ledger    *ledger.Service
 	approvals *approvals.Service
@@ -44,15 +44,15 @@ type LedgerHandlers struct {
 	reader    postgres.Querier
 }
 
-// NewLedgerHandlers crea los handlers del ledger y registra en a el tipo de solicitud de la reversa, que
-// pasa por maker-checker. keys guarda las respuestas de los comandos con Idempotency-Key; reader sirve las
-// lecturas fuera de transacción. La entidad legal de cada request es la de su token (FR-41).
+// NewLedgerHandlers creates the ledger handlers and registers in a the reversal request kind, which goes
+// through maker-checker. keys stores the responses of the commands with Idempotency-Key; reader serves the
+// reads outside a transaction. The legal entity of each request is that of its token (FR-41).
 func NewLedgerHandlers(l *ledger.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *LedgerHandlers {
 	a.RegisterKind(reversalKind, reversalPermission, reverseOnApproval(l))
 	return &LedgerHandlers{ledger: l, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
-// CreateLedgerAccount crea una cuenta de la entidad del token.
+// CreateLedgerAccount creates an account of the token's entity.
 func (h *LedgerHandlers) CreateLedgerAccount(ctx context.Context, req gen.CreateLedgerAccountRequestObject) (gen.CreateLedgerAccountResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -60,7 +60,7 @@ func (h *LedgerHandlers) CreateLedgerAccount(ctx context.Context, req gen.Create
 	}
 	cur, err := money.CurrencyOf(req.Body.Currency)
 	if err != nil {
-		return nil, fmt.Errorf("moneda de la cuenta: %w", err)
+		return nil, fmt.Errorf("account currency: %w", err)
 	}
 	in := ledger.CreateAccountInput{
 		LegalEntityID: p.LegalEntityID, Code: req.Body.Code, Kind: ledger.Kind(req.Body.Kind), Currency: cur,
@@ -82,7 +82,7 @@ func (h *LedgerHandlers) CreateLedgerAccount(ctx context.Context, req gen.Create
 	return resp, nil
 }
 
-// GetLedgerAccount lee una cuenta de la entidad del token.
+// GetLedgerAccount reads an account of the token's entity.
 func (h *LedgerHandlers) GetLedgerAccount(ctx context.Context, req gen.GetLedgerAccountRequestObject) (gen.GetLedgerAccountResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -95,8 +95,8 @@ func (h *LedgerHandlers) GetLedgerAccount(ctx context.Context, req gen.GetLedger
 	return gen.GetLedgerAccount200JSONResponse(toAccountJSON(account)), nil
 }
 
-// GetLedgerAccountBalance lee el saldo de una cuenta de la entidad del token: el materializado o,
-// con un corte de fecha valor o de conocimiento, el bitemporal.
+// GetLedgerAccountBalance reads the balance of an account of the token's entity: the materialized one or,
+// with a value date or knowledge cutoff, the bitemporal one.
 func (h *LedgerHandlers) GetLedgerAccountBalance(ctx context.Context, req gen.GetLedgerAccountBalanceRequestObject) (gen.GetLedgerAccountBalanceResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -124,9 +124,9 @@ func (h *LedgerHandlers) GetLedgerAccountBalance(ctx context.Context, req gen.Ge
 	}, nil
 }
 
-// balanceCut lee los cortes del saldo bitemporal. Un parámetro vacío (?as_known_at=) llega como fecha
-// cero y cuenta como ausente: con los dos ausentes se pide el materializado. El corte de conocimiento
-// queda en UTC y en microsegundos, la precisión de posted_at.
+// balanceCut reads the cutoffs of the bitemporal balance. An empty parameter (?as_known_at=) arrives as the
+// zero time and counts as absent: with both absent the materialized balance is requested. The knowledge
+// cutoff is kept in UTC and in microseconds, the precision of posted_at.
 func balanceCut(p gen.GetLedgerAccountBalanceParams) (ledger.BalanceAsOf, bool) {
 	var at ledger.BalanceAsOf
 	if p.AsOfValueDate != nil && !p.AsOfValueDate.IsZero() {
@@ -139,8 +139,8 @@ func balanceCut(p gen.GetLedgerAccountBalanceParams) (ledger.BalanceAsOf, bool) 
 	return at, at.ValueDate != nil || at.KnownAt != nil
 }
 
-// balanceAsOf es el saldo bitemporal (FR-8): devuelve los cortes con que se calculó y no lleva
-// pendientes, que solo existen en el presente.
+// balanceAsOf is the bitemporal balance (FR-8): it returns the cutoffs it was computed with and carries no
+// pending amounts, which only exist in the present.
 func (h *LedgerHandlers) balanceAsOf(ctx context.Context, account ledger.Account, at ledger.BalanceAsOf) (gen.GetLedgerAccountBalanceResponseObject, error) {
 	posted, err := h.ledger.PostedAsOf(ctx, h.reader, account.ID, at)
 	if err != nil {
@@ -159,8 +159,7 @@ func (h *LedgerHandlers) balanceAsOf(ctx context.Context, account ledger.Account
 	return b, nil
 }
 
-// PostTransaction asienta una transacción manual de la entidad del token, una sola vez por
-// Idempotency-Key.
+// PostTransaction posts a manual transaction of the token's entity, once per Idempotency-Key.
 func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransactionRequestObject) (gen.PostTransactionResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -195,7 +194,7 @@ func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransa
 	return resp, nil
 }
 
-// GetTransaction lee una transacción de la entidad del token.
+// GetTransaction reads a transaction of the token's entity.
 func (h *LedgerHandlers) GetTransaction(ctx context.Context, req gen.GetTransactionRequestObject) (gen.GetTransactionResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -208,20 +207,20 @@ func (h *LedgerHandlers) GetTransaction(ctx context.Context, req gen.GetTransact
 	return gen.GetTransaction200JSONResponse(toTransactionJSON(tx)), nil
 }
 
-// reversalRequest es el payload de una solicitud de reversa: lo que el checker aprueba y lo que se asienta.
+// reversalRequest is the payload of a reversal request: what the checker approves and what gets posted.
 type reversalRequest struct {
 	TransactionID ids.ID              `json:"transaction_id"`
 	Reason        string              `json:"reason"`
 	BusinessDate  *openapi_types.Date `json:"business_date,omitempty"`
 }
 
-// errReversalOfReversal es pedir la reversa de una transacción que ya es una reversa: aprobarla volvería a
-// aplicar la original sin que el checker lo viera en el payload.
-var errReversalOfReversal = errors.New("la transacción es una reversa: no se revierte")
+// errReversalOfReversal means requesting the reversal of a transaction that is already a reversal:
+// approving it would apply the original again without the checker seeing it in the payload.
+var errReversalOfReversal = errors.New("the transaction is a reversal: it cannot be reversed")
 
-// RequestReversal pide la reversa de una transacción de la entidad del token: queda como solicitud
-// ledger.reversal hasta que otra persona la apruebe (FR-39), una sola vez por Idempotency-Key. La de una
-// reversa se rechaza: para volver a aplicar la original se asienta de nuevo.
+// RequestReversal requests the reversal of a transaction of the token's entity: it stays as a
+// ledger.reversal request until another person approves it (FR-39), once per Idempotency-Key. That of a
+// reversal is rejected: to apply the original again, it is posted anew.
 func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestReversalRequestObject) (gen.RequestReversalResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -229,9 +228,9 @@ func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestRev
 	}
 	id := ids.ID(req.Id)
 	op := resourceOperation("transactions", id, "reversal", http.StatusAccepted)
-	noteTargets(ctx, op.targets) // antes de validar el cuerpo: su rechazo también nombra la transacción
+	noteTargets(ctx, op.targets) // before validating the body: its rejection also names the transaction
 	if strings.TrimSpace(req.Body.Reason) == "" {
-		return nil, fmt.Errorf("%w: falta el motivo de la reversa", ledger.ErrInvalidPosting)
+		return nil, fmt.Errorf("%w: missing reversal reason", ledger.ErrInvalidPosting)
 	}
 	payload := reversalRequest{TransactionID: id, Reason: req.Body.Reason, BusinessDate: req.Body.BusinessDate}
 	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
@@ -240,7 +239,7 @@ func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestRev
 			return nil, err
 		}
 		if original.ReversesID != (ids.ID{}) {
-			return nil, fmt.Errorf("%w: %s revierte a %s", errReversalOfReversal, id, original.ReversesID)
+			return nil, fmt.Errorf("%w: %s reverses %s", errReversalOfReversal, id, original.ReversesID)
 		}
 		requested, err := h.approvals.Request(ctx, tx, reversalKind, payload, p)
 		if err != nil {
@@ -254,15 +253,15 @@ func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestRev
 	return resp, nil
 }
 
-// reverseOnApproval es el Executor de reversalKind: asienta la reversa del payload en la entidad de quien
-// aprueba, que queda como su actor. Un rechazo del ledger (un 4xx de su tabla de problems: ya revertida,
-// periodo cerrado, fondos insuficientes) va envuelto en approvals.ErrCommandRejected y deja la solicitud
-// failed; cualquier otro error sube.
+// reverseOnApproval is the Executor of reversalKind: it posts the payload's reversal in the entity of the
+// approver, who becomes its actor. A ledger rejection (a 4xx from its problems table: already reversed,
+// period closed, insufficient funds) is wrapped in approvals.ErrCommandRejected and leaves the request
+// failed; any other error goes up.
 func reverseOnApproval(l *ledger.Service) approvals.Executor {
 	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
 		var r reversalRequest
 		if err := json.Unmarshal(payload, &r); err != nil {
-			return nil, fmt.Errorf("payload de la reversa: %w", err)
+			return nil, fmt.Errorf("reversal payload: %w", err)
 		}
 		in := ledger.ReverseInput{LegalEntityID: checker.LegalEntityID, TransactionID: r.TransactionID, Reason: r.Reason, Actor: checker.Subject}
 		if r.BusinessDate != nil {
@@ -277,7 +276,7 @@ func reverseOnApproval(l *ledger.Service) approvals.Executor {
 		}
 		result, err := json.Marshal(toTransactionJSON(reversal))
 		if err != nil {
-			return nil, fmt.Errorf("resultado de la reversa: %w", err)
+			return nil, fmt.Errorf("reversal result: %w", err)
 		}
 		return result, nil
 	}
@@ -303,20 +302,20 @@ func toTransactionJSON(tx ledger.Transaction) gen.Transaction {
 
 func dateOf(t time.Time) openapi_types.Date { return openapi_types.Date{Time: t} }
 
-// requireBusinessDate rechaza la fecha cero (0001-01-01): el ledger la tomaría como ausente y pondría la
-// de la entidad, y por la API la fecha de negocio la manda quien llama.
+// requireBusinessDate rejects the zero date (0001-01-01): the ledger would take it as absent and use the
+// entity's, and through the API the caller sends the business date.
 func requireBusinessDate(d openapi_types.Date) error {
 	if d.IsZero() {
-		return fmt.Errorf("%w: falta la fecha de negocio", ledger.ErrInvalidPosting)
+		return fmt.Errorf("%w: missing business date", ledger.ErrInvalidPosting)
 	}
 	return nil
 }
 
-// amountOf convierte un importe del contrato; una moneda desconocida es ErrUnknownCurrency.
+// amountOf converts a contract amount; an unknown currency is ErrUnknownCurrency.
 func amountOf(m gen.Money) (money.Amount, error) {
 	cur, err := money.CurrencyOf(m.Currency)
 	if err != nil {
-		return money.Amount{}, fmt.Errorf("moneda: %w", err)
+		return money.Amount{}, fmt.Errorf("currency: %w", err)
 	}
 	return money.New(m.Amount, cur), nil
 }
@@ -325,8 +324,7 @@ func moneyJSON(a money.Amount) gen.Money {
 	return gen.Money{Amount: a.Units(), Currency: a.Currency().Code()}
 }
 
-// PlaceHold retiene fondos de una cuenta de la entidad del token, una sola vez por
-// Idempotency-Key.
+// PlaceHold holds funds of an account of the token's entity, once per Idempotency-Key.
 func (h *LedgerHandlers) PlaceHold(ctx context.Context, req gen.PlaceHoldRequestObject) (gen.PlaceHoldResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -353,15 +351,14 @@ func (h *LedgerHandlers) PlaceHold(ctx context.Context, req gen.PlaceHoldRequest
 	return resp, nil
 }
 
-// CaptureHold asienta parte o todo un hold de la entidad del token, una sola vez por
-// Idempotency-Key.
+// CaptureHold posts part or all of a hold of the token's entity, once per Idempotency-Key.
 func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldRequestObject) (gen.CaptureHoldResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
 		return nil, err
 	}
 	op := resourceOperation("holds", ids.ID(req.Id), "capture", http.StatusOK)
-	noteTargets(ctx, op.targets) // antes de validar el cuerpo: su rechazo también nombra el hold
+	noteTargets(ctx, op.targets) // before validating the body: its rejection also names the hold
 	if err := requireBusinessDate(req.Body.BusinessDate); err != nil {
 		return nil, err
 	}
@@ -386,7 +383,7 @@ func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldReq
 	return resp, nil
 }
 
-// ReleaseHold libera un hold de la entidad del token, una sola vez por Idempotency-Key.
+// ReleaseHold releases a hold of the token's entity, once per Idempotency-Key.
 func (h *LedgerHandlers) ReleaseHold(ctx context.Context, req gen.ReleaseHoldRequestObject) (gen.ReleaseHoldResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {

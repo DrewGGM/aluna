@@ -8,9 +8,9 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 )
 
-// Event es un evento de dominio (architecture §8): Type es aluna.<modulo>.<agregado>.<evento>.v<N>,
-// Subject el recurso del que habla y Data su contenido, que se guarda como JSON. Lleva identificadores,
-// montos y estados, nunca datos personales (Constitución VII). Un ID cero se completa al emitir.
+// Event is a domain event (architecture §8): Type is aluna.<module>.<aggregate>.<event>.v<N>, Subject
+// the resource it is about and Data its content, which is stored as JSON. It carries identifiers,
+// amounts and statuses, never personal data (Constitution VII). A zero ID is filled in on emit.
 type Event struct {
 	ID                           ids.ID
 	Type, Subject                string
@@ -19,8 +19,8 @@ type Event struct {
 	Data                         any
 }
 
-// StoredEvent es un evento como lo recibe un consumidor: Data es el JSON guardado y Time el momento en que
-// se emitió.
+// StoredEvent is an event as a consumer receives it: Data is the stored JSON and Time the moment it was
+// emitted.
 type StoredEvent struct {
 	ID                           ids.ID
 	Type, Subject                string
@@ -30,7 +30,7 @@ type StoredEvent struct {
 	Time                         time.Time
 }
 
-// cloudEvent es el envelope CloudEvents 1.0 en JSON, con las extensiones de Aluna.
+// cloudEvent is the CloudEvents 1.0 JSON envelope, with Aluna's extensions.
 type cloudEvent struct {
 	SpecVersion     string          `json:"specversion"`
 	ID              ids.ID          `json:"id"`
@@ -45,8 +45,8 @@ type cloudEvent struct {
 	SchemaVersion   int             `json:"schemaversion"`
 }
 
-// MarshalJSON escribe el evento como CloudEvent 1.0. source es aluna/<modulo>, el segundo segmento del
-// tipo.
+// MarshalJSON writes the event as a CloudEvent 1.0. source is aluna/<module>, the second segment of the
+// type.
 func (e StoredEvent) MarshalJSON() ([]byte, error) {
 	module, _, _ := strings.Cut(strings.TrimPrefix(e.Type, "aluna."), ".")
 	return json.Marshal(cloudEvent{

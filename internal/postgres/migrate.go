@@ -15,21 +15,22 @@ import (
 	"github.com/DrewGGM/aluna/migrations"
 )
 
-// ErrUnknownDirection indica una dirección de migración distinta de up, down o status.
-var ErrUnknownDirection = errors.New("dirección de migración desconocida")
+// ErrUnknownDirection means a migration direction other than up, down or status.
+var ErrUnknownDirection = errors.New("unknown migration direction")
 
-// migrationLockTimeout acota la espera por un lock: un ALTER TABLE que espera un ACCESS EXCLUSIVE deja
-// en cola todo el tráfico de la aplicación detrás de él, y es mejor que la migración falle y se repita.
+// migrationLockTimeout bounds the wait for a lock: an ALTER TABLE waiting for an ACCESS EXCLUSIVE queues
+// all the application's traffic behind it, and it is better for the migration to fail and be retried.
 const migrationLockTimeout = "10s"
 
-// OpenForMigrations abre la conexión database/sql que usa goose. No lleva el statement_timeout de la
-// aplicación (crear un índice sobre una tabla grande puede tardar más de 5 s), pero sí un lock_timeout.
+// OpenForMigrations opens the database/sql connection goose uses. It does not carry the application's
+// statement_timeout (creating an index on a large table can take more than 5 s), but it does carry a
+// lock_timeout.
 func OpenForMigrations(dsn string) (*sql.DB, error) {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("configuración de la base: %w", err)
+		return nil, fmt.Errorf("database config: %w", err)
 	}
-	cfg.RuntimeParams["statement_timeout"] = "0" // también por encima de un default del servidor o del rol
+	cfg.RuntimeParams["statement_timeout"] = "0" // also overrides a server or role default
 	cfg.RuntimeParams["lock_timeout"] = migrationLockTimeout
 	cfg.RuntimeParams["application_name"] = "aluna-migrate"
 	return stdlib.OpenDB(*cfg), nil
@@ -41,27 +42,27 @@ var directions = map[string]func(context.Context, *goose.Provider, io.Writer) er
 	"status": migrateStatus,
 }
 
-// ValidDirection dice si direction es up, down o status.
+// ValidDirection reports whether direction is up, down or status.
 func ValidDirection(direction string) bool {
 	_, ok := directions[direction]
 	return ok
 }
 
-// Migrate aplica las migraciones embebidas: up aplica todas las pendientes, down revierte la última
-// y status lista el estado de cada una. Escribe una línea por migración en out.
+// Migrate applies the embedded migrations: up applies all pending ones, down reverts the last one and
+// status lists the state of each. It writes one line per migration to out.
 func Migrate(ctx context.Context, db *sql.DB, direction string, out io.Writer) error {
 	run, ok := directions[direction]
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrUnknownDirection, direction)
 	}
-	// Dos réplicas que arrancan con aluna migrate up a la vez se turnan con un advisory lock.
+	// Two replicas starting with aluna migrate up at the same time take turns with an advisory lock.
 	locker, err := lock.NewPostgresSessionLocker()
 	if err != nil {
-		return fmt.Errorf("preparar el lock de migraciones: %w", err)
+		return fmt.Errorf("prepare migration lock: %w", err)
 	}
 	provider, err := goose.NewProvider(goose.DialectPostgres, db, migrations.FS, goose.WithSessionLocker(locker))
 	if err != nil {
-		return fmt.Errorf("preparar las migraciones: %w", err)
+		return fmt.Errorf("prepare migrations: %w", err)
 	}
 	if err := run(ctx, provider, out); err != nil {
 		return fmt.Errorf("migrate %s: %w", direction, err)
@@ -72,7 +73,7 @@ func Migrate(ctx context.Context, db *sql.DB, direction string, out io.Writer) e
 func migrateUp(ctx context.Context, p *goose.Provider, out io.Writer) error {
 	results, err := p.Up(ctx)
 	var partial *goose.PartialError
-	if errors.As(err, &partial) { // goose no devuelve resultados si falla a mitad: los aplicados vienen aquí
+	if errors.As(err, &partial) { // goose returns no results if it fails midway: the applied ones come here
 		results = partial.Applied
 	}
 	printResults(out, results...)
@@ -81,7 +82,7 @@ func migrateUp(ctx context.Context, p *goose.Provider, out io.Writer) error {
 
 func migrateDown(ctx context.Context, p *goose.Provider, out io.Writer) error {
 	result, err := p.Down(ctx)
-	if result != nil { // goose devuelve nil junto con el error si no llegó a revertir nada
+	if result != nil { // goose returns nil along with the error if it reverted nothing
 		printResults(out, result)
 	}
 	return err
@@ -90,13 +91,13 @@ func migrateDown(ctx context.Context, p *goose.Provider, out io.Writer) error {
 func migrateStatus(ctx context.Context, p *goose.Provider, out io.Writer) error {
 	statuses, err := p.Status(ctx)
 	for _, s := range statuses {
-		fmt.Fprintf(out, "%-8s %s\n", s.State, s.Source.Path) //nolint:errcheck // salida informativa de la CLI
+		fmt.Fprintf(out, "%-8s %s\n", s.State, s.Source.Path) //nolint:errcheck // informational CLI output
 	}
 	return err
 }
 
 func printResults(out io.Writer, results ...*goose.MigrationResult) {
 	for _, r := range results {
-		fmt.Fprintf(out, "%-8s %s (%v)\n", r.Direction, r.Source.Path, r.Duration) //nolint:errcheck // salida informativa de la CLI
+		fmt.Fprintf(out, "%-8s %s (%v)\n", r.Direction, r.Source.Path, r.Duration) //nolint:errcheck // informational CLI output
 	}
 }

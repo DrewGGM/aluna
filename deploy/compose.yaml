@@ -1,5 +1,5 @@
-# PostgreSQL y un IAM OIDC (Keycloak) locales para desarrollo. Las credenciales son solo de desarrollo.
-# Keycloak arranca con el perfil iam: docker compose -f deploy/compose.yaml --profile iam up -d keycloak
+# Local PostgreSQL and OIDC IAM (Keycloak) for development. The credentials are for development only.
+# Keycloak starts with the iam profile: docker compose -f deploy/compose.yaml --profile iam up -d keycloak
 services:
   postgres:
     image: postgres:16
@@ -8,16 +8,16 @@ services:
       POSTGRES_PASSWORD: aluna
       POSTGRES_DB: aluna
     ports:
-      - "127.0.0.1:${ALUNA_PG_PORT:-5432}:5432" # solo local: la contraseña es de desarrollo
+      - "127.0.0.1:${ALUNA_PG_PORT:-5432}:5432" # local only: the password is for development
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aluna -d aluna"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # Emisor de los tokens de la api (ADR-0014): ALUNA_OIDC_ISSUER=http://localhost:8180/realms/aluna y
-  # ALUNA_OIDC_AUDIENCE=aluna-api. El realm de prueba trae el usuario operador/operador con una entidad
-  # legal y el rol operator.
+  # Issuer of the api tokens (ADR-0014): ALUNA_OIDC_ISSUER=http://localhost:8180/realms/aluna and
+  # ALUNA_OIDC_AUDIENCE=aluna-api. The test realm ships the user operator/operator with a legal entity
+  # and the operator role.
   keycloak:
     image: quay.io/keycloak/keycloak:26.0.7
     profiles: [iam]
@@ -26,6 +26,6 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
     ports:
-      - "127.0.0.1:8180:8180" # solo local: el admin es de desarrollo
+      - "127.0.0.1:8180:8180" # local only: the admin is for development
     volumes:
       - ./keycloak/realm-aluna.json:/opt/keycloak/data/import/realm-aluna.json:ro

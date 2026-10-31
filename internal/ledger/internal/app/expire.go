@@ -10,22 +10,23 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger/internal/domain"
 )
 
-// ExpiryStore es la persistencia de la expiración de holds.
+// ExpiryStore is the persistence of hold expiry.
 type ExpiryStore interface {
 	Accounts(ctx context.Context, accountIDs []ids.ID) (map[ids.ID]domain.Account, error)
 	LockBalances(ctx context.Context, accountIDs []ids.ID) (map[ids.ID]LockedBalance, error)
 	AddToBalance(ctx context.Context, accountID ids.ID, d BalanceDelta) error
 	CloseHold(ctx context.Context, h Hold, captureTxID ids.ID) error
-	// LockDueHolds bloquea (FOR UPDATE SKIP LOCKED) hasta limit holds pending vencidos a now (expires_at
-	// anterior a now, como en Hold.Expire), de cualquier entidad: los que otra transacción tiene
-	// bloqueados, como un capture en curso, se saltan.
+	// LockDueHolds locks (FOR UPDATE SKIP LOCKED) up to limit pending holds due at now (expires_at before
+	// now, as in Hold.Expire), from any entity: those another transaction has locked, such as a capture
+	// in progress, are skipped.
 	LockDueHolds(ctx context.Context, now time.Time, limit int) ([]Hold, error)
 }
 
-// ExpireDueHolds expira un lote de hasta limit holds vencidos a now (FR-6): los marca expired y quita su
-// importe del pendiente de la cuenta origen. Bloquea los holds antes que los saldos (ADR-0004), como el
-// capture; un hold que el capture ya bloqueó no entra al lote, y si lo bloquea primero la expiración,
-// el capture lo ve expirado. Emite hold.expired de cada uno y devuelve cuántos expiró.
+// ExpireDueHolds expires a batch of up to limit holds due at now (FR-6): it marks them expired and
+// removes their amount from the source account's pending balance. It locks the holds before the balances
+// (ADR-0004), like the capture; a hold the capture already locked does not enter the batch, and if the
+// expiry locks it first, the capture sees it expired. It emits hold.expired for each one and returns how
+// many it expired.
 func ExpireDueHolds(ctx context.Context, store ExpiryStore, events Events, now time.Time, limit int) (int, error) {
 	due, err := store.LockDueHolds(ctx, now, limit)
 	if err != nil || len(due) == 0 {
@@ -48,7 +49,7 @@ func ExpireDueHolds(ctx context.Context, store ExpiryStore, events Events, now t
 		if err := store.CloseHold(ctx, expired, ids.ID{}); err != nil {
 			return 0, err
 		}
-		// el lote mezcla entidades: la del hold es la de su cuenta
+		// the batch mixes entities: the hold's entity is its account's
 		if err := events.Emit(ctx, holdEvent(typeHoldExpired, accounts[h.AccountID()].LegalEntityID, expired, ids.ID{})); err != nil {
 			return 0, err
 		}
@@ -63,8 +64,8 @@ func ExpireDueHolds(ctx context.Context, store ExpiryStore, events Events, now t
 	return len(due), nil
 }
 
-// releasePending resta de cada cuenta lo que liberan sus holds, con una escritura por cuenta. Bloquea
-// antes los saldos en orden de cuenta, como un posting, para tomar los locks en el mismo orden.
+// releasePending subtracts from each account what its holds release, with one write per account. It
+// first locks the balances in account order, like a posting, to take the locks in the same order.
 func releasePending(ctx context.Context, store ExpiryStore, released map[ids.ID]BalanceDelta) error {
 	if _, err := store.LockBalances(ctx, slices.Collect(maps.Keys(released))); err != nil {
 		return err

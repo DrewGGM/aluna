@@ -22,7 +22,7 @@ type AdvanceBusinessDateParams struct {
 	Expected time.Time
 }
 
-// Avanza solo si la fecha sigue siendo la esperada: dos rollovers con la misma fecha avanzan una vez.
+// Advances only if the date is still the expected one: two rollovers from the same date advance once.
 func (q *Queries) AdvanceBusinessDate(ctx context.Context, arg AdvanceBusinessDateParams) (int64, error) {
 	result, err := q.db.Exec(ctx, advanceBusinessDate, arg.Next, arg.ID, arg.Expected)
 	if err != nil {
@@ -35,7 +35,7 @@ const businessDate = `-- name: BusinessDate :one
 SELECT business_date FROM calendar.legal_entities WHERE id = $1
 `
 
-// La lectura no bloquea la fila: un rollover concurrente no espera a los postings que ya la leyeron.
+// The read does not lock the row: a concurrent rollover does not wait for postings that already read it.
 func (q *Queries) BusinessDate(ctx context.Context, id ids.ID) (time.Time, error) {
 	row := q.db.QueryRow(ctx, businessDate, id)
 	var business_date time.Time

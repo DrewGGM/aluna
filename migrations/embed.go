@@ -1,10 +1,10 @@
-// Package migrations embebe las migraciones SQL para que el binario las aplique con aluna migrate.
-// Cada módulo agrega las suyas aquí, numeradas en orden.
+// Package migrations embeds the SQL migrations so the binary applies them with aluna migrate. Every module
+// adds its own here, numbered in order.
 package migrations
 
 import "embed"
 
-// FS contiene las migraciones en el formato de goose (-- +goose Up / -- +goose Down).
+// FS holds the migrations in goose format (-- +goose Up / -- +goose Down).
 //
 //go:embed *.sql
 var FS embed.FS

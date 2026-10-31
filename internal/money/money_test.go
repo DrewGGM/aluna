@@ -20,7 +20,7 @@ func TestCurrencyOf(t *testing.T) {
 	for code, want := range exponents {
 		c := mustCurrency(t, code)
 		if c.Code() != code || c.exponent != want {
-			t.Errorf("CurrencyOf(%q) = %s/%d, se esperaba %s/%d", code, c.Code(), c.exponent, code, want)
+			t.Errorf("CurrencyOf(%q) = %s/%d, want %s/%d", code, c.Code(), c.exponent, code, want)
 		}
 	}
 }
@@ -28,7 +28,7 @@ func TestCurrencyOf(t *testing.T) {
 func TestCurrencyOfUnknown(t *testing.T) {
 	for _, code := range []string{"", "XXX", "cop", "COPX"} {
 		if _, err := CurrencyOf(code); !errors.Is(err, ErrUnknownCurrency) {
-			t.Errorf("CurrencyOf(%q) error = %v, se esperaba ErrUnknownCurrency", code, err)
+			t.Errorf("CurrencyOf(%q) error = %v, want ErrUnknownCurrency", code, err)
 		}
 	}
 }
@@ -36,7 +36,7 @@ func TestCurrencyOfUnknown(t *testing.T) {
 func TestAccessors(t *testing.T) {
 	cop := mustCurrency(t, "COP")
 
-	a := New(10_000_000, cop) // 100.000 pesos
+	a := New(10_000_000, cop) // 100,000 pesos
 
 	if a.Units() != 10_000_000 || a.Currency() != cop {
 		t.Fatalf("New = %d %s", a.Units(), a.Currency().Code())
@@ -50,22 +50,22 @@ func TestAdd(t *testing.T) {
 		want    int64
 		wantErr error
 	}{
-		"positivos":           {150, 250, 400, nil},
-		"con negativo":        {150, -250, -100, nil},
+		"positive":            {150, 250, 400, nil},
+		"with negative":       {150, -250, -100, nil},
 		"MaxInt64 + 1":        {math.MaxInt64, 1, 0, ErrOverflow},
 		"MinInt64 + -1":       {math.MinInt64, -1, 0, ErrOverflow},
 		"MaxInt64 + MinInt64": {math.MaxInt64, math.MinInt64, -1, nil},
-		"cero":                {0, 0, 0, nil},
+		"zero":                {0, 0, 0, nil},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			got, err := New(tc.a, cop).Add(New(tc.b, cop))
 
 			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("error = %v, se esperaba %v", err, tc.wantErr)
+				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
 			if err == nil && got != New(tc.want, cop) {
-				t.Fatalf("Add = %d %s, se esperaba %d COP", got.Units(), got.Currency().Code(), tc.want)
+				t.Fatalf("Add = %d %s, want %d COP", got.Units(), got.Currency().Code(), tc.want)
 			}
 		})
 	}
@@ -78,22 +78,22 @@ func TestSub(t *testing.T) {
 		want    int64
 		wantErr error
 	}{
-		"positivos":          {400, 150, 250, nil},
-		"resultado negativo": {150, 400, -250, nil},
-		"MinInt64 - 1":       {math.MinInt64, 1, 0, ErrOverflow},
-		"MaxInt64 - -1":      {math.MaxInt64, -1, 0, ErrOverflow},
-		"0 - MinInt64":       {0, math.MinInt64, 0, ErrOverflow},
-		"-1 - MinInt64":      {-1, math.MinInt64, math.MaxInt64, nil},
+		"positive":        {400, 150, 250, nil},
+		"negative result": {150, 400, -250, nil},
+		"MinInt64 - 1":    {math.MinInt64, 1, 0, ErrOverflow},
+		"MaxInt64 - -1":   {math.MaxInt64, -1, 0, ErrOverflow},
+		"0 - MinInt64":    {0, math.MinInt64, 0, ErrOverflow},
+		"-1 - MinInt64":   {-1, math.MinInt64, math.MaxInt64, nil},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			got, err := New(tc.a, cop).Sub(New(tc.b, cop))
 
 			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("error = %v, se esperaba %v", err, tc.wantErr)
+				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
 			if err == nil && got != New(tc.want, cop) {
-				t.Fatalf("Sub = %d %s, se esperaba %d COP", got.Units(), got.Currency().Code(), tc.want)
+				t.Fatalf("Sub = %d %s, want %d COP", got.Units(), got.Currency().Code(), tc.want)
 			}
 		})
 	}
@@ -104,17 +104,17 @@ func TestDifferentCurrenciesNeverMix(t *testing.T) {
 	ops := map[string]func(a, b Amount) (Amount, error){"Add": Amount.Add, "Sub": Amount.Sub}
 	for name, op := range ops {
 		if _, err := op(New(100, cop), New(100, usd)); !errors.Is(err, ErrCurrencyMismatch) {
-			t.Errorf("%s(COP, USD) error = %v, se esperaba ErrCurrencyMismatch", name, err)
+			t.Errorf("%s(COP, USD) error = %v, want ErrCurrencyMismatch", name, err)
 		}
 	}
 }
 
-// TestAmountWithoutCurrencyNeverAdds prueba que el valor cero (lo que queda tras un error descartado)
-// no se acumula en silencio.
+// TestAmountWithoutCurrencyNeverAdds checks that the zero value (what is left after a discarded error)
+// does not accumulate silently.
 func TestAmountWithoutCurrencyNeverAdds(t *testing.T) {
 	for name, op := range map[string]func(a, b Amount) (Amount, error){"Add": Amount.Add, "Sub": Amount.Sub} {
 		if _, err := op(Amount{}, Amount{}); !errors.Is(err, ErrCurrencyMismatch) {
-			t.Errorf("%s(Amount{}, Amount{}) error = %v, se esperaba ErrCurrencyMismatch", name, err)
+			t.Errorf("%s(Amount{}, Amount{}) error = %v, want ErrCurrencyMismatch", name, err)
 		}
 	}
 }
@@ -127,7 +127,7 @@ func TestNeg(t *testing.T) {
 		t.Fatalf("Neg(250) = %d, %v", got.Units(), err)
 	}
 	if _, err := New(math.MinInt64, cop).Neg(); !errors.Is(err, ErrOverflow) {
-		t.Fatalf("Neg(MinInt64) error = %v, se esperaba ErrOverflow", err)
+		t.Fatalf("Neg(MinInt64) error = %v, want ErrOverflow", err)
 	}
 }
 

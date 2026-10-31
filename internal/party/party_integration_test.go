@@ -177,7 +177,7 @@ func TestRegisterRejectsInvalidData(t *testing.T) {
 		"zero-width external_ref":   func(in *party.RegisterInput) { in.ExternalRef = "onb\u200bref" },
 		"unknown risk level":        func(in *party.RegisterInput) { in.RiskLevel = "extreme" },
 		"unnamed consent":           func(in *party.RegisterInput) { in.Consents = map[string]bool{" ": true} },
-		"consent name with symbols": func(in *party.RegisterInput) { in.Consents = map[string]bool{"Datos-Personales": true} },
+		"consent name with symbols": func(in *party.RegisterInput) { in.Consents = map[string]bool{"Personal-Data": true} },
 		"too many consents":         func(in *party.RegisterInput) { in.Consents = tooMany },
 	} {
 		t.Run(name, func(t *testing.T) {

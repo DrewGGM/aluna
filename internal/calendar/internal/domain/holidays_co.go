@@ -11,11 +11,11 @@ type monthDay struct {
 }
 
 var (
-	// Festivos que se celebran en su fecha.
+	// Holidays observed on their date.
 	fixedHolidays = []monthDay{
 		{time.January, 1}, {time.May, 1}, {time.July, 20}, {time.August, 7}, {time.December, 8}, {time.December, 25},
 	}
-	// Festivos que la Ley 51 de 1983 (Emiliani) traslada al lunes siguiente si no caen en lunes.
+	// Holidays that Law 51 of 1983 (Emiliani) moves to the following Monday if they do not fall on one.
 	mondayHolidays = []monthDay{
 		{time.January, 6},
 		{time.March, 19},
@@ -25,19 +25,18 @@ var (
 		{time.November, 1},
 		{time.November, 11},
 	}
-	// Días desde la Pascua: Jueves y Viernes Santo quedan en su fecha; Ascensión, Corpus Christi y
-	// Sagrado Corazón se trasladan al lunes.
+	// Days from Easter: Maundy Thursday and Good Friday stay on their date; Ascension, Corpus Christi and
+	// Sacred Heart move to the Monday.
 	easterHolidays       = []int{-3, -2}
 	easterMondayHolidays = []int{39, 60, 68}
-	// Nuestra Señora del Rosario de Chiquinquirá (Ley 2578 de 2026), trasladable al lunes, desde 2026.
+	// Our Lady of the Rosary of Chiquinquirá (Law 2578 of 2026), moved to the Monday, since 2026.
 	chiquinquira      = monthDay{time.July, 9}
 	chiquinquiraSince = 2026
 )
 
-// ColombianHolidays son los festivos nacionales de Colombia en year (Ley 51 de 1983 y Ley 2578 de 2026),
-// en orden. Dos
-// festivos que caen el mismo lunes (el Sagrado Corazón y San Pedro y San Pablo algunos años) son una
-// sola fecha. Las reglas valen desde 1984, cuando rige la Ley 51.
+// ColombianHolidays are Colombia's national holidays in year (Law 51 of 1983 and Law 2578 of 2026), in
+// order. Two holidays that fall on the same Monday (Sacred Heart and Saints Peter and Paul in some years)
+// are a single date. The rules hold since 1984, when Law 51 took effect.
 func ColombianHolidays(year int) []Date {
 	var days []Date
 	for _, md := range fixedHolidays {
@@ -60,12 +59,12 @@ func ColombianHolidays(year int) []Date {
 	return slices.Compact(days)
 }
 
-// nextMonday es d si es lunes; si no, el lunes siguiente.
+// nextMonday is d if it is a Monday; otherwise, the following Monday.
 func nextMonday(d Date) Date {
 	return d.addDays((int(time.Monday) - int(d.utc().Weekday()) + 7) % 7)
 }
 
-// easter es el domingo de Pascua del calendario gregoriano (algoritmo anónimo de Meeus/Jones/Butcher).
+// easter is Easter Sunday in the Gregorian calendar (the anonymous Meeus/Jones/Butcher algorithm).
 func easter(year int) Date {
 	a, b, c := year%19, year/100, year%100
 	d, e := b/4, b%4

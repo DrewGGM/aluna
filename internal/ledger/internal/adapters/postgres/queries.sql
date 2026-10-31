@@ -8,8 +8,8 @@ INSERT INTO ledger.balances (account_id) VALUES ($1);
 -- name: AccountsByID :many
 SELECT sqlc.embed(a) FROM ledger.accounts a WHERE a.id = ANY(@ids::uuid[]);
 
--- Bloquea los saldos en orden de account_id (ADR-0004): dos postings sobre las mismas cuentas toman
--- los locks en el mismo orden y no se bloquean en ciclo.
+-- Locks the balances in account_id order (ADR-0004): two postings on the same accounts take the locks
+-- in the same order and never deadlock.
 -- name: LockBalances :many
 SELECT account_id, posted, pending_debits, pending_credits
 FROM ledger.balances
@@ -28,7 +28,7 @@ RETURNING posted_at;
 -- name: TransactionIDByRef :one
 SELECT id FROM ledger.transactions WHERE legal_entity_id = $1 AND source = $2 AND external_ref = $3;
 
--- Los entries no llevan entidad, fecha valor ni posted_at: los copia entries_stamp de la transacción.
+-- Entries carry no entity, value date or posted_at: entries_stamp copies them from the transaction.
 -- name: InsertEntries :exec
 INSERT INTO ledger.entries (transaction_id, account_id, currency, amount)
 SELECT @transaction_id::uuid, unnest(@account_ids::uuid[]), unnest(@currencies::text[]), unnest(@amounts::bigint[]);
@@ -42,9 +42,9 @@ WHERE account_id = @account_id;
 -- name: Balance :one
 SELECT posted, pending_debits, pending_credits, version FROM ledger.balances WHERE account_id = $1;
 
--- Saldo bitemporal (FR-8): entries con fecha valor hasta as_of_value_date y asentados hasta as_known_at;
--- un parámetro nulo no filtra ese eje. Recorre por índice los entries de la cuenta y lee cada uno del
--- heap (amount no está en el índice): cuesta lo que la historia de la cuenta.
+-- Bitemporal balance (FR-8): entries with a value date up to as_of_value_date and posted up to
+-- as_known_at; a null parameter does not filter that axis. It walks the account's entries by index and
+-- reads each one from the heap (amount is not in the index): it costs as much as the account's history.
 -- name: PostedAsOf :one
 SELECT coalesce(sum(amount), 0)::bigint AS posted
 FROM ledger.entries
@@ -52,7 +52,7 @@ WHERE account_id = @account_id
   AND value_date <= coalesce(sqlc.narg(as_of_value_date)::date, 'infinity'::date)
   AND posted_at <= coalesce(sqlc.narg(as_known_at)::timestamptz, 'infinity'::timestamptz);
 
--- Las lecturas por ID filtran por entidad: lo ajeno se ve igual que lo que no existe.
+-- Reads by ID filter by entity: another entity's rows look the same as missing ones.
 -- name: AccountOfEntity :one
 SELECT sqlc.embed(a) FROM ledger.accounts a WHERE a.id = @id AND a.legal_entity_id = @legal_entity_id;
 
@@ -72,16 +72,16 @@ SELECT clock_timestamp()::timestamptz AS now;
 INSERT INTO ledger.holds (id, legal_entity_id, account_id, counter_account_id, currency, amount, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7);
 
--- Bloquea el hold antes que los saldos (ADR-0004). Lo de otra entidad se ve igual que lo inexistente.
+-- Locks the hold before the balances (ADR-0004). Another entity's hold looks the same as a missing one.
 -- name: LockHold :one
 SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at
 FROM ledger.holds
 WHERE id = @id AND legal_entity_id = @legal_entity_id
 FOR UPDATE;
 
--- Lote de la expiración: los vencidos (expires_at anterior a now, como en Hold.Expire) más antiguos
--- primero, por el índice parcial de pending. SKIP LOCKED salta los que tiene bloqueados un capture o un
--- release en curso, que deciden su resultado.
+-- Expiry batch: overdue holds (expires_at before now, as in Hold.Expire), oldest first, through the
+-- partial index on pending. SKIP LOCKED skips those locked by a capture or release in progress, which
+-- decides their outcome.
 -- name: LockDueHolds :many
 SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at
 FROM ledger.holds
@@ -94,15 +94,16 @@ FOR UPDATE SKIP LOCKED;
 UPDATE ledger.holds SET status = @status, captured_amount = @captured_amount, capture_tx_id = @capture_tx_id
 WHERE id = @id;
 
--- Serializa los agregadores: el segundo espera y, al bloquear, lee el cursor que dejó el primero.
+-- Serializes the aggregators: the second one waits and, once it gets the lock, reads the cursor the
+-- first one left.
 -- name: LockAsyncCursor :one
 SELECT posted_xact, entry_id FROM ledger.async_cursor FOR UPDATE;
 
--- Entries de cuentas async después del cursor, en orden de (posted_xact, id), solo de transacciones de
--- base anteriores a la más vieja en curso: esas ya confirmaron o abortaron y no suman entries. Recorre
--- transactions por posted_xact y lee los entries de cada una por transaction_id: unidos directo, el
--- planner entra por la cuenta async y lee su historia completa en cada lote. OFFSET 0 impide que
--- aplane la subconsulta y vuelva a ese plan.
+-- Async account entries after the cursor, in (posted_xact, id) order, only from database transactions
+-- older than the oldest one in progress: those have already committed or aborted and add no entries. It
+-- walks transactions by posted_xact and reads each one's entries by transaction_id: with a direct join,
+-- the planner enters through the async account and reads its whole history on every batch. OFFSET 0
+-- keeps it from flattening the subquery and going back to that plan.
 -- name: AsyncEntriesAfter :many
 SELECT t.posted_xact, e.id, e.account_id, e.currency, e.amount
 FROM ledger.transactions t

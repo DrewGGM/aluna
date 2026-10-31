@@ -47,8 +47,8 @@ func newDeps(t *testing.T) jobs.Deps {
 	}
 }
 
-// startWorker arranca un worker con la configuración de aluna worker (solo cambian el sondeo, el modo de
-// prueba y el logger) y devuelve los jobs que termina.
+// startWorker starts a worker with the aluna worker configuration (only the polling, the test mode and
+// the logger change) and returns the jobs it finishes.
 func startWorker(t *testing.T, deps jobs.Deps) <-chan *river.Event {
 	t.Helper()
 	cfg := jobs.Config(deps)
@@ -69,7 +69,7 @@ func startWorker(t *testing.T, deps jobs.Deps) <-chan *river.Event {
 	return finished
 }
 
-// waitFor espera a que terminen bien los jobs de los tipos kinds; un job que falla detiene la prueba.
+// waitFor waits for the jobs of the given kinds to succeed; a failing job stops the test.
 func waitFor(t *testing.T, finished <-chan *river.Event, kinds ...string) {
 	t.Helper()
 	pending := map[string]bool{}
@@ -81,11 +81,11 @@ func waitFor(t *testing.T, finished <-chan *river.Event, kinds ...string) {
 		select {
 		case ev := <-finished:
 			if ev.Kind == river.EventKindJobFailed {
-				t.Fatalf("el job %s falló: %v", ev.Job.Kind, ev.Job.Errors)
+				t.Fatalf("job %s failed: %v", ev.Job.Kind, ev.Job.Errors)
 			}
 			delete(pending, ev.Job.Kind)
 		case <-timeout:
-			t.Fatalf("no terminaron en 10 s: %v", pending)
+			t.Fatalf("did not finish within 10 s: %v", pending)
 		}
 	}
 }
@@ -97,7 +97,7 @@ func inTx(t *testing.T, fn func(tx postgres.Tx) error) {
 	}
 }
 
-// heldDeposit crea un depósito con 100 COP y le pone un hold de 30 que vence en expiresIn.
+// heldDeposit creates a deposit with 100 COP and places a hold of 30 on it that expires in expiresIn.
 func heldDeposit(t *testing.T, svc *ledger.Service, expiresIn time.Duration) ledger.Hold {
 	t.Helper()
 	cop, err := money.CurrencyOf("COP")
@@ -110,7 +110,7 @@ func heldDeposit(t *testing.T, svc *ledger.Service, expiresIn time.Duration) led
 		var accounts [3]ledger.Account
 		for i, kind := range []ledger.Kind{ledger.KindAsset, ledger.KindLiability, ledger.KindLiability} {
 			if accounts[i], err = svc.CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
-				LegalEntityID: entity, Code: "cta-" + ids.New().String(), Kind: kind, Currency: cop, Mode: ledger.BalanceModeSync,
+				LegalEntityID: entity, Code: "acct-" + ids.New().String(), Kind: kind, Currency: cop, Mode: ledger.BalanceModeSync,
 			}); err != nil {
 				return err
 			}
@@ -141,8 +141,8 @@ func statusOf(t *testing.T, hold ids.ID) ledger.HoldStatus {
 	return status
 }
 
-// TestAHoldThatExpiredWhileTheWorkerWasDownExpiresOnStart: un hold vence con el worker detenido; al
-// arrancar, la expiración corre enseguida, sin esperar su intervalo de 30 s.
+// TestAHoldThatExpiredWhileTheWorkerWasDownExpiresOnStart: a hold expires while the worker is stopped;
+// on startup, expiration runs right away, without waiting for its 30 s interval.
 func TestAHoldThatExpiredWhileTheWorkerWasDownExpiresOnStart(t *testing.T) {
 	deps := newDeps(t)
 	hold := heldDeposit(t, deps.Ledger, 500*time.Millisecond)
@@ -151,12 +151,12 @@ func TestAHoldThatExpiredWhileTheWorkerWasDownExpiresOnStart(t *testing.T) {
 	waitFor(t, startWorker(t, deps), "ledger.holds.expire")
 
 	if got := statusOf(t, hold.ID()); got != ledger.HoldExpired {
-		t.Fatalf("hold %s, se esperaba %s", got, ledger.HoldExpired)
+		t.Fatalf("hold %s, want %s", got, ledger.HoldExpired)
 	}
 }
 
-// TestTheWorkerRunsEveryJob: al arrancar corren bien todos los periódicos, como aluna_app: el worker
-// publica lo que emite el outbox y sella lo que hay en el registro de auditoría.
+// TestTheWorkerRunsEveryJob: on startup every periodic job succeeds, as aluna_app: the worker publishes
+// what the outbox emits and seals what is in the audit log.
 func TestTheWorkerRunsEveryJob(t *testing.T) {
 	deps := newDeps(t)
 	correlation := ids.New().String()
@@ -176,15 +176,15 @@ func TestTheWorkerRunsEveryJob(t *testing.T) {
 
 	var block *int64
 	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil || block == nil {
-		t.Fatalf("el registro de auditoría quedó sin sellar (%v)", err)
+		t.Fatalf("the audit record was left unsealed (%v)", err)
 	}
 	if err := deps.Audit.Verify(t.Context(), testPool, *block, *block); err != nil {
-		t.Fatalf("el bloque que selló el worker no verifica: %v", err)
+		t.Fatalf("the block the worker sealed does not verify: %v", err)
 	}
 }
 
-// TestThePurgesHonorTheirRetention: la purga de idempotencia borra las claves de más de 7 días y la del
-// outbox los eventos publicados hace más de 30; lo que está dentro de su retención queda.
+// TestThePurgesHonorTheirRetention: the idempotency purge deletes keys older than 7 days and the outbox
+// purge events published more than 30 days ago; whatever is within its retention stays.
 func TestThePurgesHonorTheirRetention(t *testing.T) {
 	deps := newDeps(t)
 	keys := map[string]time.Duration{ids.New().String(): 8 * day, ids.New().String(): 6 * day}
@@ -195,18 +195,18 @@ func TestThePurgesHonorTheirRetention(t *testing.T) {
 
 	for key, age := range keys {
 		if n := count(t, `SELECT count(*) FROM infra.idempotency_keys WHERE key = $1`, key); n != boolInt(age < 7*day) {
-			t.Errorf("clave de %v: quedan %d filas", age, n)
+			t.Errorf("key aged %v: %d rows left", age, n)
 		}
 	}
 	for subject, age := range events {
 		if n := count(t, `SELECT count(*) FROM infra.outbox WHERE subject = $1`, subject); n != boolInt(age < 30*day) {
-			t.Errorf("evento publicado hace %v: quedan %d filas", age, n)
+			t.Errorf("event published %v ago: %d rows left", age, n)
 		}
 	}
 }
 
-// seedAged crea claves de idempotencia completadas con la antigüedad de keys y eventos publicados hace lo
-// que dice events. aluna_app no elige created_at ni published_at: los fija el dueño.
+// seedAged creates completed idempotency keys with the ages in keys and events published as long ago as
+// events says. aluna_app does not choose created_at or published_at: the owner sets them.
 func seedAged(t *testing.T, deps jobs.Deps, keys, events map[string]time.Duration) {
 	t.Helper()
 	inTx(t, func(tx postgres.Tx) error {

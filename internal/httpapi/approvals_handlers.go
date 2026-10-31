@@ -12,22 +12,22 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-var errInvalidApprovalStatus = errors.New("estado de solicitud desconocido")
+var errInvalidApprovalStatus = errors.New("unknown request status")
 
-// ApprovalHandlers implementa las operaciones de maker-checker del contrato (api/openapi.yaml).
+// ApprovalHandlers implements the contract's maker-checker operations (api/openapi.yaml).
 type ApprovalHandlers struct {
 	approvals *approvals.Service
 	commands  commands
 	reader    postgres.Querier
 }
 
-// NewApprovalHandlers crea los handlers de las solicitudes de svc. keys guarda las respuestas de las
-// aprobaciones (con Idempotency-Key: aprobar corre el comando); reader sirve las lecturas.
+// NewApprovalHandlers creates the handlers for the requests of svc. keys stores the responses of the
+// approvals (with Idempotency-Key: approving runs the command); reader serves the reads.
 func NewApprovalHandlers(svc *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *ApprovalHandlers {
 	return &ApprovalHandlers{approvals: svc, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
-// ListApprovals lista las solicitudes de la entidad del token.
+// ListApprovals lists the requests of the token's entity.
 func (h *ApprovalHandlers) ListApprovals(ctx context.Context, req gen.ListApprovalsRequestObject) (gen.ListApprovalsResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -51,8 +51,7 @@ func (h *ApprovalHandlers) ListApprovals(ctx context.Context, req gen.ListApprov
 	return gen.ListApprovals200JSONResponse{Items: items}, nil
 }
 
-// ApproveRequest aprueba una solicitud de la entidad del token y corre su comando, una sola vez por
-// Idempotency-Key.
+// ApproveRequest approves a request of the token's entity and runs its command, once per Idempotency-Key.
 func (h *ApprovalHandlers) ApproveRequest(ctx context.Context, req gen.ApproveRequestRequestObject) (gen.ApproveRequestResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -72,7 +71,7 @@ func (h *ApprovalHandlers) ApproveRequest(ctx context.Context, req gen.ApproveRe
 	return resp, nil
 }
 
-// RejectRequest rechaza una solicitud de la entidad del token.
+// RejectRequest rejects a request of the token's entity.
 func (h *ApprovalHandlers) RejectRequest(ctx context.Context, req gen.RejectRequestRequestObject) (gen.RejectRequestResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {

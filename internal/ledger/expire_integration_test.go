@@ -12,7 +12,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// afterTheHolds es un now en que ya vencieron los holds de una hora de estas pruebas.
+// afterTheHolds is a now at which these tests' one-hour holds are already due.
 func afterTheHolds() time.Time { return time.Now().Add(2 * time.Hour) }
 
 func expireDue(t *testing.T, now time.Time, batch int) int {
@@ -42,10 +42,10 @@ func statusOf(t *testing.T, hold ids.ID) ledger.HoldStatus {
 	return status
 }
 
-// TestExpireDueHoldsReleasesThePending: los holds vencidos, de un pasivo y de un activo, quedan expired
-// y su importe sale del pendiente del lado en que se retuvo; uno que vence después sigue pending. Con
-// lotes de uno, ExpireDueHolds sigue hasta vaciar los vencidos. La base es de todo el paquete: el
-// total cuenta también los holds pending que dejaron otras pruebas.
+// TestExpireDueHoldsReleasesThePending: the due holds, on a liability and on an asset, end expired and
+// their amount leaves the pending balance on the side where it was held; one that expires later stays
+// pending. With batches of one, ExpireDueHolds keeps going until the due ones are gone. The database is
+// shared by the whole package: the total also counts pending holds left by other tests.
 func TestExpireDueHoldsReleasesThePending(t *testing.T) {
 	deposit, clearing := fundedDeposit(t)
 	cash, funding := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
@@ -57,27 +57,27 @@ func TestExpireDueHoldsReleasesThePending(t *testing.T) {
 	later := mustPlaceHold(t, deposit.ID, clearing.ID, 10, 3*time.Hour)
 
 	if n := expireDue(t, afterTheHolds(), 1); n < len(due) {
-		t.Fatalf("expiró %d holds, se esperaban al menos %d", n, len(due))
+		t.Fatalf("expired %d holds, want at least %d", n, len(due))
 	}
 
 	for _, id := range due {
 		if s := statusOf(t, id); s != ledger.HoldExpired {
-			t.Errorf("hold %s = %s, se esperaba expired", id, s)
+			t.Errorf("hold %s = %s, want expired", id, s)
 		}
 	}
 	if s := statusOf(t, later); s != ledger.HoldPending {
-		t.Errorf("el hold que vence después = %s, se esperaba pending", s)
+		t.Errorf("the hold that expires later = %s, want pending", s)
 	}
 	if b := balanceOf(t, deposit.ID); b.PendingDebits != 10 || b.Posted != -100 {
-		t.Errorf("depósito = %+v, se esperaban 10 pendientes (el hold no vencido) y el posted intacto", b)
+		t.Errorf("deposit = %+v, want 10 pending (the hold not yet due) and posted untouched", b)
 	}
 	if b := balanceOf(t, cash.ID); b.PendingCredits != 0 || b.Posted != 100 {
-		t.Errorf("caja = %+v, se esperaba nada pendiente y el posted intacto", b)
+		t.Errorf("cash = %+v, want nothing pending and posted untouched", b)
 	}
 }
 
-// TestABatchReleasesEveryHoldOfAnAccount: dos holds de la misma cuenta en un lote liberan entre los dos
-// el pendiente completo: se suman, no se pisan.
+// TestABatchReleasesEveryHoldOfAnAccount: two holds of the same account in one batch together release
+// the whole pending amount: they add up, they do not overwrite each other.
 func TestABatchReleasesEveryHoldOfAnAccount(t *testing.T) {
 	deposit, clearing := fundedDeposit(t)
 	mustPlaceHold(t, deposit.ID, clearing.ID, 30, time.Hour)
@@ -86,12 +86,12 @@ func TestABatchReleasesEveryHoldOfAnAccount(t *testing.T) {
 	expireDue(t, afterTheHolds(), 100)
 
 	if b := balanceOf(t, deposit.ID); b.PendingDebits != 0 {
-		t.Fatalf("depósito = %+v, se esperaba nada pendiente tras expirar sus dos holds", b)
+		t.Fatalf("deposit = %+v, want nothing pending after expiring its two holds", b)
 	}
 }
 
-// TestAHoldBeingCapturedIsNotExpired: la expiración salta el hold que un capture tiene bloqueado, sin
-// esperarlo; el capture confirma y el hold queda captured.
+// TestAHoldBeingCapturedIsNotExpired: the expiry skips the hold a capture has locked, without waiting for
+// it; the capture commits and the hold ends captured.
 func TestAHoldBeingCapturedIsNotExpired(t *testing.T) {
 	deposit, clearing := fundedDeposit(t)
 	hold := mustPlaceHold(t, deposit.ID, clearing.ID, 50, time.Hour)
@@ -100,33 +100,32 @@ func TestAHoldBeingCapturedIsNotExpired(t *testing.T) {
 	expireDue(t, afterTheHolds(), 10)
 
 	if err := commitCapture(); err != nil {
-		t.Fatalf("el capture debe confirmar: %v", err)
+		t.Fatalf("the capture must commit: %v", err)
 	}
 	if s := statusOf(t, hold); s != ledger.HoldCaptured {
-		t.Fatalf("hold = %s, se esperaba captured", s)
+		t.Fatalf("hold = %s, want captured", s)
 	}
 	if b := balanceOf(t, deposit.ID); b.Posted != -50 || b.PendingDebits != 0 {
-		t.Fatalf("depósito = %+v, se esperaba posted -50 y nada pendiente", b)
+		t.Fatalf("deposit = %+v, want posted -50 and nothing pending", b)
 	}
 }
 
-// TestAnExpiredHoldIsNotCaptured: si la expiración bloquea el hold primero, el capture lo encuentra
-// expired.
+// TestAnExpiredHoldIsNotCaptured: if the expiry locks the hold first, the capture finds it expired.
 func TestAnExpiredHoldIsNotCaptured(t *testing.T) {
 	deposit, clearing := fundedDeposit(t)
 	hold := mustPlaceHold(t, deposit.ID, clearing.ID, 50, time.Hour)
 	expireDue(t, afterTheHolds(), 10)
 
 	if _, err := captureHold(t, hold, 50); !errors.Is(err, ledger.ErrHoldNotPending) {
-		t.Fatalf("capturar un hold expirado = %v, se esperaba ErrHoldNotPending", err)
+		t.Fatalf("capturing an expired hold = %v, want ErrHoldNotPending", err)
 	}
 	if b := balanceOf(t, deposit.ID); b.Posted != -100 || b.PendingDebits != 0 {
-		t.Fatalf("depósito = %+v, se esperaba el posted intacto y nada pendiente", b)
+		t.Fatalf("deposit = %+v, want posted untouched and nothing pending", b)
 	}
 }
 
-// TestAHoldIsNotDueAtItsExpiry: a la hora exacta de su vencimiento el hold todavía se puede capturar
-// (Hold.Expire exige que ya haya pasado), así que la expiración no lo toma ni falla el lote.
+// TestAHoldIsNotDueAtItsExpiry: at the exact time of its expiry the hold can still be captured
+// (Hold.Expire requires it to have passed), so the expiry neither takes it nor fails the batch.
 func TestAHoldIsNotDueAtItsExpiry(t *testing.T) {
 	deposit, clearing := fundedDeposit(t)
 	hold, err := placeHold(t, deposit.ID, clearing.ID, 50, time.Hour)
@@ -137,12 +136,12 @@ func TestAHoldIsNotDueAtItsExpiry(t *testing.T) {
 	expireDue(t, hold.ExpiresAt(), 10)
 
 	if s := statusOf(t, hold.ID()); s != ledger.HoldPending {
-		t.Fatalf("hold a la hora de su vencimiento = %s, se esperaba pending", s)
+		t.Fatalf("hold at the time of its expiry = %s, want pending", s)
 	}
 }
 
 func TestExpireDueHoldsRejectsAnEmptyBatch(t *testing.T) {
 	if _, err := svc().ExpireDueHolds(t.Context(), postgres.NewUnitOfWork(testPool), afterTheHolds(), 0); err == nil {
-		t.Fatal("un lote de 0 debe fallar: no avanzaría nunca")
+		t.Fatal("a batch of 0 must fail: it would never advance")
 	}
 }

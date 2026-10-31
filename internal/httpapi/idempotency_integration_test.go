@@ -21,15 +21,15 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// response es lo que el cliente ve de una respuesta.
+// response is what the client sees of a response.
 type response struct {
 	status      int
 	contentType string
 	body        []byte
 }
 
-// send hace POST path con body y la cabecera Idempotency-Key (omitida si key es nil). No llama
-// t.Fatal: se puede usar desde otras goroutines.
+// send does POST path with body and the Idempotency-Key header (omitted if key is nil). It does not call
+// t.Fatal: it can be used from other goroutines.
 func send(ctx context.Context, ts *httptest.Server, path string, key *string, body string) (response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+path, strings.NewReader(body))
 	if err != nil {
@@ -43,12 +43,12 @@ func send(ctx context.Context, ts *httptest.Server, path string, key *string, bo
 	if err != nil {
 		return response{}, err
 	}
-	defer resp.Body.Close() //nolint:errcheck // cierre en prueba
+	defer resp.Body.Close() //nolint:errcheck // close in a test
 	b, err := io.ReadAll(resp.Body)
 	return response{status: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), body: b}, err
 }
 
-// postWithKey hace POST /v1/transactions con la Idempotency-Key key.
+// postWithKey does POST /v1/transactions with the Idempotency-Key key.
 func postWithKey(t *testing.T, ts *httptest.Server, key, body string) response {
 	t.Helper()
 	return postTo(t, ts, "/v1/transactions", key, body)
@@ -63,7 +63,7 @@ func postTo(t *testing.T, ts *httptest.Server, path, key, body string) response 
 	return r
 }
 
-// concurrently hace n veces el mismo POST /v1/transactions a la vez y devuelve las respuestas.
+// concurrently does the same POST /v1/transactions n times at once and returns the responses.
 func concurrently(t *testing.T, n int, ts *httptest.Server, key, body string) []response {
 	t.Helper()
 	responses, errs := make([]response, n), make([]error, n)
@@ -78,12 +78,12 @@ func concurrently(t *testing.T, n int, ts *httptest.Server, key, body string) []
 	return responses
 }
 
-// allTheSame verifica que todas las respuestas sean idénticas a want.
+// allTheSame checks that every response is identical to want.
 func allTheSame(t *testing.T, responses []response, want response) {
 	t.Helper()
 	for i, r := range responses {
 		if r.status != want.status || !bytes.Equal(r.body, want.body) {
-			t.Errorf("respuesta %d = %d %s, se esperaba %d %s", i, r.status, r.body, want.status, want.body)
+			t.Errorf("response %d = %d %s, want %d %s", i, r.status, r.body, want.status, want.body)
 		}
 	}
 }
@@ -92,7 +92,7 @@ func problemCode(t *testing.T, r response) string {
 	t.Helper()
 	var p Problem
 	if err := json.Unmarshal(r.body, &p); err != nil || r.contentType != "application/problem+json" {
-		t.Fatalf("respuesta %d no es un problem: %s (%v)", r.status, r.body, err)
+		t.Fatalf("response %d is not a problem: %s (%v)", r.status, r.body, err)
 	}
 	return p.Code
 }
@@ -101,12 +101,12 @@ func balanceOf(t *testing.T, ts *httptest.Server, account string) int64 {
 	t.Helper()
 	var b struct{ Posted struct{ Amount int64 } }
 	if status := call(t, ts, http.MethodGet, "/v1/ledger-accounts/"+account+"/balance", "", &b); status != http.StatusOK {
-		t.Fatalf("saldo = %d", status)
+		t.Fatalf("balance = %d", status)
 	}
 	return b.Posted.Amount
 }
 
-// newAccounts crea una caja y un depósito en una entidad nueva.
+// newAccounts creates a cash account and a deposit in a new entity.
 func newAccounts(t *testing.T) (ts *httptest.Server, cash, deposit string) {
 	t.Helper()
 	ts = apiServer(t, ids.New())
@@ -116,38 +116,38 @@ func newAccounts(t *testing.T) (ts *httptest.Server, cash, deposit string) {
 func TestPostTransactionRequiresAValidIdempotencyKey(t *testing.T) {
 	ts, cash, deposit := newAccounts(t)
 	body := postingBody(t, cash, deposit, 100, 100, "")
-	empty, long, notUTF8 := "", strings.Repeat("k", 256), "\xff\xfeclave"
+	empty, long, notUTF8 := "", strings.Repeat("k", 256), "\xff\xfekey"
 	cases := map[string]struct {
 		key  *string
 		code string
 	}{
-		"sin la cabecera":   {nil, "idempotency_key_required"},
-		"vacía":             {&empty, "idempotency_key_required"},
-		"de 256 caracteres": {&long, "invalid_request"},
-		"que no es UTF-8":   {&notUTF8, "invalid_request"},
+		"without the header": {nil, "idempotency_key_required"},
+		"empty":              {&empty, "idempotency_key_required"},
+		"of 256 characters":  {&long, "invalid_request"},
+		"not UTF-8":          {&notUTF8, "invalid_request"},
 	}
 	for name, tc := range cases {
 		r, err := send(t.Context(), ts, "/v1/transactions", tc.key, body)
 		if err != nil || r.status != http.StatusBadRequest || problemCode(t, r) != tc.code {
-			t.Errorf("clave %s = %d %s (%v), se esperaba 400 %s", name, r.status, r.body, err, tc.code)
+			t.Errorf("key %s = %d %s (%v), want 400 %s", name, r.status, r.body, err, tc.code)
 		}
 	}
-	if r := postWithKey(t, ts, strings.Repeat("ñ", 255), body); r.status != http.StatusCreated {
-		t.Errorf("255 caracteres de dos bytes = %d %s, se esperaba 201: el límite es en caracteres", r.status, r.body)
+	if r := postWithKey(t, ts, strings.Repeat("\u00e9", 255), body); r.status != http.StatusCreated {
+		t.Errorf("255 two-byte characters = %d %s, want 201: the limit is in characters", r.status, r.body)
 	}
 	if got := balanceOf(t, ts, cash); got != 100 {
-		t.Errorf("saldo = %d, se esperaba 100: los requests rechazados no asientan", got)
+		t.Errorf("balance = %d, want 100: rejected requests do not post", got)
 	}
 }
 
-// TestReplayReturnsTheOriginalResponse: el reintento recibe el mismo status y el mismo cuerpo, byte a
-// byte, aunque el JSON llegue con otro formato, y el dinero se mueve una sola vez.
+// TestReplayReturnsTheOriginalResponse: the retry receives the same status and the same body, byte for byte,
+// even if the JSON arrives with another format, and the money moves only once.
 func TestReplayReturnsTheOriginalResponse(t *testing.T) {
 	ts, cash, deposit := newAccounts(t)
 	key, body := ids.New().String(), postingBody(t, cash, deposit, 100, 100, "")
 	first := postWithKey(t, ts, key, body)
 	if first.status != http.StatusCreated || first.contentType != "application/json" {
-		t.Fatalf("primer POST = %d %s", first.status, first.body)
+		t.Fatalf("first POST = %d %s", first.status, first.body)
 	}
 	var reformatted bytes.Buffer
 	if err := json.Indent(&reformatted, []byte(body), "", "    "); err != nil {
@@ -157,7 +157,7 @@ func TestReplayReturnsTheOriginalResponse(t *testing.T) {
 	allTheSame(t, []response{postWithKey(t, ts, key, body), postWithKey(t, ts, key, reformatted.String())}, first)
 
 	if got := balanceOf(t, ts, cash); got != 100 {
-		t.Errorf("saldo = %d, se esperaba 100: el replay no debe asentar otra vez", got)
+		t.Errorf("balance = %d, want 100: the replay must not post again", got)
 	}
 }
 
@@ -165,54 +165,54 @@ func TestAnotherPayloadWithTheSameKeyIsRejected(t *testing.T) {
 	ts, cash, deposit := newAccounts(t)
 	key, ref := ids.New().String(), ids.New().String()
 	if r := postWithKey(t, ts, key, postingBody(t, cash, deposit, 100, 100, ref)); r.status != http.StatusCreated {
-		t.Fatalf("primer POST = %d %s", r.status, r.body)
+		t.Fatalf("first POST = %d %s", r.status, r.body)
 	}
 
 	r := postWithKey(t, ts, key, postingBody(t, cash, deposit, 200, 200, ref))
 
 	if r.status != http.StatusUnprocessableEntity || problemCode(t, r) != "idempotency_key_reused" {
-		t.Fatalf("otro payload = %d %s, se esperaba 422 idempotency_key_reused", r.status, r.body)
+		t.Fatalf("another payload = %d %s, want 422 idempotency_key_reused", r.status, r.body)
 	}
 	if got := balanceOf(t, ts, cash); got != 100 {
-		t.Errorf("saldo = %d, se esperaba 100", got)
+		t.Errorf("balance = %d, want 100", got)
 	}
 }
 
-// storedBusinessError verifica que el POST con una clave nueva responda status y code, y que el replay
-// devuelva esa misma respuesta. Devuelve la clave.
+// storedBusinessError checks that the POST with a new key answers status and code, and that the replay
+// returns that same response. It returns the key.
 func storedBusinessError(t *testing.T, ts *httptest.Server, body string, status int, code string) string {
 	t.Helper()
 	key := ids.New().String()
 	first := postWithKey(t, ts, key, body)
 	if first.status != status || problemCode(t, first) != code {
-		t.Fatalf("= %d %s, se esperaba %d %s", first.status, first.body, status, code)
+		t.Fatalf("= %d %s, want %d %s", first.status, first.body, status, code)
 	}
 	allTheSame(t, []response{postWithKey(t, ts, key, body)}, first)
 	return key
 }
 
-// TestInsufficientFundsIsStored: un 4xx de negocio es la respuesta de esa clave, aunque después el
-// mismo comando pudiera pasar.
+// TestInsufficientFundsIsStored: a business 4xx is the response for that key, even if the same command could
+// pass later.
 func TestInsufficientFundsIsStored(t *testing.T) {
 	ts, cash, deposit := newAccounts(t)
 	body := postingBody(t, deposit, cash, 100, 100, "")
 	key := storedBusinessError(t, ts, body, http.StatusUnprocessableEntity, "insufficient_funds")
 	if r := postWithKey(t, ts, ids.New().String(), postingBody(t, cash, deposit, 1000, 1000, "")); r.status != http.StatusCreated {
-		t.Fatalf("fondeo = %d %s", r.status, r.body)
+		t.Fatalf("funding = %d %s", r.status, r.body)
 	}
 
 	if r := postWithKey(t, ts, key, body); r.status != http.StatusUnprocessableEntity {
-		t.Errorf("replay con fondos = %d %s, se esperaba el 422 guardado", r.status, r.body)
+		t.Errorf("replay with funds = %d %s, want the stored 422", r.status, r.body)
 	}
 }
 
-// TestDuplicateExternalRefIsStored: una referencia que la entidad ya asentó, con otra clave, es 409
-// duplicate_external_ref, y esa respuesta se guarda.
+// TestDuplicateExternalRefIsStored: a reference the entity already posted, with another key, is 409
+// duplicate_external_ref, and that response is stored.
 func TestDuplicateExternalRefIsStored(t *testing.T) {
 	ts, cash, deposit := newAccounts(t)
 	ref := ids.New().String()
 	if r := postWithKey(t, ts, ids.New().String(), postingBody(t, cash, deposit, 1, 1, ref)); r.status != http.StatusCreated {
-		t.Fatalf("posting con ref = %d %s", r.status, r.body)
+		t.Fatalf("posting with ref = %d %s", r.status, r.body)
 	}
 
 	storedBusinessError(t, ts, postingBody(t, cash, deposit, 1, 1, ref), http.StatusConflict, "duplicate_external_ref")
@@ -224,30 +224,30 @@ func TestAccountNotFoundIsStored(t *testing.T) {
 	storedBusinessError(t, ts, postingBody(t, cash, ids.New().String(), 1, 1, ""), http.StatusNotFound, "not_found")
 }
 
-// TestAnUnexpectedErrorIsNotStored: un error que no es de negocio (un 500) sube tal cual y no se
-// guarda, así que el reintento con la misma clave ejecuta el comando.
+// TestAnUnexpectedErrorIsNotStored: an error that is not a business one (a 500) goes up as is and is not
+// stored, so the retry with the same key runs the command.
 func TestAnUnexpectedErrorIsNotStored(t *testing.T) {
 	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool)}
-	op := operation{method: http.MethodPost, path: "/prueba", success: http.StatusCreated}
-	key, down := ids.New().String(), errors.New("la base se cayó")
+	op := operation{method: http.MethodPost, path: "/test", success: http.StatusCreated}
+	key, down := ids.New().String(), errors.New("the database went down")
 	failing := func(postgres.Tx) (any, error) { return nil, down }
-	succeeding := func(postgres.Tx) (any, error) { return map[string]string{"ok": "sí"}, nil }
+	succeeding := func(postgres.Tx) (any, error) { return map[string]string{"ok": "yes"}, nil }
 
 	ctx := withTestTrail(t)
 
 	p := testPrincipal()
-	if _, err := cmds.idempotent(ctx, p, op, key, "cuerpo", failing); !errors.Is(err, down) {
-		t.Fatalf("= %v; el error del comando debe subir tal cual", err)
+	if _, err := cmds.idempotent(ctx, p, op, key, "body", failing); !errors.Is(err, down) {
+		t.Fatalf("= %v; the command error must go up as is", err)
 	}
-	resp, err := cmds.idempotent(ctx, p, op, key, "cuerpo", succeeding)
+	resp, err := cmds.idempotent(ctx, p, op, key, "body", succeeding)
 
-	if err != nil || resp.status != http.StatusCreated || string(resp.body) != "{\"ok\":\"sí\"}\n" {
-		t.Fatalf("reintento tras un 500 = %+v, %v; se esperaba que corriera el comando", resp, err)
+	if err != nil || resp.status != http.StatusCreated || string(resp.body) != "{\"ok\":\"yes\"}\n" {
+		t.Fatalf("retry after a 500 = %+v, %v; want the command to run", resp, err)
 	}
 }
 
-// TestARequestInFlightIs409: si otra solicitud con la misma clave no termina dentro del lock_timeout
-// del pool, la segunda recibe 409 request_in_progress y no asienta.
+// TestARequestInFlightIs409: if another request with the same key does not finish within the pool's
+// lock_timeout, the second gets 409 request_in_progress and does not post.
 func TestARequestInFlightIs409(t *testing.T) {
 	entity := ids.New()
 	ts := apiServer(t, entity)
@@ -255,7 +255,7 @@ func TestARequestInFlightIs409(t *testing.T) {
 	key := ids.New().String()
 	claimed, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	releaseOnce := sync.OnceFunc(func() { close(release) })
-	defer releaseOnce() // si la prueba falla antes, la primera transacción no queda abierta
+	defer releaseOnce() // if the test fails earlier, the first transaction is not left open
 	go func() {
 		done <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
 			scope := keyScope(access.Principal{Subject: testSubject, LegalEntityID: entity}, postTransaction)
@@ -264,31 +264,31 @@ func TestARequestInFlightIs409(t *testing.T) {
 			}
 			close(claimed)
 			<-release
-			return errors.New("la primera se revierte")
+			return errors.New("the first is rolled back")
 		})
 	}()
 	select {
 	case <-claimed:
 	case err := <-done:
-		t.Fatalf("la primera no reclamó la clave: %v", err)
+		t.Fatalf("the first did not claim the key: %v", err)
 	}
 
 	r := postWithKey(t, ts, key, postingBody(t, cash, deposit, 100, 100, ""))
 	releaseOnce()
 	if err := <-done; err == nil {
-		t.Fatal("la primera transacción debía revertirse")
+		t.Fatal("the first transaction should have rolled back")
 	}
 
 	if r.status != http.StatusConflict || problemCode(t, r) != "request_in_progress" {
-		t.Fatalf("en vuelo = %d %s, se esperaba 409 request_in_progress", r.status, r.body)
+		t.Fatalf("in flight = %d %s, want 409 request_in_progress", r.status, r.body)
 	}
 	if got := balanceOf(t, ts, cash); got != 0 {
-		t.Errorf("saldo = %d, se esperaba 0", got)
+		t.Errorf("balance = %d, want 0", got)
 	}
 }
 
-// TestConcurrentRequestsPostOnce: 20 solicitudes a la vez con la misma clave asientan una sola
-// transacción, y todas reciben la misma respuesta: las que llegan mientras la primera corre la esperan.
+// TestConcurrentRequestsPostOnce: 20 simultaneous requests with the same key post a single transaction, and
+// all receive the same response: those that arrive while the first runs wait for it.
 func TestConcurrentRequestsPostOnce(t *testing.T) {
 	ts, cash, deposit := newAccounts(t)
 	key, ref := ids.New().String(), ids.New().String()
@@ -296,7 +296,7 @@ func TestConcurrentRequestsPostOnce(t *testing.T) {
 	responses := concurrently(t, 20, ts, key, postingBody(t, cash, deposit, 100, 100, ref))
 
 	if responses[0].status != http.StatusCreated {
-		t.Fatalf("respuesta = %d %s, se esperaba 201", responses[0].status, responses[0].body)
+		t.Fatalf("response = %d %s, want 201", responses[0].status, responses[0].body)
 	}
 	allTheSame(t, responses, responses[0])
 	var count int
@@ -304,12 +304,12 @@ func TestConcurrentRequestsPostOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if count != 1 {
-		t.Fatalf("transacciones asentadas = %d, se esperaba exactamente 1", count)
+		t.Fatalf("posted transactions = %d, want exactly 1", count)
 	}
 }
 
-// TestConcurrentReplaysAllGetTheResponse: varios reintentos a la vez de una clave ya completada leen
-// todos su respuesta; ninguno recibe 409.
+// TestConcurrentReplaysAllGetTheResponse: several simultaneous retries of an already completed key all read
+// its response; none gets 409.
 func TestConcurrentReplaysAllGetTheResponse(t *testing.T) {
 	ts, cash, deposit := newAccounts(t)
 	key, body := ids.New().String(), postingBody(t, cash, deposit, 100, 100, "")
@@ -318,63 +318,63 @@ func TestConcurrentReplaysAllGetTheResponse(t *testing.T) {
 	allTheSame(t, concurrently(t, 30, ts, key, body), first)
 }
 
-// TestKeysAreScopedByEntity: dos entidades que comparten la base pueden usar la misma clave.
+// TestKeysAreScopedByEntity: two entities sharing the database can use the same key.
 func TestKeysAreScopedByEntity(t *testing.T) {
 	key := ids.New().String()
 	for range 2 {
 		ts, cash, deposit := newAccounts(t)
 		if r := postWithKey(t, ts, key, postingBody(t, cash, deposit, 100, 100, "")); r.status != http.StatusCreated {
-			t.Fatalf("la misma clave en otra entidad = %d %s, se esperaba 201", r.status, r.body)
+			t.Fatalf("the same key in another entity = %d %s, want 201", r.status, r.body)
 		}
 	}
 }
 
-// TestKeysAreScopedBySubject: dos sujetos de una entidad no comparten claves; la misma clave con el mismo
-// cuerpo de otro sujeto no es un reintento y no recibe la respuesta del primero.
+// TestKeysAreScopedBySubject: two subjects of one entity do not share keys; the same key with the same body
+// from another subject is not a retry and does not receive the first one's response.
 func TestKeysAreScopedBySubject(t *testing.T) {
 	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool)}
-	op := operation{method: http.MethodPost, path: "/prueba", success: http.StatusCreated}
+	op := operation{method: http.MethodPost, path: "/test", success: http.StatusCreated}
 	key, entity := ids.New().String(), ids.New()
 	runs := 0
 	effect := func(postgres.Tx) (any, error) { runs++; return map[string]int{"run": runs}, nil }
 
-	for _, subject := range []string{"sujeto-a", "sujeto-b"} {
+	for _, subject := range []string{"subject-a", "subject-b"} {
 		p := access.Principal{Subject: subject, LegalEntityID: entity}
-		if _, err := cmds.idempotent(withTestTrail(t), p, op, key, "cuerpo", effect); err != nil {
+		if _, err := cmds.idempotent(withTestTrail(t), p, op, key, "body", effect); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	if runs != 2 {
-		t.Fatalf("el comando corrió %d veces para dos sujetos con la misma clave, se esperaba 2", runs)
+		t.Fatalf("the command ran %d times for two subjects with the same key, want 2", runs)
 	}
 }
 
-// TestACommandWithoutTrailFailsClosed: sin rastro de auditoría en el contexto, un comando no corre.
+// TestACommandWithoutTrailFailsClosed: without an audit trail in the context, a command does not run.
 func TestACommandWithoutTrailFailsClosed(t *testing.T) {
 	cmds := commands{uow: postgres.NewUnitOfWork(testPool), keys: idempotency.NewStore(testPool)}
-	op := operation{method: http.MethodPost, path: "/prueba", success: http.StatusCreated}
+	op := operation{method: http.MethodPost, path: "/test", success: http.StatusCreated}
 	ran := false
 	effect := func(postgres.Tx) (any, error) { ran = true; return map[string]string{}, nil }
 
 	_, runErr := cmds.run(t.Context(), op, effect)
-	_, keyErr := cmds.idempotent(t.Context(), testPrincipal(), op, ids.New().String(), "cuerpo", effect)
+	_, keyErr := cmds.idempotent(t.Context(), testPrincipal(), op, ids.New().String(), "body", effect)
 
 	if !errors.Is(runErr, errNoAuditTrail) || !errors.Is(keyErr, errNoAuditTrail) || ran {
-		t.Fatalf("sin rastro: run = %v, idempotent = %v, corrió el efecto: %v", runErr, keyErr, ran)
+		t.Fatalf("no trail: run = %v, idempotent = %v, effect ran: %v", runErr, keyErr, ran)
 	}
 }
 
-// withTestTrail es un contexto con el rastro de auditoría que pone withAudit, para correr un comando sin
-// pasar por el servidor.
+// withTestTrail is a context with the audit trail that withAudit sets, to run a command without going
+// through the server.
 func withTestTrail(t *testing.T) context.Context {
 	t.Helper()
 	return context.WithValue(t.Context(), auditTrailKey{}, &auditTrail{records: audit.New(), base: audit.Record{
-		Actor: "prueba", Role: "prueba", Channel: "prueba", CorrelationID: ids.New().String(), Command: "POST /prueba",
+		Actor: "test", Role: "test", Channel: "test", CorrelationID: ids.New().String(), Command: "POST /test",
 	}})
 }
 
-// testPrincipal es un operador de una entidad nueva.
+// testPrincipal is an operator of a new entity.
 func testPrincipal() access.Principal {
 	return access.Principal{Subject: testSubject, LegalEntityID: ids.New(), Roles: []string{testRole}}
 }

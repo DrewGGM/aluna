@@ -1,5 +1,5 @@
-// Package money es el kernel de dinero (ADR-0005): montos enteros en unidades menores de una moneda,
-// con aritmética que falla ante overflow o mezcla de monedas en vez de dar un resultado equivocado.
+// Package money is the money kernel (ADR-0005): integer amounts in a currency's minor units, with
+// arithmetic that fails on overflow or mixed currencies instead of giving a wrong result.
 package money
 
 import (
@@ -10,35 +10,35 @@ import (
 )
 
 var (
-	// ErrCurrencyMismatch indica una operación entre montos de monedas distintas.
-	ErrCurrencyMismatch = errors.New("monedas distintas")
-	// ErrOverflow indica que el resultado no cabe en int64.
-	ErrOverflow = errors.New("overflow de monto")
+	// ErrCurrencyMismatch means an operation between amounts in different currencies.
+	ErrCurrencyMismatch = errors.New("currency mismatch")
+	// ErrOverflow means the result does not fit in int64.
+	ErrOverflow = errors.New("amount overflow")
 )
 
-// Amount es un monto en unidades menores de su moneda: 100.000 COP es New(10_000_000, cop).
+// Amount is an amount in its currency's minor units: 100,000 COP is New(10_000_000, cop).
 type Amount struct {
 	units int64
 	cur   Currency
 }
 
-// New crea un monto de units unidades menores de c.
+// New creates an amount of units minor units of c.
 func New(units int64, c Currency) Amount { return Amount{units: units, cur: c} }
 
-// Units es el monto en unidades menores.
+// Units is the amount in minor units.
 func (a Amount) Units() int64 { return a.units }
 
-// Currency es la moneda del monto.
+// Currency is the amount's currency.
 func (a Amount) Currency() Currency { return a.cur }
 
-// IsZero dice si el monto es cero.
+// IsZero reports whether the amount is zero.
 func (a Amount) IsZero() bool { return a.units == 0 }
 
-// Sign devuelve -1, 0 o 1 según el signo del monto.
+// Sign returns -1, 0 or 1 according to the amount's sign.
 func (a Amount) Sign() int { return cmp.Compare(a.units, 0) }
 
-// Add suma b a a. Falla con ErrCurrencyMismatch si las monedas difieren o falta la moneda, y con
-// ErrOverflow si el resultado no cabe en int64; nunca da la vuelta.
+// Add adds b to a. It fails with ErrCurrencyMismatch if the currencies differ or the currency is
+// missing, and with ErrOverflow if the result does not fit in int64; it never wraps around.
 func (a Amount) Add(b Amount) (Amount, error) {
 	if err := a.sameCurrency(b, "+"); err != nil {
 		return Amount{}, err
@@ -50,8 +50,8 @@ func (a Amount) Add(b Amount) (Amount, error) {
 	return New(sum, a.cur), nil
 }
 
-// Sub resta b de a, con los mismos errores que Add. No se calcula como a + (-b): -MinInt64 no existe,
-// pero -1 - MinInt64 = MaxInt64 sí es un resultado válido.
+// Sub subtracts b from a, with the same errors as Add. It is not computed as a + (-b): -MinInt64 does
+// not exist, but -1 - MinInt64 = MaxInt64 is a valid result.
 func (a Amount) Sub(b Amount) (Amount, error) {
 	if err := a.sameCurrency(b, "-"); err != nil {
 		return Amount{}, err
@@ -63,7 +63,7 @@ func (a Amount) Sub(b Amount) (Amount, error) {
 	return New(diff, a.cur), nil
 }
 
-// Neg cambia el signo del monto. MinInt64 no tiene opuesto en int64.
+// Neg flips the amount's sign. MinInt64 has no opposite in int64.
 func (a Amount) Neg() (Amount, error) {
 	if a.units == math.MinInt64 {
 		return Amount{}, fmt.Errorf("%w: -(%d)", ErrOverflow, a.units)
@@ -71,8 +71,8 @@ func (a Amount) Neg() (Amount, error) {
 	return New(-a.units, a.cur), nil
 }
 
-// sameCurrency también rechaza el monto sin moneda: Amount{} es lo que devuelve un error descartado y
-// no debe poder acumularse en silencio.
+// sameCurrency also rejects the amount with no currency: Amount{} is what a discarded error returns and
+// it must not be able to accumulate silently.
 func (a Amount) sameCurrency(b Amount, op string) error {
 	if a.cur != b.cur || a.cur.code == "" {
 		return fmt.Errorf("%w: %q %s %q", ErrCurrencyMismatch, a.cur.code, op, b.cur.code)

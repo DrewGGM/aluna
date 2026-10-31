@@ -17,13 +17,13 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
 
-// SQLSTATE que fija la migración 0002 (y los de PostgreSQL que la acompañan).
+// SQLSTATEs set by migration 0002 (and the PostgreSQL ones that go with them).
 const (
-	checkViolation        = "23514" // invariante contable o CHECK
+	checkViolation        = "23514" // accounting invariant or CHECK
 	foreignKeyViolation   = "23503"
 	insufficientPrivilege = "42501"
-	prohibitedStatement   = "2F003" // cambio de algo asentado
-	none                  = ""      // sin error
+	prohibitedStatement   = "2F003" // change to something already posted
+	none                  = ""      // no error
 )
 
 var (
@@ -45,7 +45,7 @@ func newAccount(t *testing.T, entity ids.ID, kind, currency string) ids.ID {
 	id := ids.New()
 	_, err := testPool.Exec(t.Context(),
 		`INSERT INTO ledger.accounts (id, legal_entity_id, code, kind, currency) VALUES ($1, $2, $3, $4, $5)`,
-		id, entity, "cta-"+id.String(), kind, currency)
+		id, entity, "acct-"+id.String(), kind, currency)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,8 +72,8 @@ func insertEntries(ctx context.Context, tx pgx.Tx, txID ids.ID, entries []entry)
 	return nil
 }
 
-// post asienta una transacción de la entidad A como aluna_app (el rol del pool de pgtest) y devuelve
-// su ID y el error del COMMIT o del INSERT que falle antes.
+// post posts a transaction of entity A as aluna_app (the role of the pgtest pool) and returns its ID and
+// the error of the COMMIT or of the INSERT that fails first.
 func post(t *testing.T, entries ...entry) (ids.ID, error) {
 	t.Helper()
 	var txID ids.ID
@@ -98,7 +98,7 @@ func sqlState(err error) string {
 func TestPoolConnectsAsAppRole(t *testing.T) {
 	var user string
 	if err := testPool.QueryRow(t.Context(), `SELECT current_user`).Scan(&user); err != nil || user != "aluna_app" {
-		t.Fatalf("current_user = %q (%v): las pruebas deben correr con el rol de la aplicación", user, err)
+		t.Fatalf("current_user = %q (%v): the tests must run with the application role", user, err)
 	}
 }
 
@@ -110,29 +110,29 @@ func TestDeferredBalanceCheck(t *testing.T) {
 		entries []entry
 		want    string
 	}{
-		"balanceado":                        {[]entry{{cash, "COP", 10_000_000}, {deposit, "COP", -10_000_000}}, none},
-		"desbalanceado":                     {[]entry{{cash, "COP", 100}, {deposit, "COP", -99}}, checkViolation},
-		"un solo entry":                     {[]entry{{cash, "COP", 100}}, checkViolation},
-		"sin entries":                       {nil, checkViolation},
-		"dos monedas, cada una en 0":        {[]entry{{cash, "COP", 5}, {deposit, "COP", -5}, {usdCash, "USD", 7}, {usdDeposit, "USD", -7}}, none},
-		"dos monedas cruzadas":              {[]entry{{cash, "COP", 5}, {usdDeposit, "USD", -5}}, checkViolation},
-		"importe cero":                      {[]entry{{cash, "COP", 0}, {deposit, "COP", 0}}, checkViolation},
-		"moneda distinta a la de la cuenta": {[]entry{{cash, "USD", 5}, {deposit, "USD", -5}}, foreignKeyViolation},
-		"cuenta de otra entidad legal":      {[]entry{{cash, "COP", 5}, {otherEntity, "COP", -5}}, foreignKeyViolation},
+		"balanced":                          {[]entry{{cash, "COP", 10_000_000}, {deposit, "COP", -10_000_000}}, none},
+		"unbalanced":                        {[]entry{{cash, "COP", 100}, {deposit, "COP", -99}}, checkViolation},
+		"a single entry":                    {[]entry{{cash, "COP", 100}}, checkViolation},
+		"no entries":                        {nil, checkViolation},
+		"two currencies, each at 0":         {[]entry{{cash, "COP", 5}, {deposit, "COP", -5}, {usdCash, "USD", 7}, {usdDeposit, "USD", -7}}, none},
+		"two crossed currencies":            {[]entry{{cash, "COP", 5}, {usdDeposit, "USD", -5}}, checkViolation},
+		"zero amount":                       {[]entry{{cash, "COP", 0}, {deposit, "COP", 0}}, checkViolation},
+		"currency other than the account's": {[]entry{{cash, "USD", 5}, {deposit, "USD", -5}}, foreignKeyViolation},
+		"another legal entity's account":    {[]entry{{cash, "COP", 5}, {otherEntity, "COP", -5}}, foreignKeyViolation},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := post(t, tc.entries...)
 
 			if got := sqlState(err); got != tc.want {
-				t.Fatalf("SQLSTATE = %q, se esperaba %q (error: %v)", got, tc.want, err)
+				t.Fatalf("SQLSTATE = %q, want %q (error: %v)", got, tc.want, err)
 			}
 		})
 	}
 }
 
-// TestPostedTransactionTakesNoNewEntries cubre el reintento mal hecho: una transacción ya confirmada no
-// recibe legs nuevos aunque estén balanceados, porque duplicarían el movimiento.
+// TestPostedTransactionTakesNoNewEntries covers the botched retry: an already committed transaction takes
+// no new legs even if they are balanced, because they would duplicate the movement.
 func TestPostedTransactionTakesNoNewEntries(t *testing.T) {
 	cash, deposit := newAccount(t, legalEntityA, "asset", "COP"), newAccount(t, legalEntityA, "liability", "COP")
 	txID, err := post(t, entry{cash, "COP", 100}, entry{deposit, "COP", -100})
@@ -145,12 +145,12 @@ func TestPostedTransactionTakesNoNewEntries(t *testing.T) {
 	})
 
 	if got := sqlState(err); got != prohibitedStatement {
-		t.Fatalf("SQLSTATE = %q, se esperaba %q (error: %v)", got, prohibitedStatement, err)
+		t.Fatalf("SQLSTATE = %q, want %q (error: %v)", got, prohibitedStatement, err)
 	}
 }
 
-// TestEntriesInsideASavepointArePosted prueba que la regla de "misma transacción de base" no rompe un
-// posting con savepoints (pgx los usa con un Begin anidado).
+// TestEntriesInsideASavepointArePosted checks that the "same database transaction" rule does not break a
+// posting with savepoints (pgx uses them with a nested Begin).
 func TestEntriesInsideASavepointArePosted(t *testing.T) {
 	cash, deposit := newAccount(t, legalEntityA, "asset", "COP"), newAccount(t, legalEntityA, "liability", "COP")
 
@@ -168,8 +168,8 @@ func TestEntriesInsideASavepointArePosted(t *testing.T) {
 	}
 }
 
-// TestWritersCannotChooseTimeOrEntity manda posted_at, posted_xact, fecha valor y entidad falsos; la
-// base los reemplaza por los suyos (transactions_stamp, entries_stamp).
+// TestWritersCannotChooseTimeOrEntity sends forged posted_at, posted_xact, value date and entity; the
+// database replaces them with its own (transactions_stamp, entries_stamp).
 func TestWritersCannotChooseTimeOrEntity(t *testing.T) {
 	cash, deposit := newAccount(t, legalEntityA, "asset", "COP"), newAccount(t, legalEntityA, "liability", "COP")
 	forged := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -200,12 +200,12 @@ func TestWritersCannotChooseTimeOrEntity(t *testing.T) {
 			   OR e.legal_entity_id <> t.legal_entity_id))`,
 		txID).Scan(&forgedTx, &mismatched)
 	if err != nil || forgedTx != 0 || mismatched != 0 {
-		t.Fatalf("quedaron valores falsificados: transacción %d, entries %d (err = %v)", forgedTx, mismatched, err)
+		t.Fatalf("forged values remained: transaction %d, entries %d (err = %v)", forgedTx, mismatched, err)
 	}
 }
 
-// TestSetConstraintsImmediateCannotSneakALeg cubre el intento de adelantar el chequeo diferido con
-// SET CONSTRAINTS ALL IMMEDIATE (no pide privilegios) y después agregar un leg que crea dinero.
+// TestSetConstraintsImmediateCannotSneakALeg covers the attempt to bring the deferred check forward with
+// SET CONSTRAINTS ALL IMMEDIATE (it needs no privileges) and then add a leg that creates money.
 func TestSetConstraintsImmediateCannotSneakALeg(t *testing.T) {
 	cash, deposit := newAccount(t, legalEntityA, "asset", "COP"), newAccount(t, legalEntityA, "liability", "COP")
 
@@ -224,11 +224,11 @@ func TestSetConstraintsImmediateCannotSneakALeg(t *testing.T) {
 	})
 
 	if got := sqlState(err); got != checkViolation {
-		t.Fatalf("SQLSTATE = %q, se esperaba %q (error: %v)", got, checkViolation, err)
+		t.Fatalf("SQLSTATE = %q, want %q (error: %v)", got, checkViolation, err)
 	}
 }
 
-// reversalOf asienta, como aluna_app, una transacción balanceada de entity que revierte reversed.
+// reversalOf posts, as aluna_app, a balanced transaction of entity that reverses reversed.
 func reversalOf(t *testing.T, entity, reversed ids.ID, self bool) error {
 	t.Helper()
 	cash, deposit := newAccount(t, entity, "asset", "COP"), newAccount(t, entity, "liability", "COP")
@@ -240,7 +240,7 @@ func reversalOf(t *testing.T, entity, reversed ids.ID, self bool) error {
 		}
 		_, err := tx.Exec(t.Context(), `INSERT INTO ledger.transactions
 			(id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version, reverses_id)
-			VALUES ($1, $2, 'reversa', current_date, current_date, 'test', $3, 'tester', 'test', 'v1', $4)`,
+			VALUES ($1, $2, 'reversal', current_date, current_date, 'test', $3, 'tester', 'test', 'v1', $4)`,
 			id, entity, id.String(), target)
 		if err != nil {
 			return err
@@ -259,10 +259,10 @@ func TestReversalStaysInsideTheLegalEntity(t *testing.T) {
 	err = reversalOf(t, legalEntityB, original, false)
 
 	if got := sqlState(err); got != foreignKeyViolation {
-		t.Fatalf("una entidad no revierte transacciones de otra: SQLSTATE = %q (error: %v)", got, err)
+		t.Fatalf("an entity does not reverse another's transactions: SQLSTATE = %q (error: %v)", got, err)
 	}
 	if err := reversalOf(t, legalEntityA, original, false); err != nil {
-		t.Fatalf("la reversa dentro de la misma entidad debe pasar: %v", err)
+		t.Fatalf("the reversal within the same entity must go through: %v", err)
 	}
 }
 
@@ -279,19 +279,19 @@ func TestTransactionIsReversedOnlyOnce(t *testing.T) {
 	err = reversalOf(t, legalEntityA, original, false)
 
 	if got := constraintOf(err); got != "transactions_single_reversal" {
-		t.Fatalf("la segunda reversa debe chocar con transactions_single_reversal, fue %v", err)
+		t.Fatalf("the second reversal must conflict with transactions_single_reversal, got %v", err)
 	}
 }
 
 func TestExternalRefIsIdempotentPerSource(t *testing.T) {
 	cash, deposit := newAccount(t, legalEntityA, "asset", "COP"), newAccount(t, legalEntityA, "liability", "COP")
-	ref := "lote-" + ids.New().String()
+	ref := "batch-" + ids.New().String()
 	postWithRef := func() error {
 		return pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
 			id := ids.New()
 			_, err := tx.Exec(t.Context(), `INSERT INTO ledger.transactions
 				(id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version)
-				VALUES ($1, $2, 'test', current_date, current_date, 'nomina', $3, 'tester', 'test', 'v1')`,
+				VALUES ($1, $2, 'test', current_date, current_date, 'payroll', $3, 'tester', 'test', 'v1')`,
 				id, legalEntityA, ref)
 			if err != nil {
 				return err
@@ -306,7 +306,7 @@ func TestExternalRefIsIdempotentPerSource(t *testing.T) {
 	err := postWithRef()
 
 	if got := constraintOf(err); got != "transactions_idempotent_ref" {
-		t.Fatalf("repetir (source, external_ref) debe chocar con transactions_idempotent_ref, fue %v", err)
+		t.Fatalf("repeating (source, external_ref) must conflict with transactions_idempotent_ref, got %v", err)
 	}
 }
 
@@ -319,7 +319,7 @@ func constraintOf(err error) string {
 }
 
 func TestAccountConstraints(t *testing.T) {
-	taken := "caja-" + ids.New().String()
+	taken := "cash-" + ids.New().String()
 	if _, err := testPool.Exec(t.Context(), `INSERT INTO ledger.accounts (id, legal_entity_id, code, kind, currency)
 		VALUES ($1, $2, $3, 'asset', 'COP')`, ids.New(), legalEntityA, taken); err != nil {
 		t.Fatal(err)
@@ -329,24 +329,24 @@ func TestAccountConstraints(t *testing.T) {
 		owner            any
 		want             string
 	}{
-		"código repetido en la entidad": {taken, "asset", "sync", nil, "23505"},
-		"clase desconocida":             {"", "revenue", "sync", nil, checkViolation},
-		"modo desconocido":              {"", "asset", "lazy", nil, checkViolation},
-		"cuenta async con dueño":        {"", "liability", "async", "cliente-7", checkViolation},
-		"cuenta async interna":          {"", "asset", "async", nil, none},
+		"code repeated in the entity": {taken, "asset", "sync", nil, "23505"},
+		"unknown kind":                {"", "revenue", "sync", nil, checkViolation},
+		"unknown mode":                {"", "asset", "lazy", nil, checkViolation},
+		"async account with an owner": {"", "liability", "async", "customer-7", checkViolation},
+		"internal async account":      {"", "asset", "async", nil, none},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			id, code := ids.New(), tc.code
-			if code == "" { // un código único por corrida, para aislar la restricción que se prueba
-				code = "cta-" + id.String()
+			if code == "" { // a unique code per run, to isolate the constraint under test
+				code = "acct-" + id.String()
 			}
 			_, err := testPool.Exec(t.Context(), `INSERT INTO ledger.accounts
 				(id, legal_entity_id, code, kind, currency, balance_mode, owner_ref) VALUES ($1, $2, $3, $4, 'COP', $5, $6)`,
 				id, legalEntityA, code, tc.kind, tc.mode, tc.owner)
 
 			if got := sqlState(err); got != tc.want {
-				t.Fatalf("SQLSTATE = %q, se esperaba %q (error: %v)", got, tc.want, err)
+				t.Fatalf("SQLSTATE = %q, want %q (error: %v)", got, tc.want, err)
 			}
 		})
 	}
@@ -356,17 +356,17 @@ func TestTransactionCannotReverseItself(t *testing.T) {
 	err := reversalOf(t, legalEntityA, ids.ID{}, true)
 
 	if got := constraintOf(err); got != "transactions_not_self_reversal" {
-		t.Fatalf("se esperaba transactions_not_self_reversal, fue %v", err)
+		t.Fatalf("want transactions_not_self_reversal, got %v", err)
 	}
 }
 
 func TestCurrencyMustBeAnISOCode(t *testing.T) {
 	_, err := testPool.Exec(t.Context(),
-		`INSERT INTO ledger.accounts (id, legal_entity_id, code, kind, currency) VALUES ($1, $2, 'mal', 'asset', 'cop')`,
+		`INSERT INTO ledger.accounts (id, legal_entity_id, code, kind, currency) VALUES ($1, $2, 'bad', 'asset', 'cop')`,
 		ids.New(), legalEntityA)
 
 	if got := sqlState(err); got != checkViolation {
-		t.Fatalf("SQLSTATE = %q, se esperaba %q", got, checkViolation)
+		t.Fatalf("SQLSTATE = %q, want %q", got, checkViolation)
 	}
 }
 
@@ -383,32 +383,32 @@ func TestPostedRowsAreImmutable(t *testing.T) {
 	}{
 		"UPDATE entry":          {`UPDATE ledger.entries SET amount = amount * 2 WHERE transaction_id = $1`, byID},
 		"DELETE entry":          {`DELETE FROM ledger.entries WHERE transaction_id = $1`, byID},
-		"UPDATE transaction":    {`UPDATE ledger.transactions SET code = 'otro' WHERE id = $1`, byID},
+		"UPDATE transaction":    {`UPDATE ledger.transactions SET code = 'other' WHERE id = $1`, byID},
 		"DELETE transaction":    {`DELETE FROM ledger.transactions WHERE id = $1`, byID},
 		"TRUNCATE entries":      {`TRUNCATE ledger.entries`, nil},
-		"TRUNCATE transactions": {`TRUNCATE ledger.transactions, ledger.entries, ledger.holds`, nil}, // las tablas que la referencian
+		"TRUNCATE transactions": {`TRUNCATE ledger.transactions, ledger.entries, ledger.holds`, nil}, // the tables that reference it
 		"TRUNCATE holds":        {`TRUNCATE ledger.holds`, nil},
 	}
 	for name, attempt := range attempts {
-		t.Run(name+" como aluna_app", func(t *testing.T) {
-			if got := execInTx(t, false, attempt.sql, attempt.args...); got != insufficientPrivilege { // nunca se concedió
-				t.Fatalf("SQLSTATE = %q, se esperaba %q", got, insufficientPrivilege)
+		t.Run(name+" as aluna_app", func(t *testing.T) {
+			if got := execInTx(t, false, attempt.sql, attempt.args...); got != insufficientPrivilege { // never granted
+				t.Fatalf("SQLSTATE = %q, want %q", got, insufficientPrivilege)
 			}
 		})
-		t.Run(name+" como dueño", func(t *testing.T) {
-			if got := execInTx(t, true, attempt.sql, attempt.args...); got != prohibitedStatement { // el trigger
-				t.Fatalf("SQLSTATE = %q, se esperaba %q", got, prohibitedStatement)
+		t.Run(name+" as owner", func(t *testing.T) {
+			if got := execInTx(t, true, attempt.sql, attempt.args...); got != prohibitedStatement { // the trigger
+				t.Fatalf("SQLSTATE = %q, want %q", got, prohibitedStatement)
 			}
 		})
 	}
 	var n int
 	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM ledger.entries WHERE transaction_id = $1`, txID).Scan(&n); err != nil || n != 2 {
-		t.Fatalf("la transacción original debe seguir intacta: %d entries, err = %v", n, err)
+		t.Fatalf("the original transaction must stay intact: %d entries, err = %v", n, err)
 	}
 }
 
-// execInTx corre stmt en su propia transacción, como aluna_app o, con asOwner, volviendo al usuario
-// de la conexión (el dueño de las tablas), y devuelve el SQLSTATE.
+// execInTx runs stmt in its own transaction, as aluna_app or, with asOwner, switching back to the
+// connection's user (the tables' owner), and returns the SQLSTATE.
 func execInTx(t *testing.T, asOwner bool, stmt string, args ...any) string {
 	t.Helper()
 	var state string

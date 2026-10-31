@@ -1,5 +1,5 @@
-// Command aluna es el binario único del core bancario: cada proceso (API, worker, migraciones)
-// es un subcomando.
+// Command aluna is the single binary of the core banking system: each process (API, worker,
+// migrations) is a subcommand.
 package main
 
 import (
@@ -37,37 +37,38 @@ import (
 	"github.com/DrewGGM/aluna/internal/telemetry"
 )
 
-// version se inyecta al compilar: go build -ldflags "-X main.version=1.2.3" ./cmd/aluna
+// version is injected at build time: go build -ldflags "-X main.version=1.2.3" ./cmd/aluna
 var version = "dev"
 
-// stderr es una variable para que las pruebas capturen el uso.
+// stderr is a variable so tests can capture the usage text.
 var stderr io.Writer = os.Stderr
 
-const usage = `uso: aluna <comando>
+const usage = `usage: aluna <command>
 
-comandos:
-  api                        sirve la API HTTP en ALUNA_HTTP_ADDR (por defecto :8080); necesita
-                             ALUNA_DATABASE_URL, ALUNA_OIDC_ISSUER (el emisor de los tokens) y
-                             ALUNA_OIDC_AUDIENCE (la audiencia que deben traer); con
-                             OTEL_EXPORTER_OTLP_ENDPOINT exporta trazas y métricas por OTLP
-  worker                     corre los jobs (outbox, holds, saldos async, purgas, sellado de la
-                             auditoría) sobre ALUNA_DATABASE_URL, con el ancla de los bloques en
-                             ALUNA_AUDIT_ANCHOR_DIR; varios workers eligen un líder para los periódicos
+commands:
+  api                        serves the HTTP API on ALUNA_HTTP_ADDR (default :8080); requires
+                             ALUNA_DATABASE_URL, ALUNA_OIDC_ISSUER (the token issuer) and
+                             ALUNA_OIDC_AUDIENCE (the audience tokens must carry); with
+                             OTEL_EXPORTER_OTLP_ENDPOINT it exports traces and metrics over OTLP
+  worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing)
+                             on ALUNA_DATABASE_URL, anchoring blocks in ALUNA_AUDIT_ANCHOR_DIR;
+                             multiple workers elect a leader for the periodic jobs
   audit verify --from N --to M
-                             recalcula la cadena de auditoría de los bloques N a M y la compara con
-                             sus anclas en ALUNA_AUDIT_ANCHOR_DIR
-  migrate up|down|status     aplica, revierte la última o lista las migraciones en ALUNA_DATABASE_URL
-  version                    imprime la versión
+                             recomputes the audit chain of blocks N to M and checks it against
+                             their anchors in ALUNA_AUDIT_ANCHOR_DIR
+  migrate up|down|status     applies, rolls back the latest or lists the migrations on
+                             ALUNA_DATABASE_URL
+  version                    prints the version
 `
 
-// shutdownTimeout es lo máximo que se espera a que terminen los requests o los jobs en curso al apagar.
+// shutdownTimeout is the longest shutdown waits for in-flight requests or jobs to finish.
 const shutdownTimeout = 20 * time.Second
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout))
 }
 
-// run ejecuta el subcomando indicado y devuelve el código de salida del proceso.
+// run executes the given subcommand and returns the process exit code.
 func run(args []string, stdout io.Writer) int {
 	if len(args) == 0 {
 		return printUsage()
@@ -79,7 +80,7 @@ func run(args []string, stdout io.Writer) int {
 	case "audit":
 		return auditCommand(rest, stdout)
 	}
-	if len(rest) != 0 { // los demás comandos no llevan argumentos
+	if len(rest) != 0 { // the other commands take no arguments
 		return printUsage()
 	}
 	switch command {
@@ -110,22 +111,22 @@ func printVersion(stdout io.Writer) int {
 	return 0
 }
 
-// exitCode imprime el error de un subcomando de una sola ejecución y lo convierte en código de salida.
+// exitCode prints the error of a one-shot subcommand and turns it into an exit code.
 func exitCode(err error) int {
 	if err == nil {
 		return 0
 	}
-	fmt.Fprintln(stderr, err) //nolint:errcheck // si stderr falla no hay dónde reportarlo
+	fmt.Fprintln(stderr, err) //nolint:errcheck // if stderr fails there is nowhere to report it
 	return 1
 }
 
 func printUsage() int {
-	fmt.Fprint(stderr, usage) //nolint:errcheck // si stderr falla no hay dónde reportarlo
+	fmt.Fprint(stderr, usage) //nolint:errcheck // if stderr fails there is nowhere to report it
 	return 2
 }
 
-// untilSignal corre fn con un contexto que se cancela con SIGINT o SIGTERM. Tras la primera señal se
-// restaura el comportamiento normal, así una segunda Ctrl+C corta sin esperar el apagado.
+// untilSignal runs fn with a context that SIGINT or SIGTERM cancels. After the first signal the default
+// behavior is restored, so a second Ctrl+C exits without waiting for the shutdown.
 func untilSignal(fn func(ctx context.Context) int) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -140,40 +141,40 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// apiCommand lee la configuración del entorno, prepara la telemetría y corre la api; los logs van en
-// JSON a stdout.
+// apiCommand reads the configuration from the environment, sets up telemetry and runs the api; logs go
+// to stdout as JSON.
 func apiCommand(ctx context.Context, stdout io.Writer) int {
 	log, shutdown, err := telemetry.Setup(ctx, "aluna", version, stdout)
 	if err != nil {
-		return exitCode(fmt.Errorf("telemetría: %w", err))
+		return exitCode(fmt.Errorf("telemetry: %w", err))
 	}
 	defer flushTelemetry(ctx, shutdown, log)
 	cfg, err := apiConfigFromEnv()
 	if err != nil {
-		log.Error("configuración de la api", "error", err)
+		log.Error("api configuration", "error", err)
 		return 1
 	}
 	verifier, err := httpapi.NewOIDCVerifier(ctx, cfg.issuer, cfg.audience, log)
 	if err != nil {
-		log.Error("emisor de los tokens", "error", err)
+		log.Error("token issuer", "error", err)
 		return 1
 	}
 	authz, err := newAuthorization()
 	if err != nil {
-		log.Error("autorización", "error", err)
+		log.Error("authorization", "error", err)
 		return 1
 	}
 	return runAPI(ctx, cfg, verifier, authz, log)
 }
 
-// authorization es la política de roles, que también decide quién aprueba cada tipo de solicitud, y el
-// autorizador de las operaciones del contrato.
+// authorization holds the role policy, which also decides who approves each request type, and the
+// authorizer of the contract operations.
 type authorization struct {
 	policy     *access.Policy
 	authorizer *httpapi.Authorizer
 }
 
-// newAuthorization arma la autorización con la política de roles y el contrato que viajan en el binario.
+// newAuthorization builds the authorization from the role policy and the contract embedded in the binary.
 func newAuthorization() (authorization, error) {
 	policy, err := access.ParsePolicy(config.Roles)
 	if err != nil {
@@ -186,18 +187,18 @@ func newAuthorization() (authorization, error) {
 	return authorization{policy: policy, authorizer: authorizer}, nil
 }
 
-// flushTelemetry envía lo que quede de trazas y métricas antes de salir, sin esperar más de
-// telemetryFlushTimeout a un colector que no responde.
+// flushTelemetry sends any remaining traces and metrics before exiting, waiting no longer than
+// telemetryFlushTimeout for an unresponsive collector.
 func flushTelemetry(ctx context.Context, shutdown telemetry.Shutdown, log *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), telemetryFlushTimeout)
 	defer cancel()
 	if err := shutdown(ctx); err != nil {
-		log.Error("vaciar la telemetría", "error", err)
+		log.Error("flush telemetry", "error", err)
 	}
 }
 
-// apiConfig es la configuración de aluna api. La entidad legal de cada request sale de su token (FR-41),
-// no de la configuración.
+// apiConfig is the configuration of aluna api. The legal entity of each request comes from its token
+// (FR-41), not from the configuration.
 type apiConfig struct {
 	addr, dsn        string
 	issuer, audience string
@@ -210,51 +211,51 @@ func apiConfigFromEnv() (apiConfig, error) {
 	}
 	cfg.issuer, cfg.audience = os.Getenv("ALUNA_OIDC_ISSUER"), os.Getenv("ALUNA_OIDC_AUDIENCE")
 	if cfg.issuer == "" {
-		return apiConfig{}, fmt.Errorf("%w: falta ALUNA_OIDC_ISSUER", errNoOIDC)
+		return apiConfig{}, fmt.Errorf("%w: missing ALUNA_OIDC_ISSUER", errNoOIDC)
 	}
 	if cfg.audience == "" {
-		return apiConfig{}, fmt.Errorf("%w: falta ALUNA_OIDC_AUDIENCE", errNoOIDC)
+		return apiConfig{}, fmt.Errorf("%w: missing ALUNA_OIDC_AUDIENCE", errNoOIDC)
 	}
 	return cfg, nil
 }
 
 var (
-	errNoDatabaseURL = errors.New("falta ALUNA_DATABASE_URL")
-	errNoOIDC        = errors.New("configuración OIDC incompleta")
+	errNoDatabaseURL = errors.New("missing ALUNA_DATABASE_URL")
+	errNoOIDC        = errors.New("incomplete OIDC configuration")
 )
 
-// connectTimeout acota la conexión inicial: si la base no responde, el proceso falla en vez de dejar el
-// puerto abierto sin servir.
+// connectTimeout bounds the initial connection: if the database does not respond, the process fails
+// instead of leaving the port open without serving.
 const connectTimeout = 10 * time.Second
 
-// telemetryFlushTimeout acota el envío final de trazas y métricas al apagar.
+// telemetryFlushTimeout bounds the final send of traces and metrics on shutdown.
 const telemetryFlushTimeout = 5 * time.Second
 
-// readyTimeout acota el ping de /readyz: un probe no debe colgarse si la base no responde.
+// readyTimeout bounds the /readyz ping: a probe must not hang if the database does not respond.
 const readyTimeout = 2 * time.Second
 
-// runAPI abre el puerto primero (un puerto ocupado falla sin tocar la base), conecta la base, cablea
-// el ledger a mano y sirve hasta que ctx se cancela.
+// runAPI opens the port first (a busy port fails without touching the database), connects to the
+// database, wires the ledger by hand and serves until ctx is canceled.
 func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, authz authorization, log *slog.Logger) int {
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.addr)
 	if err != nil {
-		log.Error("no se pudo abrir el puerto", "addr", cfg.addr, "error", err)
+		log.Error("could not open the port", "addr", cfg.addr, "error", err)
 		return 1
 	}
 	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	pool, err := postgres.Open(openCtx, cfg.dsn)
 	if err != nil {
-		log.Error("no se pudo conectar a la base", "error", err)
+		log.Error("could not connect to the database", "error", err)
 		if closeErr := ln.Close(); closeErr != nil {
-			log.Error("cerrar el puerto", "error", closeErr)
+			log.Error("close the port", "error", closeErr)
 		}
 		return 1
 	}
 	defer pool.Close()
 	events, err := outbox.New(pool)
 	if err != nil {
-		log.Error("configurar el outbox", "error", err)
+		log.Error("configure the outbox", "error", err)
 		return 1
 	}
 	uow := postgres.NewUnitOfWork(pool)
@@ -277,57 +278,56 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	return serveAPI(ctx, ln, httpapi.NewServer(serverCfg, httpapi.Routes(api, log), log), log)
 }
 
-// serveAPI sirve en ln hasta que ctx se cancela y luego espera hasta shutdownTimeout a que terminen
-// los requests en curso.
+// serveAPI serves on ln until ctx is canceled and then waits up to shutdownTimeout for in-flight
+// requests to finish.
 func serveAPI(ctx context.Context, ln net.Listener, srv *http.Server, log *slog.Logger) int {
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
-	log.Info("api escuchando", "addr", ln.Addr().String())
+	log.Info("api listening", "addr", ln.Addr().String())
 
 	select {
 	case err := <-served:
-		log.Error("el servidor se detuvo", "error", err)
+		log.Error("server stopped", "error", err)
 		return 1
 	case <-ctx.Done():
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Error("apagado incompleto", "error", err)
+		log.Error("incomplete shutdown", "error", err)
 		return 1
 	}
 	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
-		log.Error("el servidor se detuvo", "error", err)
+		log.Error("server stopped", "error", err)
 		return 1
 	}
-	log.Info("api detenida")
+	log.Info("api stopped")
 	return 0
 }
 
-// workerCommand prepara la telemetría y corre el worker sobre ALUNA_DATABASE_URL; los logs van en JSON a
-// stdout.
+// workerCommand sets up telemetry and runs the worker on ALUNA_DATABASE_URL; logs go to stdout as JSON.
 func workerCommand(ctx context.Context, stdout io.Writer) int {
 	log, shutdown, err := telemetry.Setup(ctx, "aluna", version, stdout)
 	if err != nil {
-		return exitCode(fmt.Errorf("telemetría: %w", err))
+		return exitCode(fmt.Errorf("telemetry: %w", err))
 	}
 	defer flushTelemetry(ctx, shutdown, log)
 	dsn := os.Getenv("ALUNA_DATABASE_URL")
 	if dsn == "" {
-		log.Error("configuración del worker", "error", errNoDatabaseURL)
+		log.Error("worker configuration", "error", errNoDatabaseURL)
 		return 1
 	}
 	records, err := auditFromEnv()
 	if err != nil {
-		log.Error("configuración del worker", "error", err)
+		log.Error("worker configuration", "error", err)
 		return 1
 	}
 	return runWorker(ctx, dsn, records, log)
 }
 
-var errNoAnchorDir = errors.New("falta ALUNA_AUDIT_ANCHOR_DIR")
+var errNoAnchorDir = errors.New("missing ALUNA_AUDIT_ANCHOR_DIR")
 
-// auditFromEnv es el servicio de auditoría que sella y verifica, con el ancla de los bloques en
+// auditFromEnv returns the audit service that seals and verifies, anchoring blocks in
 // ALUNA_AUDIT_ANCHOR_DIR.
 func auditFromEnv() (*audit.Service, error) {
 	dir := os.Getenv("ALUNA_AUDIT_ANCHOR_DIR")
@@ -337,33 +337,33 @@ func auditFromEnv() (*audit.Service, error) {
 	return audit.WithFileAnchor(dir)
 }
 
-// runWorker conecta la base, cablea los jobs a mano y corre River hasta que ctx se cancela. Entonces deja
-// de tomar jobs y espera hasta shutdownTimeout a los que están corriendo antes de cancelarlos.
+// runWorker connects to the database, wires the jobs by hand and runs River until ctx is canceled. It then
+// stops taking jobs and waits up to shutdownTimeout for the running ones before canceling them.
 func runWorker(ctx context.Context, dsn string, records *audit.Service, log *slog.Logger) int {
 	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	pool, err := postgres.Open(openCtx, dsn)
 	if err != nil {
-		log.Error("no se pudo conectar a la base", "error", err)
+		log.Error("could not connect to the database", "error", err)
 		return 1
 	}
 	defer pool.Close()
 	client, err := newWorker(pool, records, log)
 	if err != nil {
-		log.Error("configurar el worker", "error", err)
+		log.Error("configure the worker", "error", err)
 		return 1
 	}
 	if err := client.Start(ctx); err != nil {
-		log.Error("arrancar el worker", "error", err)
+		log.Error("start the worker", "error", err)
 		return 1
 	}
-	log.Info("worker corriendo")
+	log.Info("worker running")
 	<-client.Stopped()
-	log.Info("worker detenido")
+	log.Info("worker stopped")
 	return 0
 }
 
-// newWorker arma el cliente River del worker con la configuración de jobs, cableada a mano.
+// newWorker builds the worker's River client from the jobs configuration, wired by hand.
 func newWorker(pool *pgxpool.Pool, records *audit.Service, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	events, err := outbox.New(pool)
 	if err != nil {
@@ -376,12 +376,12 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, log *slog.Logger) (*r
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)
 	if err != nil {
-		return nil, fmt.Errorf("cliente River: %w", err)
+		return nil, fmt.Errorf("river client: %w", err)
 	}
 	return client, nil
 }
 
-// auditCommand corre audit verify --from N --to M.
+// auditCommand runs audit verify --from N --to M.
 func auditCommand(args []string, stdout io.Writer) int {
 	if len(args) == 0 || args[0] != "verify" {
 		return printUsage()
@@ -397,7 +397,7 @@ func auditCommand(args []string, stdout io.Writer) int {
 	})
 }
 
-// runVerify recalcula la cadena de auditoría de los bloques from a to contra sus anclas.
+// runVerify recomputes the audit chain of blocks from through to and checks it against their anchors.
 func runVerify(ctx context.Context, dsn string, from, to int64, out io.Writer) error {
 	if dsn == "" {
 		return errNoDatabaseURL
@@ -416,11 +416,11 @@ func runVerify(ctx context.Context, dsn string, from, to int64, out io.Writer) e
 	if err := records.Verify(ctx, pool, from, to); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "cadena de auditoría íntegra: bloques %d a %d (o hasta el último sellado)\n", from, to)
+	_, err = fmt.Fprintf(out, "audit chain intact: blocks %d to %d (or up to the last sealed one)\n", from, to)
 	return err
 }
 
-// runMigrate aplica direction sobre la base de dsn con la conexión propia de las migraciones.
+// runMigrate applies direction to the dsn database over the migrations' own connection.
 func runMigrate(ctx context.Context, dsn, direction string, out io.Writer) error {
 	if dsn == "" {
 		return errNoDatabaseURL
@@ -429,6 +429,6 @@ func runMigrate(ctx context.Context, dsn, direction string, out io.Writer) error
 	if err != nil {
 		return err
 	}
-	defer db.Close() //nolint:errcheck // el proceso termina enseguida
+	defer db.Close() //nolint:errcheck // the process exits right after
 	return postgres.Migrate(ctx, db, direction, out)
 }

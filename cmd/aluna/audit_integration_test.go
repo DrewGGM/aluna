@@ -18,8 +18,8 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
 
-// TestAuditVerifyOverTheCLI: aluna audit verify sale con 0 sobre una cadena sin tocar y con 1, nombrando
-// el bloque, cuando alguien alteró un registro sellado.
+// TestAuditVerifyOverTheCLI: aluna audit verify exits with 0 on an untouched chain and with 1, naming the
+// block, when someone altered a sealed record.
 func TestAuditVerifyOverTheCLI(t *testing.T) {
 	appDSN, err := pgtest.AppDSN(testDSN)
 	if err != nil {
@@ -33,19 +33,19 @@ func TestAuditVerifyOverTheCLI(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	stderr = &errOut
-	if code := run(verify, &out); code != 0 || !strings.Contains(out.String(), "íntegra") {
-		t.Fatalf("verify de una cadena sin tocar = %d: %s %s", code, out.String(), errOut.String())
+	if code := run(verify, &out); code != 0 || !strings.Contains(out.String(), "intact") {
+		t.Fatalf("verify of an untouched chain = %d: %s %s", code, out.String(), errOut.String())
 	}
 	alterAsOwner(t, correlation)
 	errOut.Reset()
 
-	if code := run(verify, &out); code != 1 || !strings.Contains(errOut.String(), "bloque "+strconv.FormatInt(block, 10)) {
-		t.Fatalf("verify de una cadena alterada = %d: %s", code, errOut.String())
+	if code := run(verify, &out); code != 1 || !strings.Contains(errOut.String(), "block "+strconv.FormatInt(block, 10)) {
+		t.Fatalf("verify of an altered chain = %d: %s", code, errOut.String())
 	}
 }
 
-// sealedRecord guarda un registro y sella todo lo pendiente en un bloque con el ancla de
-// ALUNA_AUDIT_ANCHOR_DIR; devuelve el bloque y la correlación del registro.
+// sealedRecord stores a record and seals everything pending into a block with the anchor in
+// ALUNA_AUDIT_ANCHOR_DIR; it returns the block and the record's correlation ID.
 func sealedRecord(t *testing.T, dsn string) (int64, string) {
 	t.Helper()
 	pool, err := pgxpool.New(t.Context(), dsn)
@@ -60,7 +60,7 @@ func sealedRecord(t *testing.T, dsn string) (int64, string) {
 	uow, correlation := postgres.NewUnitOfWork(pool), ids.New().String()
 	err = uow.Do(t.Context(), func(tx postgres.Tx) error {
 		return records.Record(t.Context(), tx, audit.Record{
-			Actor: "operador", Role: "tesorero", Channel: "api", CorrelationID: correlation, Command: "POST /v1/transactions", Result: "ok",
+			Actor: "operator", Role: "treasurer", Channel: "api", CorrelationID: correlation, Command: "POST /v1/transactions", Result: "ok",
 		})
 	})
 	if err != nil {
@@ -68,25 +68,25 @@ func sealedRecord(t *testing.T, dsn string) (int64, string) {
 	}
 	block, err := records.Seal(t.Context(), uow, 10_000)
 	if err != nil || block == 0 {
-		t.Fatalf("sellar = %d, %v", block, err)
+		t.Fatalf("seal = %d, %v", block, err)
 	}
 	return block, correlation
 }
 
-// alterAsOwner cambia el resultado del registro sellado con los triggers apagados, como lo haría quien
-// administra la base.
+// alterAsOwner changes the result of the sealed record with the triggers disabled, as a database
+// administrator could.
 func alterAsOwner(t *testing.T, correlation string) {
 	t.Helper()
 	conn, err := pgx.Connect(t.Context(), testDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close(t.Context()) //nolint:errcheck // la prueba ya terminó con la conexión
+	defer conn.Close(t.Context()) //nolint:errcheck // the test is done with the connection
 	err = pgx.BeginFunc(t.Context(), conn, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(t.Context(), "ALTER TABLE audit.records DISABLE TRIGGER USER"); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(t.Context(), "UPDATE audit.records SET result = 'ok-falso' WHERE correlation_id = $1", correlation); err != nil {
+		if _, err := tx.Exec(t.Context(), "UPDATE audit.records SET result = 'ok-forged' WHERE correlation_id = $1", correlation); err != nil {
 			return err
 		}
 		_, err := tx.Exec(t.Context(), "ALTER TABLE audit.records ENABLE TRIGGER USER")

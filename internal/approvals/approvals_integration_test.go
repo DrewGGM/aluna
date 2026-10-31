@@ -29,8 +29,8 @@ var testPool *pgxpool.Pool
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
 const (
-	testKind       = "prueba.ajuste"
-	testPermission = "prueba.ajustes.aprobar"
+	testKind       = "test.adjustment"
+	testPermission = "test.adjustments.approve"
 )
 
 var testPolicy = func() *access.Policy {
@@ -41,8 +41,8 @@ var testPolicy = func() *access.Policy {
 	return p
 }()
 
-// world es una entidad con dos operadores, el que pide y el que aprueba, y un servicio cuyo único tipo
-// de solicitud corre exec.
+// world is an entity with two operators, the maker and the checker, and a service whose only request kind
+// runs exec.
 type world struct {
 	svc            *approvals.Service
 	maker, checker access.Principal
@@ -54,12 +54,12 @@ func newWorld(exec approvals.Executor) world {
 	svc.RegisterKind(testKind, testPermission, exec)
 	return world{
 		svc:     svc,
-		maker:   access.Principal{Subject: "operador-a", LegalEntityID: entity, Roles: []string{"operator"}},
-		checker: access.Principal{Subject: "operador-b", LegalEntityID: entity, Roles: []string{"operator"}},
+		maker:   access.Principal{Subject: "operator-a", LegalEntityID: entity, Roles: []string{"operator"}},
+		checker: access.Principal{Subject: "operator-b", LegalEntityID: entity, Roles: []string{"operator"}},
 	}
 }
 
-func inTx[T any](t *testing.T, fn func(tx postgres.Tx) (T, error)) (T, error) { //nolint:ireturn // T es lo que devuelve fn
+func inTx[T any](t *testing.T, fn func(tx postgres.Tx) (T, error)) (T, error) { //nolint:ireturn // T is what fn returns
 	t.Helper()
 	var out T
 	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
@@ -93,8 +93,8 @@ func (w world) reject(t *testing.T, id ids.ID, checker access.Principal, reason 
 	})
 }
 
-// TestApproveRunsTheCommandWithTheOriginalPayload (FR-39): aprobar corre el comando una vez, con el payload
-// que se pidió y el principal que aprueba, y la solicitud queda approved con su resultado.
+// TestApproveRunsTheCommandWithTheOriginalPayload (FR-39): approving runs the command once, with the payload
+// that was requested and the approving principal, and the request ends up approved with its result.
 func TestApproveRunsTheCommandWithTheOriginalPayload(t *testing.T) {
 	var gotPayload string
 	var gotChecker access.Principal
@@ -102,25 +102,25 @@ func TestApproveRunsTheCommandWithTheOriginalPayload(t *testing.T) {
 	w := newWorld(func(_ context.Context, _ postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
 		runs++
 		gotPayload, gotChecker = string(payload), checker
-		return json.RawMessage(`{"asentado": true}`), nil
+		return json.RawMessage(`{"posted": true}`), nil
 	})
-	r := w.request(t, map[string]any{"monto": 9_007_199_254_740_993})
+	r := w.request(t, map[string]any{"amount": 9_007_199_254_740_993})
 
 	approved, err := w.approve(t, r.ID, w.checker)
 
-	if err != nil || runs != 1 || gotPayload != `{"monto": 9007199254740993}` || gotChecker.Subject != "operador-b" {
-		t.Fatalf("= %v; corrió %d veces con %s y %+v", err, runs, gotPayload, gotChecker)
+	if err != nil || runs != 1 || gotPayload != `{"amount": 9007199254740993}` || gotChecker.Subject != "operator-b" {
+		t.Fatalf("= %v; ran %d times with %s and %+v", err, runs, gotPayload, gotChecker)
 	}
-	if approved.Status != approvals.StatusApproved || approved.Checker != "operador-b" || approved.Maker != "operador-a" ||
-		string(approved.Result) != `{"asentado": true}` || approved.DecidedAt == nil {
-		t.Fatalf("solicitud aprobada = %+v", approved)
+	if approved.Status != approvals.StatusApproved || approved.Checker != "operator-b" || approved.Maker != "operator-a" ||
+		string(approved.Result) != `{"posted": true}` || approved.DecidedAt == nil {
+		t.Fatalf("approved request = %+v", approved)
 	}
 }
 
-// TestACommandWithoutResult: un comando que no devuelve resultado, nil o vacío, deja la solicitud approved
-// con resultado null.
+// TestACommandWithoutResult: a command that returns no result, nil or empty, leaves the request approved
+// with a null result.
 func TestACommandWithoutResult(t *testing.T) {
-	for name, result := range map[string]json.RawMessage{"nil": nil, "vacío": {}} {
+	for name, result := range map[string]json.RawMessage{"nil": nil, "empty": {}} {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
 				return result, nil
@@ -130,16 +130,16 @@ func TestACommandWithoutResult(t *testing.T) {
 			approved, err := w.approve(t, r.ID, w.checker)
 
 			if err != nil || approved.Status != approvals.StatusApproved || string(approved.Result) != "null" {
-				t.Fatalf("= %+v, %v; se esperaba approved con resultado null", approved, err)
+				t.Fatalf("= %+v, %v; want approved with a null result", approved, err)
 			}
 		})
 	}
 }
 
-// TestALongRejectionIsTruncated: del error de un comando rechazado se guardan hasta 2 KB.
+// TestALongRejectionIsTruncated: up to 2 KB of a rejected command's error is stored.
 func TestALongRejectionIsTruncated(t *testing.T) {
 	w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
-		return nil, fmt.Errorf("%w: %s", approvals.ErrCommandRejected, strings.Repeat("á", 3000))
+		return nil, fmt.Errorf("%w: %s", approvals.ErrCommandRejected, strings.Repeat("€", 3000))
 	})
 	r := w.request(t, map[string]any{})
 
@@ -152,21 +152,21 @@ func TestALongRejectionIsTruncated(t *testing.T) {
 		return tx.QueryRow(t.Context(), `SELECT octet_length(error) FROM approvals.requests WHERE id = $1`, r.ID).Scan(&length)
 	})
 	if length == 0 || length > 2048 {
-		t.Fatalf("error guardado de %d bytes, se esperaba hasta 2048", length)
+		t.Fatalf("stored error of %d bytes, want up to 2048", length)
 	}
 }
 
-// TestARequestExpiresInSevenDays: una solicitud pendiente vence a los 7 días de creada.
+// TestARequestExpiresInSevenDays: a pending request expires 7 days after it is created.
 func TestARequestExpiresInSevenDays(t *testing.T) {
 	r := newWorld(succeed).request(t, map[string]any{})
 
 	if life := r.ExpiresAt.Sub(r.CreatedAt); life != 7*24*time.Hour || r.Status != approvals.StatusPending {
-		t.Fatalf("la solicitud %s vence a los %s de creada, se esperaba pendiente por 7 días", r.Status, life)
+		t.Fatalf("the %s request expires %s after creation, want pending for 7 days", r.Status, life)
 	}
 }
 
-// TestTheMakerCannotDecide (AB-5, TH-4): quien pidió no aprueba ni rechaza su solicitud, y la base lo
-// impide aunque el servicio no lo revisara.
+// TestTheMakerCannotDecide (AB-5, TH-4): the maker neither approves nor rejects their request, and the
+// database prevents it even if the service did not check.
 func TestTheMakerCannotDecide(t *testing.T) {
 	w := newWorld(succeed)
 	r := w.request(t, map[string]any{})
@@ -175,7 +175,7 @@ func TestTheMakerCannotDecide(t *testing.T) {
 	_, rejectErr := w.reject(t, r.ID, w.maker, "no")
 
 	if !errors.Is(approveErr, approvals.ErrSelfApproval) || !errors.Is(rejectErr, approvals.ErrSelfApproval) {
-		t.Fatalf("aprobar = %v, rechazar = %v; se esperaba ErrSelfApproval", approveErr, rejectErr)
+		t.Fatalf("approve = %v, reject = %v; want ErrSelfApproval", approveErr, rejectErr)
 	}
 	_, err := inTx(t, func(tx postgres.Tx) (int64, error) {
 		tag, err := tx.Exec(t.Context(), `UPDATE approvals.requests SET status = 'rejected', checker = maker, reason = 'x',
@@ -183,7 +183,7 @@ func TestTheMakerCannotDecide(t *testing.T) {
 		return tag.RowsAffected(), err
 	})
 	if code := pgCode(err); code != "23514" {
-		t.Fatalf("checker = maker por SQL = %v, se esperaba el CHECK (23514)", err)
+		t.Fatalf("checker = maker via SQL = %v, want the CHECK (23514)", err)
 	}
 }
 
@@ -199,43 +199,43 @@ func pgCode(err error) string {
 	return ""
 }
 
-// TestARejectedCommandLeavesTheRequestFailed: si el comando se rechaza por una regla de negocio, lo que
-// alcanzó a hacer se deshace y la solicitud queda failed con el error; no se puede volver a aprobar.
+// TestARejectedCommandLeavesTheRequestFailed: if the command is rejected on a business rule, whatever it
+// managed to do is undone and the request ends up failed with the error; it cannot be approved again.
 func TestARejectedCommandLeavesTheRequestFailed(t *testing.T) {
 	var w world
 	w = newWorld(func(ctx context.Context, tx postgres.Tx, _ json.RawMessage, checker access.Principal) (json.RawMessage, error) {
-		if _, err := w.svc.Request(ctx, tx, testKind, map[string]any{"efecto": "parcial"}, checker); err != nil {
+		if _, err := w.svc.Request(ctx, tx, testKind, map[string]any{"effect": "partial"}, checker); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("%w: fondos insuficientes\x00", approvals.ErrCommandRejected)
+		return nil, fmt.Errorf("%w: insufficient funds\x00", approvals.ErrCommandRejected)
 	})
 	r := w.request(t, map[string]any{})
 
 	failed, err := w.approve(t, r.ID, w.checker)
 
-	if err != nil || failed.Status != approvals.StatusFailed || failed.Checker != "operador-b" {
-		t.Fatalf("= %+v, %v; se esperaba failed", failed, err)
+	if err != nil || failed.Status != approvals.StatusFailed || failed.Checker != "operator-b" {
+		t.Fatalf("= %+v, %v; want failed", failed, err)
 	}
 	var stored string
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT error FROM approvals.requests WHERE id = $1`, r.ID).Scan(&stored)
 	})
-	if stored != "el comando aprobado se rechazó: fondos insuficientes" {
-		t.Fatalf("error guardado = %q, se esperaba el del comando", stored)
+	if stored != "the approved command was rejected: insufficient funds" {
+		t.Fatalf("stored error = %q, want the command's", stored)
 	}
 	list, err := w.svc.List(t.Context(), testPool, w.maker.LegalEntityID, "")
 	if err != nil || len(list) != 1 {
-		t.Fatalf("solicitudes de la entidad = %d (%v); el efecto del comando fallido debía deshacerse", len(list), err)
+		t.Fatalf("entity requests = %d (%v); the failed command's effect should have been undone", len(list), err)
 	}
 	if _, err := w.approve(t, r.ID, w.checker); !errors.Is(err, approvals.ErrNotPending) {
-		t.Fatalf("aprobar una failed = %v, se esperaba ErrNotPending", err)
+		t.Fatalf("approving a failed one = %v, want ErrNotPending", err)
 	}
 }
 
-// TestAnUnexpectedErrorKeepsTheRequestPending: un error del comando que no es un rechazo de negocio (un
-// timeout, una dependencia caída) sube sin decidir la solicitud, que se puede aprobar después.
+// TestAnUnexpectedErrorKeepsTheRequestPending: a command error that is not a business rejection (a timeout,
+// a dependency down) is returned without deciding the request, which can be approved later.
 func TestAnUnexpectedErrorKeepsTheRequestPending(t *testing.T) {
-	down := errors.New("la dependencia no responde")
+	down := errors.New("the dependency does not respond")
 	fail := true
 	w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
 		if fail {
@@ -251,15 +251,15 @@ func TestAnUnexpectedErrorKeepsTheRequestPending(t *testing.T) {
 	approved, retryErr := w.approve(t, r.ID, w.checker)
 
 	if !errors.Is(err, down) || listErr != nil || len(pending) != 1 {
-		t.Fatalf("= %v; pendientes %d (%v); se esperaba el error y la solicitud pendiente", err, len(pending), listErr)
+		t.Fatalf("= %v; pending %d (%v); want the error and the request pending", err, len(pending), listErr)
 	}
 	if retryErr != nil || approved.Status != approvals.StatusApproved {
-		t.Fatalf("aprobar de nuevo = %+v, %v; se esperaba approved", approved, retryErr)
+		t.Fatalf("approving again = %+v, %v; want approved", approved, retryErr)
 	}
 }
 
-// TestAConflictIsRetriedNotFailed: un conflicto que la Unit of Work repite no deja la solicitud failed: se
-// repite la aprobación entera y, si el conflicto pasa, queda approved.
+// TestAConflictIsRetriedNotFailed: a conflict that the Unit of Work retries does not leave the request
+// failed: the whole approval is retried and, once the conflict clears, it ends up approved.
 func TestAConflictIsRetriedNotFailed(t *testing.T) {
 	attempts := 0
 	w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
@@ -274,40 +274,40 @@ func TestAConflictIsRetriedNotFailed(t *testing.T) {
 	approved, err := w.approve(t, r.ID, w.checker)
 
 	if err != nil || approved.Status != approvals.StatusApproved || attempts != 2 {
-		t.Fatalf("= %+v, %v tras %d intentos; se esperaba approved al segundo", approved, err, attempts)
+		t.Fatalf("= %+v, %v after %d attempts; want approved on the second", approved, err, attempts)
 	}
 }
 
-// TestADecidedRequestDoesNotChange: aprobar o rechazar dos veces da ErrNotPending, y la base no deja
-// cambiar ni borrar una solicitud decidida, ni lo que se pidió en una pendiente.
+// TestADecidedRequestDoesNotChange: approving or rejecting twice gives ErrNotPending, and the database does
+// not allow changing or deleting a decided request, nor what was requested in a pending one.
 func TestADecidedRequestDoesNotChange(t *testing.T) {
 	w := newWorld(succeed)
 	decided := w.request(t, map[string]any{})
-	if _, err := w.reject(t, decided.ID, w.checker, "no corresponde"); err != nil {
+	if _, err := w.reject(t, decided.ID, w.checker, "not applicable"); err != nil {
 		t.Fatal(err)
 	}
 	pending := w.request(t, map[string]any{})
 
 	_, approveErr := w.approve(t, decided.ID, w.checker)
-	_, rejectErr := w.reject(t, decided.ID, w.checker, "otra vez")
+	_, rejectErr := w.reject(t, decided.ID, w.checker, "once more")
 
 	if !errors.Is(approveErr, approvals.ErrNotPending) || !errors.Is(rejectErr, approvals.ErrNotPending) {
-		t.Fatalf("aprobar = %v, rechazar = %v; se esperaba ErrNotPending", approveErr, rejectErr)
+		t.Fatalf("approve = %v, reject = %v; want ErrNotPending", approveErr, rejectErr)
 	}
 	for name, sql := range map[string]string{
-		"cambiar una decidida":                `UPDATE approvals.requests SET reason = 'otro' WHERE id = '` + decided.ID.String() + `'`,
-		"borrar una decidida":                 `DELETE FROM approvals.requests WHERE id = '` + decided.ID.String() + `'`,
-		"cambiar el payload de una pendiente": `UPDATE approvals.requests SET payload = '{"x": 1}' WHERE id = '` + pending.ID.String() + `'`,
-		"truncar":                             `TRUNCATE approvals.requests`,
+		"change a decided one":                `UPDATE approvals.requests SET reason = 'other' WHERE id = '` + decided.ID.String() + `'`,
+		"delete a decided one":                `DELETE FROM approvals.requests WHERE id = '` + decided.ID.String() + `'`,
+		"change the payload of a pending one": `UPDATE approvals.requests SET payload = '{"x": 1}' WHERE id = '` + pending.ID.String() + `'`,
+		"truncate":                            `TRUNCATE approvals.requests`,
 	} {
 		err := ownerExec(t, sql)
 		if pgCode(err) != "2F003" {
-			t.Errorf("%s como dueño = %v, se esperaba que la base lo impidiera", name, err)
+			t.Errorf("%s as owner = %v, want the database to prevent it", name, err)
 		}
 	}
 }
 
-// ownerExec corre sql como dueño de las tablas, en un savepoint que siempre se deshace, y devuelve su error.
+// ownerExec runs sql as the table owner, in a savepoint that is always rolled back, and returns its error.
 func ownerExec(t *testing.T, sql string) error {
 	t.Helper()
 	var execErr error
@@ -322,8 +322,8 @@ func ownerExec(t *testing.T, sql string) error {
 	return execErr
 }
 
-// TestAnExpiredRequestCannotBeDecided: a los 7 días una pendiente vence: no se aprueba ni se rechaza, ni
-// siquiera por SQL, y List la muestra como expired.
+// TestAnExpiredRequestCannotBeDecided: after 7 days a pending request expires: it is neither approved nor
+// rejected, not even via SQL, and List shows it as expired.
 func TestAnExpiredRequestCannotBeDecided(t *testing.T) {
 	w := newWorld(succeed)
 	expired := ids.New()
@@ -335,24 +335,24 @@ func TestAnExpiredRequestCannotBeDecided(t *testing.T) {
 	})
 
 	_, approveErr := w.approve(t, expired, w.checker)
-	_, rejectErr := w.reject(t, expired, w.checker, "tarde")
+	_, rejectErr := w.reject(t, expired, w.checker, "too late")
 	list, err := w.svc.List(t.Context(), testPool, w.maker.LegalEntityID, approvals.StatusExpired)
 
 	if !errors.Is(approveErr, approvals.ErrExpired) || !errors.Is(rejectErr, approvals.ErrExpired) {
-		t.Fatalf("aprobar = %v, rechazar = %v; se esperaba ErrExpired", approveErr, rejectErr)
+		t.Fatalf("approve = %v, reject = %v; want ErrExpired", approveErr, rejectErr)
 	}
 	if err != nil || len(list) != 1 || list[0].ID != expired || list[0].Status != approvals.StatusExpired {
-		t.Fatalf("vencidas = %+v (%v), se esperaba solo %s", list, err, expired)
+		t.Fatalf("expired = %+v (%v), want only %s", list, err, expired)
 	}
-	sql := `UPDATE approvals.requests SET status = 'rejected', checker = 'operador-b', reason = 'x', decided_at = now()
+	sql := `UPDATE approvals.requests SET status = 'rejected', checker = 'operator-b', reason = 'x', decided_at = now()
 		WHERE id = '` + expired.String() + `'`
 	if err := ownerExec(t, sql); pgCode(err) != "2F003" {
-		t.Fatalf("decidir por SQL una vencida = %v, se esperaba que la base lo impidiera", err)
+		t.Fatalf("deciding an expired one via SQL = %v, want the database to prevent it", err)
 	}
 }
 
-// TestOnlyACheckerWithThePermissionDecides: aprueba quien tiene el permiso del tipo con alcance all, de la
-// misma entidad; un tipo que nadie registró no se pide.
+// TestOnlyACheckerWithThePermissionDecides: whoever holds the kind's permission with scope all, in the same
+// entity, approves; a kind nobody registered cannot be requested.
 func TestOnlyACheckerWithThePermissionDecides(t *testing.T) {
 	w := newWorld(succeed)
 	r := w.request(t, map[string]any{})
@@ -360,27 +360,27 @@ func TestOnlyACheckerWithThePermissionDecides(t *testing.T) {
 		checker access.Principal
 		want    error
 	}{
-		"sin el permiso":   {access.Principal{Subject: "auditor", LegalEntityID: w.maker.LegalEntityID, Roles: []string{"auditor"}}, access.ErrForbidden},
-		"solo alcance own": {access.Principal{Subject: "canal", LegalEntityID: w.maker.LegalEntityID, Roles: []string{"channel"}}, access.ErrForbidden},
-		"de otra entidad":  {access.Principal{Subject: "operador-x", LegalEntityID: ids.New(), Roles: []string{"operator"}}, approvals.ErrNotFound},
+		"without the permission": {access.Principal{Subject: "auditor", LegalEntityID: w.maker.LegalEntityID, Roles: []string{"auditor"}}, access.ErrForbidden},
+		"scope own only":         {access.Principal{Subject: "channel", LegalEntityID: w.maker.LegalEntityID, Roles: []string{"channel"}}, access.ErrForbidden},
+		"from another entity":    {access.Principal{Subject: "operator-x", LegalEntityID: ids.New(), Roles: []string{"operator"}}, approvals.ErrNotFound},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			if _, err := w.approve(t, r.ID, tc.checker); !errors.Is(err, tc.want) {
-				t.Fatalf("= %v, se esperaba %v", err, tc.want)
+				t.Fatalf("= %v, want %v", err, tc.want)
 			}
 		})
 	}
 	_, err := inTx(t, func(tx postgres.Tx) (approvals.Request, error) {
-		return w.svc.Request(t.Context(), tx, "otro.tipo", map[string]any{}, w.maker)
+		return w.svc.Request(t.Context(), tx, "other.kind", map[string]any{}, w.maker)
 	})
 	if !errors.Is(err, approvals.ErrUnknownKind) {
-		t.Fatalf("pedir un tipo sin registrar = %v, se esperaba ErrUnknownKind", err)
+		t.Fatalf("requesting an unregistered kind = %v, want ErrUnknownKind", err)
 	}
 }
 
-// TestRejectionNeedsAReason: un rechazo sin motivo no se guarda; con motivo, la solicitud queda rejected
-// y el comando no corre.
+// TestRejectionNeedsAReason: a rejection without a reason is not stored; with a reason, the request ends up
+// rejected and the command does not run.
 func TestRejectionNeedsAReason(t *testing.T) {
 	runs := 0
 	w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
@@ -390,25 +390,25 @@ func TestRejectionNeedsAReason(t *testing.T) {
 	r := w.request(t, map[string]any{})
 
 	_, noReason := w.reject(t, r.ID, w.checker, "   ")
-	rejected, err := w.reject(t, r.ID, w.checker, "monto equivocado")
+	rejected, err := w.reject(t, r.ID, w.checker, "wrong amount")
 
 	if !errors.Is(noReason, approvals.ErrNoReason) {
-		t.Fatalf("sin motivo = %v, se esperaba ErrNoReason", noReason)
+		t.Fatalf("without a reason = %v, want ErrNoReason", noReason)
 	}
-	if err != nil || rejected.Status != approvals.StatusRejected || rejected.Reason != "monto equivocado" || runs != 0 {
-		t.Fatalf("= %+v, %v; el comando corrió %d veces", rejected, err, runs)
+	if err != nil || rejected.Status != approvals.StatusRejected || rejected.Reason != "wrong amount" || runs != 0 {
+		t.Fatalf("= %+v, %v; the command ran %d times", rejected, err, runs)
 	}
 }
 
-// TestListFiltersByStatusAndEntity: List solo ve la entidad pedida, de la más nueva a la más vieja, y
-// filtra por estado.
+// TestListFiltersByStatusAndEntity: List only sees the requested entity, newest first, and filters by
+// state.
 func TestListFiltersByStatusAndEntity(t *testing.T) {
 	w := newWorld(succeed)
 	first, second := w.request(t, map[string]any{}), w.request(t, map[string]any{})
 	if _, err := w.approve(t, first.ID, w.checker); err != nil {
 		t.Fatal(err)
 	}
-	newWorld(succeed).request(t, map[string]any{}) // de otra entidad
+	newWorld(succeed).request(t, map[string]any{}) // from another entity
 
 	all, errAll := w.svc.List(t.Context(), testPool, w.maker.LegalEntityID, "")
 	pending, errPending := w.svc.List(t.Context(), testPool, w.maker.LegalEntityID, approvals.StatusPending)
@@ -421,9 +421,9 @@ func TestListFiltersByStatusAndEntity(t *testing.T) {
 		return out
 	}
 	if errAll != nil || !slices.Equal(idsOf(all), []ids.ID{second.ID, first.ID}) {
-		t.Fatalf("todas = %v (%v), se esperaba [%s %s]", idsOf(all), errAll, second.ID, first.ID)
+		t.Fatalf("all = %v (%v), want [%s %s]", idsOf(all), errAll, second.ID, first.ID)
 	}
 	if errPending != nil || !slices.Equal(idsOf(pending), []ids.ID{second.ID}) {
-		t.Fatalf("pendientes = %v (%v), se esperaba [%s]", idsOf(pending), errPending, second.ID)
+		t.Fatalf("pending = %v (%v), want [%s]", idsOf(pending), errPending, second.ID)
 	}
 }

@@ -7,28 +7,29 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger/internal/domain"
 )
 
-// AsyncCursor es hasta dónde agregó el agregador: el último entry sumado y la transacción de base que lo
-// asentó (posted_xact). Avanza en orden de (Xact, EntryID).
+// AsyncCursor is how far the aggregator has aggregated: the last summed entry and the database
+// transaction that posted it (posted_xact). It advances in (Xact, EntryID) order.
 type AsyncCursor struct {
 	Xact    uint64
 	EntryID int64
 }
 
-// AggregationStore es la persistencia del agregador de saldos async.
+// AggregationStore is the persistence of the async balance aggregator.
 type AggregationStore interface {
-	// LockAsyncCursor bloquea y lee el cursor: un solo agregador avanza a la vez, así que nadie más
-	// escribe el saldo de una cuenta async (Post no lo toca y un hold no sale de una async).
+	// LockAsyncCursor locks and reads the cursor: only one aggregator advances at a time, so nobody else
+	// writes an async account's balance (Post does not touch it and a hold does not leave an async one).
 	LockAsyncCursor(ctx context.Context) (AsyncCursor, error)
-	// AsyncEntriesAfter lee hasta limit entries de cuentas async posteriores a c, en orden, solo de
-	// transacciones de base que ya no están en curso, y el cursor del último leído.
+	// AsyncEntriesAfter reads up to limit async-account entries after c, in order, only from database
+	// transactions that are no longer in progress, and the cursor of the last one read.
 	AsyncEntriesAfter(ctx context.Context, c AsyncCursor, limit int) ([]domain.EntryInput, AsyncCursor, error)
 	AddToBalance(ctx context.Context, accountID ids.ID, d BalanceDelta) error
 	MoveAsyncCursor(ctx context.Context, c AsyncCursor) error
 }
 
-// AggregateAsyncBalances suma a los saldos de las cuentas async un lote de hasta limit entries que aún
-// no agregó (FR-9) y mueve el cursor en la misma transacción: si algo falla, ni los saldos ni el cursor
-// cambian, y agregar otra vez no duplica. Devuelve cuántos entries agregó.
+// AggregateAsyncBalances adds to the async accounts' balances a batch of up to limit entries not yet
+// aggregated (FR-9) and moves the cursor in the same transaction: if something fails, neither the
+// balances nor the cursor change, and aggregating again does not duplicate. It returns how many entries
+// it aggregated.
 func AggregateAsyncBalances(ctx context.Context, store AggregationStore, limit int) (int, error) {
 	from, err := store.LockAsyncCursor(ctx)
 	if err != nil {

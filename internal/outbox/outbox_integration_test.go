@@ -34,10 +34,10 @@ const (
 	checkViolation = "23514"
 )
 
-var errFlaky = errors.New("falla a propósito")
+var errFlaky = errors.New("fails on purpose")
 
-// recorder cuenta cuántas veces se llamó su handler con cada evento; las primeras failFirst llamadas
-// fallan.
+// recorder counts how many times its handler was called with each event; the first failFirst calls
+// fail.
 type recorder struct {
 	mu        sync.Mutex
 	calls     map[ids.ID]int
@@ -72,8 +72,8 @@ func newOutbox(t *testing.T, rec *recorder) *Outbox {
 	return o
 }
 
-// work arranca un cliente River que publica los eventos de o, como el worker (T-031), y devuelve los
-// jobs que termina.
+// work starts a River client that publishes o's events, like the worker (T-031), and returns the jobs
+// it finishes.
 func work(t *testing.T, o *Outbox) <-chan *river.Event {
 	t.Helper()
 	workers := river.NewWorkers()
@@ -97,7 +97,7 @@ func work(t *testing.T, o *Outbox) <-chan *river.Event {
 	return finished
 }
 
-// waitFor espera a que termine el job que publica el evento id.
+// waitFor waits for the job that publishes event id to finish.
 func waitFor(t *testing.T, finished <-chan *river.Event, id ids.ID) *river.Event {
 	t.Helper()
 	timeout := time.After(10 * time.Second)
@@ -112,20 +112,20 @@ func waitFor(t *testing.T, finished <-chan *river.Event, id ids.ID) *river.Event
 				return ev
 			}
 		case <-timeout:
-			t.Fatalf("el job del evento %s no terminó en 10 s", id)
+			t.Fatalf("the job for event %s did not finish within 10 s", id)
 		}
 	}
 }
 
 func event() Event {
 	return Event{
-		ID: ids.New(), Type: happened, Subject: "cosa/" + ids.New().String(), LegalEntityID: ids.New(), CorrelationID: ids.New(),
+		ID: ids.New(), Type: happened, Subject: "thing/" + ids.New().String(), LegalEntityID: ids.New(), CorrelationID: ids.New(),
 		SchemaVersion: 1, Data: map[string]any{"units": 100},
 	}
 }
 
-// emit emite e en su propia transacción. El job que queda se borra al final para que no lo trabaje el
-// cliente River de otra prueba.
+// emit emits e in its own transaction. The leftover job is deleted at the end so that another test's
+// River client does not work it.
 func emit(t *testing.T, o *Outbox, e Event) {
 	t.Helper()
 	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error { return o.Emit(t.Context(), tx, e) })
@@ -135,7 +135,7 @@ func emit(t *testing.T, o *Outbox, e Event) {
 	dropJob(t, e.ID)
 }
 
-// dropJob borra al final de la prueba el job que publica el evento id.
+// dropJob deletes, at the end of the test, the job that publishes event id.
 func dropJob(t *testing.T, id ids.ID) {
 	t.Helper()
 	t.Cleanup(func() {
@@ -160,8 +160,8 @@ func published(t *testing.T, id ids.ID) bool {
 	return at != nil
 }
 
-// TestACommittedEventIsDelivered: el job del evento confirmado lo entrega al consumidor y lo marca
-// publicado.
+// TestACommittedEventIsDelivered: the committed event's job delivers it to the consumer and marks it
+// published.
 func TestACommittedEventIsDelivered(t *testing.T) {
 	rec := newRecorder()
 	o := newOutbox(t, rec)
@@ -171,19 +171,19 @@ func TestACommittedEventIsDelivered(t *testing.T) {
 	emit(t, o, e)
 
 	if ev := waitFor(t, finished, e.ID); ev.Kind != river.EventKindJobCompleted {
-		t.Fatalf("el job terminó en %s", ev.Kind)
+		t.Fatalf("the job ended in %s", ev.Kind)
 	}
 	if n := rec.count(e.ID); n != 1 || !published(t, e.ID) {
-		t.Fatalf("entregas %d (publicado: %v), se esperaba 1 y publicado", n, published(t, e.ID))
+		t.Fatalf("deliveries %d (published: %v), want 1 and published", n, published(t, e.ID))
 	}
 }
 
-// TestARolledBackEventIsNeverDelivered: si la transacción que lo emite se revierte, no queda ni el
-// evento ni el job que lo entregaría.
+// TestARolledBackEventIsNeverDelivered: if the transaction that emits it rolls back, neither the event
+// nor the job that would deliver it remains.
 func TestARolledBackEventIsNeverDelivered(t *testing.T) {
 	o := newOutbox(t, newRecorder())
 	e := event()
-	errRollback := errors.New("se revierte a propósito")
+	errRollback := errors.New("rolls back on purpose")
 
 	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
 		if err := o.Emit(t.Context(), tx, e); err != nil {
@@ -194,17 +194,17 @@ func TestARolledBackEventIsNeverDelivered(t *testing.T) {
 
 	var events, jobs int
 	if !errors.Is(err, errRollback) {
-		t.Fatalf("emitir = %v, se esperaba el rollback", err)
+		t.Fatalf("emit = %v, want the rollback", err)
 	}
 	err = testPool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM infra.outbox WHERE id = $1),
 		(SELECT count(*) FROM infra.river_job WHERE args->>'event_id' = $1::text)`, e.ID).Scan(&events, &jobs)
 	if err != nil || events != 0 || jobs != 0 {
-		t.Fatalf("evento revertido: %d filas, %d jobs (%v); se esperaba nada", events, jobs, err)
+		t.Fatalf("rolled back event: %d rows, %d jobs (%v); want none", events, jobs, err)
 	}
 }
 
-// TestADuplicateDeliveryRunsTheHandlerOnce: el job de publicación es at-least-once; corrido dos veces
-// para el mismo evento, el consumidor lo procesa una vez (inbox).
+// TestADuplicateDeliveryRunsTheHandlerOnce: the publication job is at-least-once; run twice for the
+// same event, the consumer processes it once (inbox).
 func TestADuplicateDeliveryRunsTheHandlerOnce(t *testing.T) {
 	rec := newRecorder()
 	o := newOutbox(t, rec)
@@ -218,12 +218,12 @@ func TestADuplicateDeliveryRunsTheHandlerOnce(t *testing.T) {
 	}
 
 	if n := rec.count(e.ID); n != 1 || !published(t, e.ID) {
-		t.Fatalf("el consumidor procesó el evento %d veces (publicado: %v), se esperaba 1", n, published(t, e.ID))
+		t.Fatalf("the consumer processed the event %d times (published: %v), want 1", n, published(t, e.ID))
 	}
 }
 
-// TestAFailingConsumerDoesNotBlockTheOthers: si un consumidor falla, los demás reciben el evento igual;
-// el reintento solo se lo entrega al que falló, y el evento queda publicado cuando todos lo procesaron.
+// TestAFailingConsumerDoesNotBlockTheOthers: if a consumer fails, the others still receive the event;
+// the retry only delivers it to the one that failed, and the event is published once all processed it.
 func TestAFailingConsumerDoesNotBlockTheOthers(t *testing.T) {
 	first, flaky, last := newRecorder(), newRecorder(), newRecorder()
 	flaky.failFirst = 1
@@ -234,26 +234,26 @@ func TestAFailingConsumerDoesNotBlockTheOthers(t *testing.T) {
 	emit(t, o, e)
 
 	if err := publish(t, o, e.ID); !errors.Is(err, errFlaky) || published(t, e.ID) {
-		t.Fatalf("primer intento = %v (publicado: %v), se esperaba la falla y sin publicar", err, published(t, e.ID))
+		t.Fatalf("first attempt = %v (published: %v), want the failure and not published", err, published(t, e.ID))
 	}
 	if last.count(e.ID) != 1 {
-		t.Fatalf("tras la falla del anterior, el último consumidor recibió el evento %d veces, se esperaba 1", last.count(e.ID))
+		t.Fatalf("after the previous one failed, the last consumer received the event %d times, want 1", last.count(e.ID))
 	}
 	if err := publish(t, o, e.ID); err != nil {
 		t.Fatal(err)
 	}
 
 	if first.count(e.ID) != 1 || flaky.count(e.ID) != 2 || last.count(e.ID) != 1 || !published(t, e.ID) {
-		t.Fatalf("llamadas: primero %d, el que falla %d, último %d (publicado: %v); se esperaba 1, 2, 1 y publicado",
+		t.Fatalf("calls: first %d, flaky %d, last %d (published: %v); want 1, 2, 1 and published",
 			first.count(e.ID), flaky.count(e.ID), last.count(e.ID), published(t, e.ID))
 	}
 }
 
-// TestOnlySubscribersOfTheTypeReceiveIt: un consumidor no recibe tipos a los que no se suscribió.
+// TestOnlySubscribersOfTheTypeReceiveIt: a consumer does not receive types it did not subscribe to.
 func TestOnlySubscribersOfTheTypeReceiveIt(t *testing.T) {
 	rec, other := newRecorder(), newRecorder()
 	o := newOutbox(t, rec)
-	o.Subscribe("otro", []string{"aluna.test.thing.vanished.v1"}, other.handle)
+	o.Subscribe("other", []string{"aluna.test.thing.vanished.v1"}, other.handle)
 	e := event()
 	emit(t, o, e)
 
@@ -262,12 +262,12 @@ func TestOnlySubscribersOfTheTypeReceiveIt(t *testing.T) {
 	}
 
 	if rec.count(e.ID) != 1 || other.count(e.ID) != 0 {
-		t.Fatalf("entregas: suscrito %d, otro tipo %d; se esperaba 1 y 0", rec.count(e.ID), other.count(e.ID))
+		t.Fatalf("deliveries: subscribed %d, other type %d; want 1 and 0", rec.count(e.ID), other.count(e.ID))
 	}
 }
 
-// TestEmitFillsAMissingIDAndOmitsAMissingCorrelation: sin ID, Emit le asigna uno; sin correlación, la
-// columna queda NULL y el CloudEvent no trae correlationid.
+// TestEmitFillsAMissingIDAndOmitsAMissingCorrelation: without an ID, Emit assigns one; without a
+// correlation, the column stays NULL and the CloudEvent has no correlationid.
 func TestEmitFillsAMissingIDAndOmitsAMissingCorrelation(t *testing.T) {
 	o := newOutbox(t, newRecorder())
 	e := event()
@@ -281,7 +281,7 @@ func TestEmitFillsAMissingIDAndOmitsAMissingCorrelation(t *testing.T) {
 	var noCorrelation bool
 	err = testPool.QueryRow(t.Context(), `SELECT id, correlation_id IS NULL FROM infra.outbox WHERE subject = $1`, e.Subject).Scan(&id, &noCorrelation)
 	if err != nil || id == (ids.ID{}) || !noCorrelation {
-		t.Fatalf("id %s, correlación NULL %v (%v); se esperaba un id y NULL", id, noCorrelation, err)
+		t.Fatalf("id %s, correlation NULL %v (%v); want an id and NULL", id, noCorrelation, err)
 	}
 	dropJob(t, id)
 	stored, err := o.load(t.Context(), id)
@@ -297,11 +297,11 @@ func TestEmitFillsAMissingIDAndOmitsAMissingCorrelation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := got["correlationid"]; ok {
-		t.Fatalf("CloudEvent = %s, no debía traer correlationid", body)
+		t.Fatalf("CloudEvent = %s, want no correlationid", body)
 	}
 }
 
-// TestAnEventWithoutLegalEntityIsRejected: todo evento pertenece a una entidad legal.
+// TestAnEventWithoutLegalEntityIsRejected: every event belongs to a legal entity.
 func TestAnEventWithoutLegalEntityIsRejected(t *testing.T) {
 	o := newOutbox(t, newRecorder())
 	e := event()
@@ -311,12 +311,12 @@ func TestAnEventWithoutLegalEntityIsRejected(t *testing.T) {
 
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != checkViolation {
-		t.Fatalf("emitir sin entidad legal = %v, se esperaba la violación del CHECK", err)
+		t.Fatalf("emit without legal entity = %v, want the CHECK violation", err)
 	}
 }
 
-// TestThePgxTxCannotBeClosedOutsideTheUnitOfWork: lo que recibe River de Tx.Pgx no confirma ni revierte
-// la transacción del comando.
+// TestThePgxTxCannotBeClosedOutsideTheUnitOfWork: what River receives from Tx.Pgx neither commits nor
+// rolls back the command's transaction.
 func TestThePgxTxCannotBeClosedOutsideTheUnitOfWork(t *testing.T) {
 	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
 		return errors.Join(tx.Pgx().Commit(t.Context()), tx.Pgx().Rollback(t.Context()))
@@ -324,15 +324,15 @@ func TestThePgxTxCannotBeClosedOutsideTheUnitOfWork(t *testing.T) {
 
 	var failures interface{ Unwrap() []error }
 	if !errors.As(err, &failures) || len(failures.Unwrap()) != 2 || !errors.Is(err, postgres.ErrSharedTx) {
-		t.Fatalf("Commit y Rollback sobre Pgx() = %v, se esperaba ErrSharedTx en los dos", err)
+		t.Fatalf("Commit and Rollback on Pgx() = %v, want ErrSharedTx on both", err)
 	}
 }
 
-// TestAStoredEventIsACloudEvent: el envelope es CloudEvents 1.0 JSON con las extensiones legalentityid,
-// correlationid y schemaversion.
+// TestAStoredEventIsACloudEvent: the envelope is CloudEvents 1.0 JSON with the legalentityid,
+// correlationid and schemaversion extensions.
 func TestAStoredEventIsACloudEvent(t *testing.T) {
 	e := StoredEvent{
-		ID: ids.New(), Type: happened, Subject: "cosa/1", LegalEntityID: ids.New(), CorrelationID: ids.New(), SchemaVersion: 1,
+		ID: ids.New(), Type: happened, Subject: "thing/1", LegalEntityID: ids.New(), CorrelationID: ids.New(), SchemaVersion: 1,
 		Data: json.RawMessage(`{"units":100}`), Time: time.Date(2026, time.October, 27, 15, 4, 5, 0, time.UTC),
 	}
 
@@ -346,18 +346,18 @@ func TestAStoredEventIsACloudEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]any{
-		"specversion": "1.0", "id": e.ID.String(), "source": "aluna/test", "type": happened, "subject": "cosa/1",
+		"specversion": "1.0", "id": e.ID.String(), "source": "aluna/test", "type": happened, "subject": "thing/1",
 		"time": "2026-10-27T15:04:05Z", "datacontenttype": "application/json", "data": map[string]any{"units": float64(100)},
 		"legalentityid": e.LegalEntityID.String(), "correlationid": e.CorrelationID.String(), "schemaversion": float64(1),
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("CloudEvent = %s, se esperaba %v", body, want)
+		t.Fatalf("CloudEvent = %s, want %v", body, want)
 	}
 }
 
-// TestPurgeDeletesOnlyPublishedEvents: la purga se lleva los eventos publicados antes del corte y deja los
-// que aún no se publican. El publicado tiene su fila en el inbox: sin el borrado en cascada, la purga
-// fallaría por la llave foránea.
+// TestPurgeDeletesOnlyPublishedEvents: the purge removes the events published before the cutoff and
+// keeps the ones not yet published. The published one has its inbox row: without the cascading delete,
+// the purge would fail on the foreign key.
 func TestPurgeDeletesOnlyPublishedEvents(t *testing.T) {
 	o := newOutbox(t, newRecorder())
 	done, pending := event(), event()
@@ -378,15 +378,15 @@ func TestPurgeDeletesOnlyPublishedEvents(t *testing.T) {
 		left, err = pgx.CollectRows(rows, pgx.RowTo[ids.ID])
 	}
 	if err != nil || n < 1 || !reflect.DeepEqual(left, []ids.ID{pending.ID}) {
-		t.Fatalf("purga: %d borrados, quedan %v (%v); se esperaba solo %s", n, left, err, pending.ID)
+		t.Fatalf("purge: %d deleted, %v left (%v); want only %s", n, left, err, pending.ID)
 	}
 }
 
-// TestPurgeDeletesMoreThanOneBatch: con más publicados viejos que un lote, la purga sigue hasta borrarlos
-// todos.
+// TestPurgeDeletesMoreThanOneBatch: with more old published events than one batch, the purge keeps going
+// until it deletes them all.
 func TestPurgeDeletesMoreThanOneBatch(t *testing.T) {
 	o := newOutbox(t, newRecorder())
-	prefix := "lote-" + ids.New().String() + "/"
+	prefix := "batch-" + ids.New().String() + "/"
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO infra.outbox (id, type, subject, legal_entity_id, schema_version, payload, published_at)
 			SELECT gen_random_uuid(), $1, $2 || g, $3, 1, '{}', clock_timestamp() - interval '1 hour'
@@ -401,6 +401,6 @@ func TestPurgeDeletesMoreThanOneBatch(t *testing.T) {
 		err = testPool.QueryRow(t.Context(), `SELECT count(*) FROM infra.outbox WHERE subject LIKE $1 || '%'`, prefix).Scan(&left)
 	}
 	if err != nil || n < purgeBatch+1 || left != 0 {
-		t.Fatalf("purga de %d eventos: borró %d, quedan %d (%v)", purgeBatch+1, n, left, err)
+		t.Fatalf("purge of %d events: deleted %d, %d left (%v)", purgeBatch+1, n, left, err)
 	}
 }

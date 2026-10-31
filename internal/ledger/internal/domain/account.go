@@ -1,5 +1,5 @@
-// Package domain son las reglas puras del ledger (ADR-0003): la transacción balanceada y el saldo
-// disponible de una cuenta. No conoce la base de datos ni la hora.
+// Package domain holds the pure ledger rules (ADR-0003): the balanced transaction and an account's
+// available balance. It knows neither the database nor the time.
 package domain
 
 import (
@@ -11,16 +11,16 @@ import (
 )
 
 var (
-	// ErrInsufficientFunds indica que un movimiento deja el saldo disponible de una cuenta bajo su límite.
-	ErrInsufficientFunds = errors.New("fondos insuficientes")
-	// ErrUnknownKind indica una cuenta con una clase contable fuera de las cinco definidas.
-	ErrUnknownKind = errors.New("clase contable desconocida")
+	// ErrInsufficientFunds means a movement leaves an account's available balance below its limit.
+	ErrInsufficientFunds = errors.New("insufficient funds")
+	// ErrUnknownKind means an account has an accounting kind outside the five defined ones.
+	ErrUnknownKind = errors.New("unknown account kind")
 )
 
-// Kind es la clase contable de una cuenta; decide su naturaleza (débito o crédito).
+// Kind is an account's accounting kind; it decides its normal side (debit or credit).
 type Kind string
 
-// Clases contables.
+// Accounting kinds.
 const (
 	KindAsset     Kind = "asset"
 	KindLiability Kind = "liability"
@@ -29,18 +29,18 @@ const (
 	KindExpense   Kind = "expense"
 )
 
-// BalanceMode dice cómo se mantiene el saldo materializado de una cuenta (ADR-0004).
+// BalanceMode says how an account's materialized balance is maintained (ADR-0004).
 type BalanceMode string
 
-// Modos de saldo: sync se actualiza en la misma transacción del posting; async lo agrega un proceso
-// aparte (cuentas internas muy concurridas).
+// Balance modes: sync is updated in the same transaction as the posting; async is aggregated by a
+// separate process (highly contended internal accounts).
 const (
 	BalanceModeSync  BalanceMode = "sync"
 	BalanceModeAsync BalanceMode = "async"
 )
 
-// Account es una cuenta del ledger. LowerLimit está en unidades menores y en términos naturales: 0 no
-// permite saldo negativo; -5_000_000 en COP permite un sobregiro de 50.000 pesos.
+// Account is a ledger account. LowerLimit is in minor units and in natural terms: 0 allows no negative
+// balance; -5_000_000 in COP allows a 50,000-peso overdraft.
 type Account struct {
 	ID            ids.ID
 	LegalEntityID ids.ID
@@ -51,12 +51,11 @@ type Account struct {
 	LowerLimit    int64
 }
 
-// NaturalBalance convierte el saldo con signo (débito +, crédito −) al saldo en la naturaleza de la
-// cuenta: activos y gastos son de naturaleza débito; pasivos, patrimonio e ingresos, de crédito. Un
-// depósito de 100.000 pesos deja posted = -10_000_000 en la cuenta del cliente y su saldo natural es
-// 10_000_000. En una cuenta de crédito, posted = MinInt64 no tiene opuesto en int64. Una clase
-// desconocida se trata como de crédito; por eso CheckAvailable, que decide si el dinero se mueve, la
-// rechaza antes.
+// NaturalBalance converts the signed balance (debit +, credit −) to the balance on the account's normal
+// side: assets and expenses are debit-normal; liabilities, equity and income are credit-normal. A
+// 100,000-peso deposit leaves posted = -10_000_000 on the customer account and its natural balance is
+// 10_000_000. On a credit account, posted = MinInt64 has no opposite in int64. An unknown kind is treated
+// as credit-normal; that is why CheckAvailable, which decides whether money moves, rejects it first.
 func NaturalBalance(k Kind, posted int64) int64 {
 	if debit, _ := debitNormal(k); debit {
 		return posted
@@ -64,7 +63,7 @@ func NaturalBalance(k Kind, posted int64) int64 {
 	return -posted
 }
 
-// debitNormal dice si la clase es de naturaleza débito; ok es falso si la clase no existe.
+// debitNormal reports whether the kind is debit-normal; ok is false if the kind does not exist.
 func debitNormal(k Kind) (debit, ok bool) {
 	switch k {
 	case KindAsset, KindExpense:
@@ -75,33 +74,33 @@ func debitNormal(k Kind) (debit, ok bool) {
 	return false, false
 }
 
-// CheckAvailable decide si la cuenta admite delta, el movimiento neto (con signo) de una transacción
-// sobre ella, dado su saldo posted y sus holds pendientes (importes no negativos). El disponible es el
-// saldo natural menos los holds salientes (los débitos pendientes en una cuenta de crédito, los
-// créditos pendientes en una de débito); los entrantes no suman. Solo se rechaza un movimiento que
-// reduce el saldo natural: un ingreso a una cuenta que ya está bajo su límite la mejora. Todo se
-// calcula con money: un overflow es un error y el movimiento no pasa.
+// CheckAvailable decides whether the account accepts delta, a transaction's net (signed) movement on it,
+// given its posted balance and its pending holds (non-negative amounts). The available balance is the
+// natural balance minus outgoing holds (pending debits on a credit account, pending credits on a debit
+// one); incoming holds do not add. Only a movement that reduces the natural balance is rejected: an
+// inflow to an account already below its limit improves it. Everything is computed with money: an
+// overflow is an error and the movement does not go through.
 func (a Account) CheckAvailable(posted, pendingDebits, pendingCredits, delta int64) error {
 	debit, ok := debitNormal(a.Kind)
-	if !ok { // sin naturaleza no se sabe hacia dónde sale el dinero: no se mueve
-		return fmt.Errorf("%w: cuenta %s, clase %q", ErrUnknownKind, a.Code, a.Kind)
+	if !ok { // without a normal side there is no telling which way money leaves: it does not move
+		return fmt.Errorf("%w: account %s, kind %q", ErrUnknownKind, a.Code, a.Kind)
 	}
 	if reduces := (delta < 0) == debit && delta != 0; !reduces {
 		return nil
 	}
 	available, err := a.availableAfter(debit, posted, pendingDebits, pendingCredits, delta)
 	if err != nil {
-		return fmt.Errorf("cuenta %s: %w", a.Code, err)
+		return fmt.Errorf("account %s: %w", a.Code, err)
 	}
 	if available.Units() < a.LowerLimit {
-		return fmt.Errorf("%w: cuenta %s, disponible %d, límite %d", ErrInsufficientFunds, a.Code, available.Units(), a.LowerLimit)
+		return fmt.Errorf("%w: account %s, available %d, limit %d", ErrInsufficientFunds, a.Code, available.Units(), a.LowerLimit)
 	}
 	return nil
 }
 
-// availableAfter solo se llama con un movimiento que reduce el saldo natural. En una cuenta de
-// crédito eso es un débito (delta > 0), así que posted + delta > MinInt64 y el saldo natural siempre
-// tiene opuesto.
+// availableAfter is only called with a movement that reduces the natural balance. On a credit account
+// that is a debit (delta > 0), so posted + delta > MinInt64 and the natural balance always has an
+// opposite.
 func (a Account) availableAfter(debit bool, posted, pendingDebits, pendingCredits, delta int64) (money.Amount, error) {
 	after, err := money.New(posted, a.Currency).Add(money.New(delta, a.Currency))
 	if err != nil {

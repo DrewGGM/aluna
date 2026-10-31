@@ -41,7 +41,7 @@
       "protocol": "openid-connect",
       "protocolMappers": [
         {
-          "name": "audiencia aluna-api",
+          "name": "aluna-api audience",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
           "config": {
@@ -79,15 +79,15 @@
   ],
   "users": [
     {
-      "username": "operador",
+      "username": "operator",
       "enabled": true,
-      "email": "operador@aluna.local",
+      "email": "operator@aluna.local",
       "emailVerified": true,
       "attributes": {
         "legal_entity_id": ["01a00000-0000-7000-8000-000000000001"]
       },
       "credentials": [
-        { "type": "password", "value": "operador", "temporary": false }
+        { "type": "password", "value": "operator", "temporary": false }
       ],
       "realmRoles": ["operator"]
     }

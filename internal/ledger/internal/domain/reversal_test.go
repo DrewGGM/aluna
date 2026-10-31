@@ -19,17 +19,18 @@ func TestReversalEntriesInvertTheSignInOrder(t *testing.T) {
 
 	want := []EntryInput{{AccountID: a, Amount: money.New(-100, cop)}, {AccountID: b, Amount: money.New(100, cop)}}
 	if err != nil || !slices.Equal(reversed, want) {
-		t.Fatalf("ReversalEntries = %+v, %v; se esperaba %+v", reversed, err, want)
+		t.Fatalf("ReversalEntries = %+v, %v; want %+v", reversed, err, want)
 	}
 	if _, err := NewTransaction(NewTransactionInput{ID: ids.New(), Entries: reversed}); err != nil {
-		t.Fatalf("la reversa de una transacción balanceada también lo está: %v", err)
+		t.Fatalf("the reversal of a balanced transaction is balanced too: %v", err)
 	}
 }
 
-// TestReversalEntriesOfMinInt64Fail: -MinInt64 no cabe en int64; la reversa falla en vez de dar la vuelta.
+// TestReversalEntriesOfMinInt64Fail: -MinInt64 does not fit in int64; the reversal fails instead of
+// wrapping around.
 func TestReversalEntriesOfMinInt64Fail(t *testing.T) {
 	cop := currency(t, "COP")
 	if _, err := ReversalEntries([]EntryInput{{AccountID: ids.New(), Amount: money.New(math.MinInt64, cop)}}); !errors.Is(err, money.ErrOverflow) {
-		t.Fatalf("= %v, se esperaba money.ErrOverflow", err)
+		t.Fatalf("= %v, want money.ErrOverflow", err)
 	}
 }

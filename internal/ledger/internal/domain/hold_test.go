@@ -16,7 +16,7 @@ var (
 	holdExpiresAt = holdPlacedAt.Add(24 * time.Hour)
 )
 
-// fataler es lo que comparten *testing.T y *rapid.T.
+// fataler is what *testing.T and *rapid.T have in common.
 type fataler interface {
 	Helper()
 	Fatalf(format string, args ...any)
@@ -41,20 +41,20 @@ func TestNewHold(t *testing.T) {
 		return NewHoldInput{ID: ids.New(), AccountID: ids.New(), Amount: money.New(100, cop), ExpiresAt: holdExpiresAt, Now: holdPlacedAt}
 	}
 	invalid := map[string]func(*NewHoldInput){
-		"importe cero":             func(in *NewHoldInput) { in.Amount = money.New(0, cop) },
-		"importe negativo":         func(in *NewHoldInput) { in.Amount = money.New(-1, cop) },
-		"sin moneda":               func(in *NewHoldInput) { in.Amount = money.New(1, money.Currency{}) },
-		"sin identificador":        func(in *NewHoldInput) { in.ID = ids.ID{} },
-		"sin cuenta":               func(in *NewHoldInput) { in.AccountID = ids.ID{} },
-		"vence al crearse":         func(in *NewHoldInput) { in.ExpiresAt = in.Now },
-		"sin instante de creación": func(in *NewHoldInput) { in.Now = time.Time{} },
+		"zero amount":         func(in *NewHoldInput) { in.Amount = money.New(0, cop) },
+		"negative amount":     func(in *NewHoldInput) { in.Amount = money.New(-1, cop) },
+		"no currency":         func(in *NewHoldInput) { in.Amount = money.New(1, money.Currency{}) },
+		"no identifier":       func(in *NewHoldInput) { in.ID = ids.ID{} },
+		"no account":          func(in *NewHoldInput) { in.AccountID = ids.ID{} },
+		"expires on creation": func(in *NewHoldInput) { in.ExpiresAt = in.Now },
+		"no creation instant": func(in *NewHoldInput) { in.Now = time.Time{} },
 	}
 	for name, change := range invalid {
 		t.Run(name, func(t *testing.T) {
 			in := valid()
 			change(&in)
 			if _, err := NewHold(in); !errors.Is(err, ErrInvalidHold) {
-				t.Fatalf("NewHold = %v, se esperaba ErrInvalidHold", err)
+				t.Fatalf("NewHold = %v, want ErrInvalidHold", err)
 			}
 		})
 	}
@@ -62,14 +62,14 @@ func TestNewHold(t *testing.T) {
 	h, err := NewHold(in)
 	want := Hold{id: in.ID, accountID: in.AccountID, amount: in.Amount, captured: money.New(0, cop), status: HoldPending, expiresAt: holdExpiresAt}
 	if err != nil || h != want {
-		t.Fatalf("NewHold = %+v, %v; se esperaba %+v", h, err, want)
+		t.Fatalf("NewHold = %+v, %v; want %+v", h, err, want)
 	}
 	if h.ID() != in.ID || h.AccountID() != in.AccountID || h.Amount() != in.Amount || !h.ExpiresAt().Equal(holdExpiresAt) {
-		t.Fatalf("los getters no devuelven lo creado: %+v", h)
+		t.Fatalf("the getters do not return what was created: %+v", h)
 	}
 }
 
-// holdOp es una operación sobre un hold, para la tabla de transiciones.
+// holdOp is an operation on a hold, for the transition table.
 type holdOp func(Hold) (Hold, error)
 
 func captureOp(units int64, now time.Time) holdOp {
@@ -84,32 +84,32 @@ type transition struct {
 	name    string
 	from    HoldStatus
 	op      holdOp
-	want    HoldStatus // estado tras una transición aceptada
+	want    HoldStatus // status after an accepted transition
 	wantErr error
 }
 
-// holdTransitions son las transiciones de FR-6: pending → captured | released | expired, los
-// rechazos desde pending y, desde cada estado terminal, cada operación (todas rechazadas). Las
-// operaciones sobre un hold terminado van después del vencimiento: un hold que expiró mientras llegaba
-// su capture responde ErrHoldNotPending (PRD, casos borde), no ErrHoldExpired.
+// holdTransitions are the FR-6 transitions: pending → captured | released | expired, the rejections from
+// pending and, from each terminal status, each operation (all rejected). Operations on a finished hold
+// run after the expiry: a hold that expired while its capture was arriving answers ErrHoldNotPending
+// (PRD, edge cases), not ErrHoldExpired.
 func holdTransitions() []transition {
 	cases := []transition{
-		{"pending → captured (total)", HoldPending, captureOp(100, holdPlacedAt), HoldCaptured, nil},
-		{"pending → captured (parcial)", HoldPending, captureOp(40, holdPlacedAt), HoldCaptured, nil},
-		{"pending → captured justo al vencer", HoldPending, captureOp(100, holdExpiresAt), HoldCaptured, nil},
+		{"pending → captured (full)", HoldPending, captureOp(100, holdPlacedAt), HoldCaptured, nil},
+		{"pending → captured (partial)", HoldPending, captureOp(40, holdPlacedAt), HoldCaptured, nil},
+		{"pending → captured right at expiry", HoldPending, captureOp(100, holdExpiresAt), HoldCaptured, nil},
 		{"pending → released", HoldPending, releaseOp, HoldReleased, nil},
 		{"pending → expired", HoldPending, expireOp(holdExpiresAt.Add(time.Second)), HoldExpired, nil},
-		{"capturar de más", HoldPending, captureOp(101, holdPlacedAt), "", ErrAmountExceedsHold},
-		{"capturar cero", HoldPending, captureOp(0, holdPlacedAt), "", ErrInvalidHold},
-		{"capturar negativo", HoldPending, captureOp(-1, holdPlacedAt), "", ErrInvalidHold},
-		{"capturar vencido", HoldPending, captureOp(100, holdExpiresAt.Add(time.Second)), "", ErrHoldExpired},
-		{"expirar justo al vencer", HoldPending, expireOp(holdExpiresAt), "", ErrHoldNotDue},
+		{"capture too much", HoldPending, captureOp(101, holdPlacedAt), "", ErrAmountExceedsHold},
+		{"capture zero", HoldPending, captureOp(0, holdPlacedAt), "", ErrInvalidHold},
+		{"capture negative", HoldPending, captureOp(-1, holdPlacedAt), "", ErrInvalidHold},
+		{"capture expired", HoldPending, captureOp(100, holdExpiresAt.Add(time.Second)), "", ErrHoldExpired},
+		{"expire right at expiry", HoldPending, expireOp(holdExpiresAt), "", ErrHoldNotDue},
 	}
 	late := holdExpiresAt.Add(time.Hour)
 	ops := []struct {
 		name string
 		op   holdOp
-	}{{"capturar", captureOp(1, late)}, {"liberar", releaseOp}, {"expirar", expireOp(late)}}
+	}{{"capture", captureOp(1, late)}, {"release", releaseOp}, {"expire", expireOp(late)}}
 	for _, from := range []HoldStatus{HoldCaptured, HoldReleased, HoldExpired} {
 		for _, o := range ops {
 			cases = append(cases, transition{string(from) + " → " + o.name, from, o.op, "", ErrHoldNotPending})
@@ -138,17 +138,17 @@ func TestHoldTransitions(t *testing.T) {
 
 			switch {
 			case !errors.Is(err, tc.wantErr):
-				t.Fatalf("error = %v, se esperaba %v", err, tc.wantErr)
+				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			case err != nil && got != (Hold{}):
-				t.Fatalf("una transición rechazada devolvió %+v; se esperaba el valor cero", got)
+				t.Fatalf("a rejected transition returned %+v; want the zero value", got)
 			case err == nil && got.Status() != tc.want:
-				t.Fatalf("estado = %s, se esperaba %s", got.Status(), tc.want)
+				t.Fatalf("status = %s, want %s", got.Status(), tc.want)
 			}
 		})
 	}
 }
 
-// TestPartialCaptureReleasesTheRest (FR-6): lo no capturado se libera.
+// TestPartialCaptureReleasesTheRest (FR-6): what is not captured is released.
 func TestPartialCaptureReleasesTheRest(t *testing.T) {
 	h := pendingHold(t, 100)
 	cop := h.Amount().Currency()
@@ -157,24 +157,24 @@ func TestPartialCaptureReleasesTheRest(t *testing.T) {
 
 	want := CaptureResult{Captured: money.New(40, cop), Released: money.New(60, cop)}
 	if err != nil || result != want || captured.Captured() != money.New(40, cop) || captured.Amount() != h.Amount() {
-		t.Fatalf("Capture(40) de 100 = %+v, %+v, %v; se esperaban 40 capturados y 60 liberados", captured, result, err)
+		t.Fatalf("Capture(40) of 100 = %+v, %+v, %v; want 40 captured and 60 released", captured, result, err)
 	}
 }
 
-// TestHoldReachesAtMostOneTerminalState (property): en cualquier secuencia de operaciones, una
-// operación aceptada saca al hold de pending y lo deja terminado; un hold terminado rechaza todo con
-// ErrHoldNotPending y ya no cambia; lo retenido nunca cambia, y lo capturado y lo liberado suman lo
-// retenido.
+// TestHoldReachesAtMostOneTerminalState (property): in any sequence of operations, an accepted operation
+// takes the hold out of pending and leaves it finished; a finished hold rejects everything with
+// ErrHoldNotPending and no longer changes; the held amount never changes, and the captured and released
+// amounts add up to the held amount.
 func TestHoldReachesAtMostOneTerminalState(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		units := rapid.Int64Range(1, 1_000_000).Draw(t, "importe")
+		units := rapid.Int64Range(1, 1_000_000).Draw(t, "amount")
 		h := pendingHold(t, units)
-		for i := range rapid.IntRange(1, 10).Draw(t, "operaciones") {
-			now := holdPlacedAt.Add(time.Duration(rapid.Int64Range(0, 48).Draw(t, "hora")) * time.Hour)
+		for i := range rapid.IntRange(1, 10).Draw(t, "operations") {
+			now := holdPlacedAt.Add(time.Duration(rapid.Int64Range(0, 48).Draw(t, "hour")) * time.Hour)
 			next, result, err := step(t, h, now)
 			if h.Status() != HoldPending {
 				if !errors.Is(err, ErrHoldNotPending) {
-					t.Fatalf("operación %d: un hold %s aceptó una operación (%v)", i, h.Status(), err)
+					t.Fatalf("operation %d: a %s hold accepted an operation (%v)", i, h.Status(), err)
 				}
 				continue
 			}
@@ -187,11 +187,11 @@ func TestHoldReachesAtMostOneTerminalState(t *testing.T) {
 	})
 }
 
-// step aplica una operación al azar. result solo vale para un capture aceptado.
+// step applies a random operation. result only applies to an accepted capture.
 func step(t *rapid.T, h Hold, now time.Time) (Hold, CaptureResult, error) {
 	switch rapid.IntRange(0, 2).Draw(t, "op") {
 	case 0:
-		return h.Capture(rapid.Int64Range(-1, h.Amount().Units()+1).Draw(t, "capturar"), now)
+		return h.Capture(rapid.Int64Range(-1, h.Amount().Units()+1).Draw(t, "capture"), now)
 	case 1:
 		next, err := h.Release()
 		return next, CaptureResult{}, err
@@ -201,19 +201,19 @@ func step(t *rapid.T, h Hold, now time.Time) (Hold, CaptureResult, error) {
 	}
 }
 
-// checkTerminal verifica una transición aceptada desde pending.
+// checkTerminal checks an accepted transition from pending.
 func checkTerminal(t *rapid.T, before, after Hold, result CaptureResult) {
 	t.Helper()
 	switch {
 	case after.Status() == HoldPending:
-		t.Fatalf("una operación aceptada dejó el hold en pending")
+		t.Fatalf("an accepted operation left the hold pending")
 	case after.Amount() != before.Amount():
-		t.Fatalf("lo retenido cambió de %v a %v", before.Amount(), after.Amount())
+		t.Fatalf("the held amount changed from %v to %v", before.Amount(), after.Amount())
 	case after.Status() != HoldCaptured && !after.Captured().IsZero():
-		t.Fatalf("un hold %s quedó con %v capturado", after.Status(), after.Captured())
+		t.Fatalf("a %s hold was left with %v captured", after.Status(), after.Captured())
 	case after.Status() == HoldCaptured && (after.Captured() != result.Captured ||
 		result.Captured.Units()+result.Released.Units() != before.Amount().Units()):
-		t.Fatalf("capturado %v y liberado %v no suman %v", result.Captured, result.Released, before.Amount())
+		t.Fatalf("captured %v and released %v do not add up to %v", result.Captured, result.Released, before.Amount())
 	}
 }
 
@@ -240,25 +240,25 @@ func TestRestoreHold(t *testing.T) {
 	noID := snapshot(HoldPending, 0)
 	noID.ID = ids.ID{}
 	invalid := map[string]HoldSnapshot{
-		"estado desconocido":       snapshot("frozen", 0),
-		"captured sin capturado":   snapshot(HoldCaptured, 0),
-		"pending con capturado":    snapshot(HoldPending, 10),
-		"capturado de más":         snapshot(HoldCaptured, 101),
-		"capturado negativo":       snapshot(HoldReleased, -1),
-		"capturado en otra moneda": otherCurrency,
-		"sin vencimiento":          noExpiry,
-		"importe cero":             zeroAmount,
-		"sin identificador":        noID,
+		"unknown status":                 snapshot("frozen", 0),
+		"captured with nothing captured": snapshot(HoldCaptured, 0),
+		"pending with captured amount":   snapshot(HoldPending, 10),
+		"captured too much":              snapshot(HoldCaptured, 101),
+		"negative captured amount":       snapshot(HoldReleased, -1),
+		"captured in another currency":   otherCurrency,
+		"no expiry":                      noExpiry,
+		"zero amount":                    zeroAmount,
+		"no identifier":                  noID,
 	}
 	for name, s := range invalid {
 		if _, err := RestoreHold(s); !errors.Is(err, ErrInvalidHold) {
-			t.Errorf("%s: RestoreHold = %v, se esperaba ErrInvalidHold", name, err)
+			t.Errorf("%s: RestoreHold = %v, want ErrInvalidHold", name, err)
 		}
 	}
 }
 
-// TestARestoredOverdueHoldIsCapturedAsExpired: un hold pending ya vencido se reconstruye (NewHold no
-// lo permitiría) y su capture es ErrHoldExpired, mientras que Expire lo cierra.
+// TestARestoredOverdueHoldIsCapturedAsExpired: a pending hold already past its expiry is restored (NewHold
+// would not allow it) and capturing it gives ErrHoldExpired, while Expire closes it.
 func TestARestoredOverdueHoldIsCapturedAsExpired(t *testing.T) {
 	cop := currency(t, "COP")
 	h, err := RestoreHold(HoldSnapshot{
@@ -271,9 +271,9 @@ func TestARestoredOverdueHoldIsCapturedAsExpired(t *testing.T) {
 	late := holdExpiresAt.Add(time.Minute)
 
 	if _, _, err := h.Capture(100, late); !errors.Is(err, ErrHoldExpired) {
-		t.Errorf("capturar vencido = %v, se esperaba ErrHoldExpired", err)
+		t.Errorf("capture expired = %v, want ErrHoldExpired", err)
 	}
 	if expired, err := h.Expire(late); err != nil || expired.Status() != HoldExpired {
-		t.Errorf("expirar = %+v, %v", expired, err)
+		t.Errorf("expire = %+v, %v", expired, err)
 	}
 }

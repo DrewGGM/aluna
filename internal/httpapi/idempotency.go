@@ -14,14 +14,14 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// maxIdempotencyKey es el largo máximo de Idempotency-Key, en caracteres, el mismo que acepta
-// infra.idempotency_keys. El código generado no aplica el maxLength de las cabeceras.
+// maxIdempotencyKey is the maximum length of Idempotency-Key, in characters, the same that
+// infra.idempotency_keys accepts. The generated code does not enforce the maxLength of headers.
 const maxIdempotencyKey = 255
 
-var errInvalidIdempotencyKey = fmt.Errorf("Idempotency-Key de más de %d caracteres o que no es UTF-8", maxIdempotencyKey)
+var errInvalidIdempotencyKey = fmt.Errorf("Idempotency-Key longer than %d characters or not UTF-8", maxIdempotencyKey)
 
-// operation es lo fijo de un comando: su ruta, el status de su respuesta exitosa y los IDs que nombra la
-// ruta, que su registro de auditoría lleva aunque el comando se rechace.
+// operation is the fixed part of a command: its path, the status of its successful response and the IDs the
+// path names, which its audit record carries even if the command is rejected.
 type operation struct {
 	method, path string
 	success      int
@@ -34,10 +34,10 @@ var (
 	createLedgerAccount = operation{method: http.MethodPost, path: "/v1/ledger-accounts", success: http.StatusCreated}
 )
 
-// resourceOperation es la acción action sobre el recurso id de collection ("/v1/holds/{id}/capture"). La
-// ruta lleva el id: la huella y el scope de la clave son por recurso, así que la misma clave con el mismo
-// cuerpo sobre otro recurso no se toma por un reintento, y el registro de auditoría nombra el recurso
-// aunque el comando se rechace.
+// resourceOperation is the action action on the resource id of collection ("/v1/holds/{id}/capture"). The
+// path carries the id: the fingerprint and the key scope are per resource, so the same key with the same body
+// on another resource is not taken for a retry, and the audit record names the resource even if the command
+// is rejected.
 func resourceOperation(collection string, id ids.ID, action string, success int) operation {
 	return operation{
 		method: http.MethodPost, path: "/v1/" + collection + "/" + id.String() + "/" + action, success: success,
@@ -45,53 +45,53 @@ func resourceOperation(collection string, id ids.ID, action string, success int)
 	}
 }
 
-// commands corre cada comando en su transacción, con su registro de auditoría (FR-40); los que mueven
-// dinero, además, una sola vez por Idempotency-Key (architecture §9): la clave se reclama y se completa
-// en la misma transacción del efecto. Las claves van por entidad y sujeto (keyScope): dos entidades que
-// comparten la base, o dos sujetos de una entidad, no comparten claves.
+// commands runs each command in its transaction, with its audit record (FR-40); those that move money also
+// run once per Idempotency-Key (architecture §9): the key is claimed and completed in the same transaction
+// as the effect. Keys are per entity and subject (keyScope): two entities sharing the database, or two
+// subjects of one entity, do not share keys.
 type commands struct {
 	uow  *postgres.UnitOfWork
 	keys *idempotency.Store
 }
 
-// storedResponse es la respuesta de un comando tal como se escribe; la de uno con Idempotency-Key se
-// guarda y el reintento la recibe byte a byte.
+// storedResponse is a command's response as it is written; that of a command with Idempotency-Key is stored
+// and the retry receives it byte for byte.
 type storedResponse struct {
 	status int
 	body   []byte
 }
 
-// VisitCreateLedgerAccountResponse escribe la respuesta de POST /v1/ledger-accounts.
+// VisitCreateLedgerAccountResponse writes the response of POST /v1/ledger-accounts.
 func (r storedResponse) VisitCreateLedgerAccountResponse(w http.ResponseWriter) error {
 	return r.write(w)
 }
 
-// VisitPostTransactionResponse escribe la respuesta guardada de POST /v1/transactions.
+// VisitPostTransactionResponse writes the stored response of POST /v1/transactions.
 func (r storedResponse) VisitPostTransactionResponse(w http.ResponseWriter) error { return r.write(w) }
 
-// VisitPlaceHoldResponse escribe la respuesta guardada de POST /v1/holds.
+// VisitPlaceHoldResponse writes the stored response of POST /v1/holds.
 func (r storedResponse) VisitPlaceHoldResponse(w http.ResponseWriter) error { return r.write(w) }
 
-// VisitCaptureHoldResponse escribe la respuesta guardada de POST /v1/holds/{id}/capture.
+// VisitCaptureHoldResponse writes the stored response of POST /v1/holds/{id}/capture.
 func (r storedResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error { return r.write(w) }
 
-// VisitReleaseHoldResponse escribe la respuesta guardada de POST /v1/holds/{id}/release.
+// VisitReleaseHoldResponse writes the stored response of POST /v1/holds/{id}/release.
 func (r storedResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error { return r.write(w) }
 
 // VisitRegisterPartyResponse writes the response of POST /v1/parties.
 func (r storedResponse) VisitRegisterPartyResponse(w http.ResponseWriter) error { return r.write(w) }
 
-// VisitRequestReversalResponse escribe la respuesta guardada de POST /v1/transactions/{id}/reversal.
+// VisitRequestReversalResponse writes the stored response of POST /v1/transactions/{id}/reversal.
 func (r storedResponse) VisitRequestReversalResponse(w http.ResponseWriter) error { return r.write(w) }
 
-// VisitApproveRequestResponse escribe la respuesta guardada de POST /v1/approvals/{id}/approval.
+// VisitApproveRequestResponse writes the stored response of POST /v1/approvals/{id}/approval.
 func (r storedResponse) VisitApproveRequestResponse(w http.ResponseWriter) error { return r.write(w) }
 
-// VisitRejectRequestResponse escribe la respuesta de POST /v1/approvals/{id}/rejection.
+// VisitRejectRequestResponse writes the response of POST /v1/approvals/{id}/rejection.
 func (r storedResponse) VisitRejectRequestResponse(w http.ResponseWriter) error { return r.write(w) }
 
-// write escribe la respuesta tal como se guardó. El Store no guarda el Content-Type: lo da el status,
-// porque underSavepoint solo produce el JSON del recurso (2xx) o un problem (4xx).
+// write writes the response as it was stored. The Store does not keep the Content-Type: the status gives it,
+// because underSavepoint only produces the resource JSON (2xx) or a problem (4xx).
 func (r storedResponse) write(w http.ResponseWriter) error {
 	contentType := "application/json"
 	if r.status >= http.StatusBadRequest {
@@ -103,15 +103,15 @@ func (r storedResponse) write(w http.ResponseWriter) error {
 	return err
 }
 
-// idempotent corre effect para op una sola vez por Idempotency-Key key del principal p. Un 4xx de
-// negocio también se guarda; un error que no es de negocio sube sin guardarse, para que el cliente pueda
-// reintentar. Un reintento con la misma clave recibe la respuesta guardada y queda auditado como replay.
+// idempotent runs effect for op once per Idempotency-Key key of the principal p. A business 4xx is stored
+// too; an error that is not a business one goes up without being stored, so the client can retry. A retry
+// with the same key receives the stored response and is audited as a replay.
 func (c commands) idempotent(ctx context.Context, p access.Principal, op operation, key string, request any,
 	effect func(tx postgres.Tx) (any, error),
 ) (storedResponse, error) {
-	// antes de validar: un rechazo de la clave también nombra el recurso
+	// before validating: a rejection of the key also names the resource
 	noteTargets(ctx, op.targets)
-	if !utf8.ValidString(key) || utf8.RuneCountInString(key) > maxIdempotencyKey { // vacía no llega: la rechaza el código generado
+	if !utf8.ValidString(key) || utf8.RuneCountInString(key) > maxIdempotencyKey { // an empty key never gets here: the generated code rejects it
 		return storedResponse{}, errInvalidIdempotencyKey
 	}
 	hash, err := requestHash(op, request)
@@ -135,22 +135,22 @@ func (c commands) idempotent(ctx context.Context, p access.Principal, op operati
 	})
 }
 
-// keyScope es el scope de las claves de p para op: la entidad, la ruta y el SHA-256 del sub, que así cabe
-// en el scope sin importar el emisor.
+// keyScope is the scope of p's keys for op: the entity, the path and the SHA-256 of the sub, which thus fits
+// in the scope whatever the issuer.
 func keyScope(p access.Principal, op operation) string {
 	return fmt.Sprintf("%s %s %s %x", p.LegalEntityID, op.method, op.path, sha256.Sum256([]byte(p.Subject)))
 }
 
-// run corre effect para op, un comando sin Idempotency-Key; un rechazo de negocio se deshace hasta el
-// savepoint y es la respuesta.
+// run runs effect for op, a command without Idempotency-Key; a business rejection is rolled back to the
+// savepoint and becomes the response.
 func (c commands) run(ctx context.Context, op operation, effect func(tx postgres.Tx) (any, error)) (storedResponse, error) {
 	noteTargets(ctx, op.targets)
 	return c.audited(ctx, func(tx postgres.Tx) (storedResponse, string, error) { return underSavepoint(ctx, tx, op, effect) })
 }
 
-// audited corre step en una transacción y guarda en ella el registro de auditoría del comando con la
-// respuesta y el resultado que step decidió. Si la transacción no confirma, el registro se va con ella y
-// lo escribe withAudit aparte.
+// audited runs step in a transaction and stores in it the command's audit record with the response and
+// the result that step decided. If the transaction does not commit, the record goes with it and withAudit
+// writes it separately.
 func (c commands) audited(ctx context.Context, step func(tx postgres.Tx) (storedResponse, string, error)) (storedResponse, error) {
 	trail, err := auditTrailFrom(ctx)
 	if err != nil {
@@ -169,20 +169,20 @@ func (c commands) audited(ctx context.Context, step func(tx postgres.Tx) (stored
 	return resp, err
 }
 
-// underSavepoint corre effect bajo un savepoint y lo vuelve la respuesta del comando y su resultado: ok o
-// el código del problem. Un error de negocio se deshace hasta ahí, también si la base abortó la
-// transacción, y su problem es la respuesta. Cualquier otro error, incluidos los conflictos que
-// UnitOfWork reintenta, sube tal cual. El cuerpo termina en '\n', como el de json.Encoder que usan el
-// código generado y WriteProblem.
+// underSavepoint runs effect under a savepoint and turns it into the command's response and its result: ok
+// or the problem code. A business error is rolled back to there, also if the database aborted the
+// transaction, and its problem is the response. Any other error, including the conflicts that UnitOfWork
+// retries, goes up as is. The body ends in '\n', like that of the json.Encoder used by the generated code
+// and WriteProblem.
 func underSavepoint(ctx context.Context, tx postgres.Tx, op operation, effect func(tx postgres.Tx) (any, error)) (storedResponse, string, error) {
 	if _, err := tx.Exec(ctx, "SAVEPOINT command_effect"); err != nil {
-		return storedResponse{}, "", fmt.Errorf("savepoint del comando: %w", err)
+		return storedResponse{}, "", fmt.Errorf("command savepoint: %w", err)
 	}
 	result, effectErr := effect(tx)
 	if effectErr == nil {
 		body, err := json.Marshal(result)
 		if err != nil {
-			return storedResponse{}, "", fmt.Errorf("respuesta del comando: %w", err)
+			return storedResponse{}, "", fmt.Errorf("command response: %w", err)
 		}
 		return storedResponse{status: op.success, body: append(body, '\n')}, resultOK, nil
 	}
@@ -191,21 +191,21 @@ func underSavepoint(ctx context.Context, tx postgres.Tx, op operation, effect fu
 		return storedResponse{}, "", effectErr
 	}
 	if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT command_effect"); err != nil {
-		return storedResponse{}, "", fmt.Errorf("deshacer el comando: %w", err)
+		return storedResponse{}, "", fmt.Errorf("roll back command: %w", err)
 	}
 	body, err := json.Marshal(p.complete(ctx, op.path))
 	if err != nil {
-		return storedResponse{}, "", fmt.Errorf("problem del comando: %w", err)
+		return storedResponse{}, "", fmt.Errorf("command problem: %w", err)
 	}
 	return storedResponse{status: p.Status, body: append(body, '\n')}, p.Code, nil
 }
 
-// requestHash es la huella del request: SHA-256 del método, la ruta y el cuerpo canónico (el cuerpo
-// ya leído y vuelto a serializar, así que espacios y orden de las claves no cambian la huella).
+// requestHash is the request fingerprint: SHA-256 of the method, the path and the canonical body (the body
+// already read and serialized again, so whitespace and key order do not change the fingerprint).
 func requestHash(op operation, request any) ([32]byte, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("huella del request: %w", err)
+		return [32]byte{}, fmt.Errorf("request fingerprint: %w", err)
 	}
 	return sha256.Sum256(append([]byte(op.method+" "+op.path+"\n"), body...)), nil
 }

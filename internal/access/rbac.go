@@ -10,11 +10,11 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Scope es el alcance con que un rol da un permiso: sobre cualquier recurso de la entidad legal del token,
-// o solo sobre los de su party_id (TH-3).
+// Scope is the scope with which a role grants a permission: over any resource of the token's legal entity,
+// or only over those of its party_id (TH-3).
 type Scope int
 
-// Alcances de un permiso; noScope es el de un permiso que no se tiene.
+// Permission scopes; noScope is the scope of a permission not held.
 const (
 	noScope Scope = iota
 	ScopeAll
@@ -22,19 +22,19 @@ const (
 )
 
 var (
-	// ErrForbidden es un permiso que ningún rol del principal da.
-	ErrForbidden = errors.New("permiso denegado")
-	// ErrInvalidPolicy es una política de roles que no se puede cargar.
-	ErrInvalidPolicy = errors.New("política de roles inválida")
+	// ErrForbidden is a permission that none of the principal's roles grants.
+	ErrForbidden = errors.New("permission denied")
+	// ErrInvalidPolicy is a role policy that cannot be loaded.
+	ErrInvalidPolicy = errors.New("invalid role policy")
 )
 
-// Policy son los permisos de cada rol (ADR-0014): deny-by-default, lo que no da ningún rol se niega.
+// Policy holds the permissions of each role (ADR-0014): deny-by-default, whatever no role grants is denied.
 type Policy struct {
-	grants map[string]map[string]Scope // rol → permiso → alcance
+	grants map[string]map[string]Scope // role → permission → scope
 }
 
-// ParsePolicy lee una política: por rol, los permisos con alcance all y los con alcance own
-// (config/roles.yaml). Un campo desconocido o un permiso con los dos alcances la invalidan.
+// ParsePolicy reads a policy: per role, the permissions with scope all and those with scope own
+// (config/roles.yaml). An unknown field or a permission with both scopes makes it invalid.
 func ParsePolicy(doc []byte) (*Policy, error) {
 	var roles map[string]struct {
 		All []string `yaml:"all"`
@@ -55,10 +55,10 @@ func ParsePolicy(doc []byte) (*Policy, error) {
 			scope := scoped.scope
 			for _, perm := range scoped.perms {
 				if perm == "" {
-					return nil, fmt.Errorf("%w: %s da un permiso vacío", ErrInvalidPolicy, role)
+					return nil, fmt.Errorf("%w: %s grants an empty permission", ErrInvalidPolicy, role)
 				}
 				if other, dup := grants[perm]; dup && other != scope {
-					return nil, fmt.Errorf("%w: %s da %s con los dos alcances", ErrInvalidPolicy, role, perm)
+					return nil, fmt.Errorf("%w: %s grants %s with both scopes", ErrInvalidPolicy, role, perm)
 				}
 				grants[perm] = scope
 			}
@@ -68,8 +68,8 @@ func ParsePolicy(doc []byte) (*Policy, error) {
 	return p, nil
 }
 
-// Authorize es el alcance con que el principal pr tiene permission: el más amplio entre sus roles. Un rol
-// que la política no define no da nada.
+// Authorize is the scope with which principal pr holds permission: the widest among its roles. A role the
+// policy does not define grants nothing.
 func (p *Policy) Authorize(pr Principal, permission string) (Scope, error) {
 	granted := noScope
 	for _, role := range pr.Roles {
@@ -78,7 +78,7 @@ func (p *Policy) Authorize(pr Principal, permission string) (Scope, error) {
 			return ScopeAll, nil
 		case ScopeOwn:
 			granted = ScopeOwn
-		case noScope: // el rol no da el permiso
+		case noScope: // the role does not grant the permission
 		}
 	}
 	if granted == noScope {
@@ -87,12 +87,12 @@ func (p *Policy) Authorize(pr Principal, permission string) (Scope, error) {
 	return granted, nil
 }
 
-// Roles son los roles que define la política, ordenados.
+// Roles are the roles the policy defines, sorted.
 func (p *Policy) Roles() []string {
 	return slices.Sorted(maps.Keys(p.grants))
 }
 
-// Permissions son los permisos que da algún rol, ordenados y sin repetir.
+// Permissions are the permissions some role grants, sorted and without duplicates.
 func (p *Policy) Permissions() []string {
 	all := map[string]bool{}
 	for _, grants := range p.grants {

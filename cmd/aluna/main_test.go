@@ -20,14 +20,14 @@ func TestRunVersion(t *testing.T) {
 	code := run([]string{"version"}, &out)
 
 	if code != 0 {
-		t.Fatalf("código de salida = %d, se esperaba 0", code)
+		t.Fatalf("exit code = %d, want 0", code)
 	}
 	if got, want := out.String(), "aluna dev\n"; got != want {
-		t.Fatalf("salida = %q, se esperaba %q", got, want)
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 
-func TestRunVersionInyectada(t *testing.T) {
+func TestRunVersionInjected(t *testing.T) {
 	defer func(v string) { version = v }(version)
 	version = "1.2.3"
 	var out bytes.Buffer
@@ -35,28 +35,28 @@ func TestRunVersionInyectada(t *testing.T) {
 	run([]string{"version"}, &out)
 
 	if got, want := out.String(), "aluna 1.2.3\n"; got != want {
-		t.Fatalf("salida = %q, se esperaba %q", got, want)
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 
-func TestRunSinComandoValidoImprimeUso(t *testing.T) {
-	casos := map[string][]string{
-		"sin argumentos":                nil,
-		"comando desconocido":           {"fiar"},
-		"argumentos de más":             {"version", "extra"},
-		"migrate sin dirección":         {"migrate"},
-		"migrate dirección inválida":    {"migrate", "sideways"},
-		"migrate con argumentos de más": {"migrate", "up", "extra"},
-		"api con argumentos":            {"api", "extra"},
-		"worker con argumentos":         {"worker", "extra"},
-		"audit sin subcomando":          {"audit"},
-		"audit desconocido":             {"audit", "check"},
-		"verify sin bloques":            {"audit", "verify"},
-		"verify al revés":               {"audit", "verify", "--from", "3", "--to", "2"},
-		"verify con argumentos de más":  {"audit", "verify", "--from", "1", "--to", "2", "extra"},
+func TestRunWithoutValidCommandPrintsUsage(t *testing.T) {
+	cases := map[string][]string{
+		"no arguments":                 nil,
+		"unknown command":              {"frobnicate"},
+		"extra arguments":              {"version", "extra"},
+		"migrate without direction":    {"migrate"},
+		"migrate invalid direction":    {"migrate", "sideways"},
+		"migrate with extra arguments": {"migrate", "up", "extra"},
+		"api with arguments":           {"api", "extra"},
+		"worker with arguments":        {"worker", "extra"},
+		"audit without subcommand":     {"audit"},
+		"unknown audit subcommand":     {"audit", "check"},
+		"verify without blocks":        {"audit", "verify"},
+		"verify reversed range":        {"audit", "verify", "--from", "3", "--to", "2"},
+		"verify with extra arguments":  {"audit", "verify", "--from", "1", "--to", "2", "extra"},
 	}
-	for nombre, args := range casos {
-		t.Run(nombre, func(t *testing.T) {
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
 			defer func(w io.Writer) { stderr = w }(stderr)
 			var out, errOut bytes.Buffer
 			stderr = &errOut
@@ -64,13 +64,13 @@ func TestRunSinComandoValidoImprimeUso(t *testing.T) {
 			code := run(args, &out)
 
 			if code != 2 {
-				t.Errorf("código de salida = %d, se esperaba 2", code)
+				t.Errorf("exit code = %d, want 2", code)
 			}
 			if out.Len() != 0 {
-				t.Errorf("stdout = %q, se esperaba vacío", out.String())
+				t.Errorf("stdout = %q, want empty", out.String())
 			}
-			if !strings.HasPrefix(errOut.String(), "uso: aluna") {
-				t.Errorf("stderr = %q, se esperaba el uso", errOut.String())
+			if !strings.HasPrefix(errOut.String(), "usage: aluna") {
+				t.Errorf("stderr = %q, want the usage text", errOut.String())
 			}
 		})
 	}
@@ -100,16 +100,16 @@ func TestRunAPIInvalidAddr(t *testing.T) {
 	code := runAPI(context.Background(), apiConfig{addr: "127.0.0.1:-1"}, nil, authorization{}, slog.New(slog.NewJSONHandler(&out, nil)))
 
 	if code != 1 {
-		t.Fatalf("código de salida = %d, se esperaba 1", code)
+		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(out.String(), "no se pudo abrir el puerto") {
+	if !strings.Contains(out.String(), "could not open the port") {
 		t.Fatalf("log = %s", out.String())
 	}
 }
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// waitHealthy espera hasta 5 s a que /healthz responda 200.
+// waitHealthy waits up to 5 s for /healthz to answer 200.
 func waitHealthy(t *testing.T, addr string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -125,7 +125,7 @@ func waitHealthy(t *testing.T, addr string) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("%s/healthz no respondió 200 en 5 s", addr)
+	t.Fatalf("%s/healthz did not answer 200 within 5 s", addr)
 }
 
 func expectExit(t *testing.T, exit <-chan int, want int) {
@@ -133,10 +133,10 @@ func expectExit(t *testing.T, exit <-chan int, want int) {
 	select {
 	case code := <-exit:
 		if code != want {
-			t.Fatalf("código de salida = %d, se esperaba %d", code, want)
+			t.Fatalf("exit code = %d, want %d", code, want)
 		}
 	case <-time.After(shutdownTimeout):
-		t.Fatalf("el apagado tardó más de %v", shutdownTimeout)
+		t.Fatalf("shutdown took longer than %v", shutdownTimeout)
 	}
 }
 
@@ -149,7 +149,7 @@ func TestMigrateNeedsDatabaseURL(t *testing.T) {
 	code := run([]string{"migrate", "up"}, io.Discard)
 
 	if code != 1 || !strings.Contains(errOut.String(), "ALUNA_DATABASE_URL") {
-		t.Fatalf("código = %d, stderr = %q", code, errOut.String())
+		t.Fatalf("code = %d, stderr = %q", code, errOut.String())
 	}
 }
 
@@ -159,14 +159,14 @@ func TestAPIConfigFromEnv(t *testing.T) {
 		dsn, issuer, audience string
 		wantErr               string
 	}{
-		"completa":      {"postgres://x@db/aluna", issuer, audience, ""},
-		"sin base":      {"", issuer, audience, "ALUNA_DATABASE_URL"},
-		"sin emisor":    {"postgres://x@db/aluna", "", audience, "ALUNA_OIDC_ISSUER"},
-		"sin audiencia": {"postgres://x@db/aluna", issuer, "", "ALUNA_OIDC_AUDIENCE"},
+		"complete":         {"postgres://x@db/aluna", issuer, audience, ""},
+		"without database": {"", issuer, audience, "ALUNA_DATABASE_URL"},
+		"without issuer":   {"postgres://x@db/aluna", "", audience, "ALUNA_OIDC_ISSUER"},
+		"without audience": {"postgres://x@db/aluna", issuer, "", "ALUNA_OIDC_AUDIENCE"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("ALUNA_HTTP_ADDR", "") // el default se prueba sin depender del entorno
+			t.Setenv("ALUNA_HTTP_ADDR", "") // the default is tested without depending on the environment
 			t.Setenv("ALUNA_DATABASE_URL", tc.dsn)
 			t.Setenv("ALUNA_OIDC_ISSUER", tc.issuer)
 			t.Setenv("ALUNA_OIDC_AUDIENCE", tc.audience)
@@ -178,7 +178,7 @@ func TestAPIConfigFromEnv(t *testing.T) {
 				t.Fatalf("cfg = %+v, err = %v", cfg, err)
 			}
 			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
-				t.Fatalf("error = %v, se esperaba uno sobre %s", err, tc.wantErr)
+				t.Fatalf("error = %v, want one about %s", err, tc.wantErr)
 			}
 		})
 	}

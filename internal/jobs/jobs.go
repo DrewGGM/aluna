@@ -1,6 +1,6 @@
-// Package jobs cablea los jobs del worker (FR-47, ADR-0007): los registra en River y define los
-// periódicos. Cada job es idempotente: correrlo de más, o dos a la vez, deja el mismo resultado (dos a la
-// vez pueden chocar en un lock y fallar uno; lo repite el próximo intervalo).
+// Package jobs wires the worker's jobs (FR-47, ADR-0007): it registers them in River and defines the
+// periodic ones. Every job is idempotent: running it too often, or two at once, leaves the same result
+// (two at once can collide on a lock and one fails; the next interval repeats it).
 package jobs
 
 import (
@@ -16,17 +16,17 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// QueueLedger es la cola de los jobs que escriben en el ledger; el resto va a river.QueueDefault.
+// QueueLedger is the queue for the jobs that write to the ledger; the rest go to river.QueueDefault.
 const QueueLedger = "ledger"
 
-// Los dos trabajos del ledger siguen con otro lote hasta ponerse al día; el tamaño acota cada transacción.
+// The two ledger jobs keep taking batches until they catch up; the size bounds each transaction.
 const (
 	holdsBatch     = 500
 	aggregateBatch = 1000
 )
 
-// El sellado (ADR-0012) cierra bloques de a lo más auditBlockSize registros, sealRounds por corrida para
-// terminar antes del límite de tiempo del job; lo que quede lo toma la corrida siguiente.
+// Sealing (ADR-0012) closes blocks of at most auditBlockSize records, sealRounds per run so it finishes
+// before the job's time limit; whatever is left goes to the next run.
 const (
 	auditBlockSize = 10_000
 	sealRounds     = 5
@@ -34,10 +34,10 @@ const (
 
 const (
 	idempotencyRetention = 7 * 24 * time.Hour  // architecture §9
-	outboxRetention      = 30 * 24 * time.Hour // la Events API retiene 30 días (FR-46)
+	outboxRetention      = 30 * 24 * time.Hour // the Events API retains 30 days (FR-46)
 )
 
-// Deps son los servicios que usan los jobs.
+// Deps are the services the jobs use.
 type Deps struct {
 	UnitOfWork  *postgres.UnitOfWork
 	Ledger      *ledger.Service
@@ -46,20 +46,20 @@ type Deps struct {
 	Audit       *audit.Service
 }
 
-// Config es la configuración de River del worker: las colas, los workers de Register, los periódicos y el
-// esquema. Quien la usa agrega el logger y cómo se apaga.
+// Config is the worker's River configuration: the queues, the workers from Register, the periodic jobs
+// and the schema. The caller adds the logger and how it shuts down.
 func Config(deps Deps) *river.Config {
 	workers := river.NewWorkers()
 	Register(workers, deps)
 	return &river.Config{
 		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: Periodic(),
 		Queues: map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}},
-		// REINDEX exige ser dueño del índice y el worker corre como aluna_app (migración 0009).
+		// REINDEX requires owning the index and the worker runs as aluna_app (migration 0009).
 		ReindexerIndexNames: []string{},
 	}
 }
 
-// Register registra en w los workers de los jobs periódicos y el que publica el outbox.
+// Register registers in w the workers of the periodic jobs and the one that publishes the outbox.
 func Register(w *river.Workers, deps Deps) {
 	river.AddWorker(w, &task[expireHolds]{run: func(ctx context.Context) error {
 		_, err := deps.Ledger.ExpireDueHolds(ctx, deps.UnitOfWork, time.Now(), holdsBatch)
@@ -89,8 +89,9 @@ func Register(w *river.Workers, deps Deps) {
 	deps.Outbox.AddWorkers(w)
 }
 
-// Periodic son los jobs periódicos. Corren también al arrancar (RunOnStart): el scheduler de River vive en
-// memoria del líder, y sin eso un worker que reinicia más seguido que el intervalo nunca los correría.
+// Periodic are the periodic jobs. They also run at startup (RunOnStart): River's scheduler lives in the
+// leader's memory, and without it a worker that restarts more often than the interval would never run
+// them.
 func Periodic() []*river.PeriodicJob {
 	return []*river.PeriodicJob{
 		every(30*time.Second, expireHolds{}),
@@ -107,7 +108,7 @@ func every(interval time.Duration, args river.JobArgs) *river.PeriodicJob {
 		&river.PeriodicJobOpts{RunOnStart: true})
 }
 
-// task es el worker de un job periódico: no tiene argumentos, solo algo que correr.
+// task is the worker of a periodic job: it has no arguments, only something to run.
 type task[A river.JobArgs] struct {
 	river.WorkerDefaults[A]
 	run func(ctx context.Context) error
@@ -115,8 +116,8 @@ type task[A river.JobArgs] struct {
 
 func (t *task[A]) Work(ctx context.Context, _ *river.Job[A]) error { return t.run(ctx) }
 
-// insertOpts pone el job en queue sin reintentos: un periódico que falla lo vuelve a correr el próximo
-// intervalo, en vez de acumular reintentos de la misma corrida.
+// insertOpts puts the job in queue without retries: a failing periodic job runs again on the next
+// interval, instead of piling up retries of the same run.
 func insertOpts(queue string) river.InsertOpts { return river.InsertOpts{Queue: queue, MaxAttempts: 1} }
 
 type expireHolds struct{}

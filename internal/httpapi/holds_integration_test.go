@@ -17,14 +17,14 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 )
 
-// depositWithHold crea un depósito de 1.000 COP (unidades menores), su cuenta de clearing y un hold
-// de 500 sobre el depósito, todo por HTTP, y devuelve el servidor, el depósito y el hold.
+// depositWithHold creates a deposit of 1,000 COP (minor units), its clearing account and a hold of 500 on
+// the deposit, all over HTTP, and returns the server, the deposit and the hold.
 func depositWithHold(t *testing.T) (*httptest.Server, string, gen.Hold) {
 	t.Helper()
 	ts := apiServer(t, ids.New())
 	cash, deposit, clearing := createAccount(t, ts, "asset"), createAccount(t, ts, "liability"), createAccount(t, ts, "liability")
 	if r := postWithKey(t, ts, ids.New().String(), postingBody(t, cash, deposit, 1000, 1000, "")); r.status != http.StatusCreated {
-		t.Fatalf("fondeo = %d %s", r.status, r.body)
+		t.Fatalf("funding = %d %s", r.status, r.body)
 	}
 	return ts, deposit, placeHoldOver(t, ts, deposit, clearing, 500)
 }
@@ -45,15 +45,15 @@ func TestCaptureAHoldOverHTTP(t *testing.T) {
 		t.Fatalf("capture = %d %s", r.status, r.body)
 	}
 	if replay := postTo(t, ts, path, key, captureBody(200)); replay.status != http.StatusOK || !bytes.Equal(replay.body, r.body) {
-		t.Fatalf("replay del capture = %d %s, se esperaba la misma respuesta", replay.status, replay.body)
+		t.Fatalf("capture replay = %d %s, want the same response", replay.status, replay.body)
 	}
 	if got := balanceOf(t, ts, deposit); got != -800 {
-		t.Fatalf("saldo del depósito = %d, se esperaba -800 (se capturaron 200 de 1.000)", got)
+		t.Fatalf("deposit balance = %d, want -800 (200 of 1,000 captured)", got)
 	}
 }
 
-// TestConcurrentCapturesOfAHold (AB-3): dos capture a la vez del mismo hold, con claves distintas: uno
-// pasa y el otro recibe 409 hold_not_pending; se asienta una sola vez.
+// TestConcurrentCapturesOfAHold (AB-3): two simultaneous captures of the same hold, with different keys: one
+// passes and the other gets 409 hold_not_pending; it is posted once.
 func TestConcurrentCapturesOfAHold(t *testing.T) {
 	ts, deposit, hold := depositWithHold(t)
 	path := "/v1/holds/" + hold.Id.String() + "/capture"
@@ -76,14 +76,14 @@ func TestConcurrentCapturesOfAHold(t *testing.T) {
 		case r.status == http.StatusConflict && problemCode(t, r) == "hold_not_pending":
 			conflict++
 		default:
-			t.Errorf("respuesta inesperada: %d %s", r.status, r.body)
+			t.Errorf("unexpected response: %d %s", r.status, r.body)
 		}
 	}
 	if ok != 1 || conflict != 1 {
-		t.Fatalf("%d capture pasaron y %d recibieron 409; se esperaba uno y uno", ok, conflict)
+		t.Fatalf("%d captures passed and %d got 409; want one and one", ok, conflict)
 	}
 	if got := balanceOf(t, ts, deposit); got != -500 {
-		t.Fatalf("saldo del depósito = %d, se esperaba -500: el hold se asentó una vez", got)
+		t.Fatalf("deposit balance = %d, want -500: the hold was posted once", got)
 	}
 }
 
@@ -95,25 +95,25 @@ func TestHoldErrorsOverHTTP(t *testing.T) {
 		status           int
 		code             string
 	}{
-		{"de más", capture, captureBody(501), http.StatusUnprocessableEntity, "amount_exceeds_hold"},
-		{"en otra moneda", capture, `{"amount":{"amount":100,"currency":"USD"},"business_date":"2026-10-27"}`, http.StatusUnprocessableEntity, "currency_mismatch"},
-		{"hold inexistente", "/v1/holds/" + ids.New().String() + "/release", "", http.StatusNotFound, "not_found"},
-		{"liberar", release, "", http.StatusOK, ""},
-		{"capturar uno liberado", capture, captureBody(100), http.StatusConflict, "hold_not_pending"},
+		{"too much", capture, captureBody(501), http.StatusUnprocessableEntity, "amount_exceeds_hold"},
+		{"in another currency", capture, `{"amount":{"amount":100,"currency":"USD"},"business_date":"2026-10-27"}`, http.StatusUnprocessableEntity, "currency_mismatch"},
+		{"nonexistent hold", "/v1/holds/" + ids.New().String() + "/release", "", http.StatusNotFound, "not_found"},
+		{"release", release, "", http.StatusOK, ""},
+		{"capture a released one", capture, captureBody(100), http.StatusConflict, "hold_not_pending"},
 	}
 	for _, tc := range cases {
 		r := postTo(t, ts, tc.path, ids.New().String(), tc.body)
 		if r.status != tc.status || (tc.code != "" && problemCode(t, r) != tc.code) {
-			t.Errorf("%s = %d %s, se esperaba %d %s", tc.name, r.status, r.body, tc.status, tc.code)
+			t.Errorf("%s = %d %s, want %d %s", tc.name, r.status, r.body, tc.status, tc.code)
 		}
 	}
 	if r, err := send(t.Context(), ts, release, nil, ""); err != nil || r.status != http.StatusBadRequest {
-		t.Errorf("liberar sin Idempotency-Key = %d (%v), se esperaba 400", r.status, err)
+		t.Errorf("release without Idempotency-Key = %d (%v), want 400", r.status, err)
 	}
 }
 
-// TestTheSameKeyOnTwoHoldsCapturesBoth: la clave va por hold; la misma clave y el mismo cuerpo sobre
-// otro hold no se toman por un reintento.
+// TestTheSameKeyOnTwoHoldsCapturesBoth: the key is per hold; the same key and the same body on another hold
+// are not taken for a retry.
 func TestTheSameKeyOnTwoHoldsCapturesBoth(t *testing.T) {
 	ts, _, first := depositWithHold(t)
 	other := placeHoldOver(t, ts, first.AccountId.String(), first.CounterAccountId.String(), 100)
@@ -123,12 +123,12 @@ func TestTheSameKeyOnTwoHoldsCapturesBoth(t *testing.T) {
 		r := postTo(t, ts, "/v1/holds/"+hold.Id.String()+"/capture", key, captureBody(100))
 		var got gen.HoldCapture
 		if r.status != http.StatusOK || json.Unmarshal(r.body, &got) != nil || got.Hold.Id != hold.Id {
-			t.Fatalf("capture de %s = %d %s", hold.Id, r.status, r.body)
+			t.Fatalf("capture of %s = %d %s", hold.Id, r.status, r.body)
 		}
 	}
 }
 
-// placeHoldOver crea por HTTP un hold de units sobre account, con vencimiento en una hora.
+// placeHoldOver creates over HTTP a hold of units on account, expiring in an hour.
 func placeHoldOver(t *testing.T, ts *httptest.Server, account, counter string, units int64) gen.Hold {
 	t.Helper()
 	body := fmt.Sprintf(`{"account_id":%q,"counter_account_id":%q,"amount":{"amount":%d,"currency":"COP"},"expires_at":%q}`,
@@ -136,19 +136,19 @@ func placeHoldOver(t *testing.T, ts *httptest.Server, account, counter string, u
 	r := postTo(t, ts, "/v1/holds", ids.New().String(), body)
 	var hold gen.Hold
 	if r.status != http.StatusCreated || json.Unmarshal(r.body, &hold) != nil || hold.Status != gen.HoldStatusPending {
-		t.Fatalf("crear el hold = %d %s", r.status, r.body)
+		t.Fatalf("create hold = %d %s", r.status, r.body)
 	}
 	return hold
 }
 
-// TestACaptureNeedsItsBusinessDate: como en el posting, la fecha de negocio 0001-01-01 es inválida y no se
-// reemplaza por la de la entidad.
+// TestACaptureNeedsItsBusinessDate: as in the posting, the business date 0001-01-01 is invalid and is not
+// replaced by the entity's.
 func TestACaptureNeedsItsBusinessDate(t *testing.T) {
 	ts, _, hold := depositWithHold(t)
 
 	r := postTo(t, ts, "/v1/holds/"+hold.Id.String()+"/capture", ids.New().String(), `{"amount":{"amount":100,"currency":"COP"},"business_date":"0001-01-01"}`)
 
 	if r.status != http.StatusUnprocessableEntity || problemCode(t, r) != "invalid_posting" {
-		t.Fatalf("capture con fecha de negocio cero = %d %s, se esperaba 422 invalid_posting", r.status, r.body)
+		t.Fatalf("capture with a zero business date = %d %s, want 422 invalid_posting", r.status, r.body)
 	}
 }

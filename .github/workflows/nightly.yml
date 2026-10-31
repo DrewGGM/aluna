@@ -1,10 +1,10 @@
 name: nightly
 
-# Las pruebas de carrera del ledger (FF-3) corren una vez en cada PR dentro de ci.yml; aquí se repiten
-# 200 veces, para atrapar lo que solo falla de vez en cuando (como un orden de locks equivocado).
+# The ledger race tests (FF-3) run once on every PR in ci.yml; here they repeat 200 times to catch what
+# only fails now and then (such as a wrong lock order).
 on:
   schedule:
-    - cron: "0 7 * * *" # 02:00 en Colombia
+    - cron: "0 7 * * *" # 02:00 in Colombia
   workflow_dispatch:
 
 permissions:

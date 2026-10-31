@@ -10,10 +10,10 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 )
 
-// ErrInvalidAccount indica datos de cuenta fuera de los valores permitidos o un código repetido.
-var ErrInvalidAccount = errors.New("cuenta inválida")
+// ErrInvalidAccount means account data outside the allowed values or a repeated code.
+var ErrInvalidAccount = errors.New("invalid account")
 
-// CreateAccountInput son los datos de una cuenta nueva.
+// CreateAccountInput is the data for a new account.
 type CreateAccountInput struct {
 	LegalEntityID ids.ID
 	Code          string
@@ -23,18 +23,18 @@ type CreateAccountInput struct {
 	LowerLimit    int64
 }
 
-// AccountWriter es la persistencia de CreateAccount.
+// AccountWriter is the persistence of CreateAccount.
 type AccountWriter interface {
 	InsertAccount(ctx context.Context, a domain.Account) error
 }
 
-// Balance es el saldo materializado de una cuenta, con signo (débito +, crédito −). En una cuenta async
-// lo mantiene el agregador (T-023).
+// Balance is an account's materialized balance, signed (debit +, credit −). On an async account the
+// aggregator maintains it (T-023).
 type Balance struct {
 	Posted, PendingDebits, PendingCredits, Version int64
 }
 
-// CreateAccount registra la cuenta con su saldo en cero.
+// CreateAccount registers the account with a zero balance.
 func CreateAccount(ctx context.Context, store AccountWriter, in CreateAccountInput) (domain.Account, error) {
 	if err := validAccount(in); err != nil {
 		return domain.Account{}, err
@@ -52,17 +52,17 @@ func CreateAccount(ctx context.Context, store AccountWriter, in CreateAccountInp
 func validAccount(in CreateAccountInput) error {
 	switch {
 	case in.Code == "":
-		return fmt.Errorf("%w: falta el código", ErrInvalidAccount)
+		return fmt.Errorf("%w: missing code", ErrInvalidAccount)
 	case in.Currency.Code() == "":
-		return fmt.Errorf("%w: falta la moneda", ErrInvalidAccount)
+		return fmt.Errorf("%w: missing currency", ErrInvalidAccount)
 	}
 	switch in.Kind {
 	case domain.KindAsset, domain.KindLiability, domain.KindEquity, domain.KindIncome, domain.KindExpense:
 	default:
-		return fmt.Errorf("%w: clase %q", ErrInvalidAccount, in.Kind)
+		return fmt.Errorf("%w: kind %q", ErrInvalidAccount, in.Kind)
 	}
 	if in.Mode != domain.BalanceModeSync && in.Mode != domain.BalanceModeAsync {
-		return fmt.Errorf("%w: modo %q", ErrInvalidAccount, in.Mode)
+		return fmt.Errorf("%w: mode %q", ErrInvalidAccount, in.Mode)
 	}
 	return nil
 }

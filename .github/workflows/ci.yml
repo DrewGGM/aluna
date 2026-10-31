@@ -8,8 +8,8 @@ on:
 permissions:
   contents: read
 
-# En un PR se cancelan las corridas viejas. En main cada commit tiene su propio grupo: necesita su
-# veredicto y gitleaks solo revisa los commits de su push.
+# On a PR, older runs are canceled. On main each commit gets its own group: it needs its own verdict
+# and gitleaks only scans the commits of its push.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
@@ -33,7 +33,7 @@ jobs:
         with:
           version: v2.15.0
 
-  # El código generado (oapi-codegen y sqlc) tiene que estar al día con sus fuentes.
+  # Generated code (oapi-codegen and sqlc) must be up to date with its sources.
   generated:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -43,12 +43,12 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go generate ./...
-      # sqlc no va como `tool` en go.mod: arrastraría su árbol de dependencias al SBOM (ADR-0013).
+      # sqlc is not a `tool` in go.mod: it would drag its dependency tree into the SBOM (ADR-0013).
       - run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
-      # status y no diff: también atrapa archivos generados nuevos o en un lugar equivocado.
+      # status rather than diff: it also catches generated files that are new or in the wrong place.
       - run: |
           out=$(git status --porcelain)
-          [ -z "$out" ] || { echo "$out"; echo "Código generado desactualizado: corre go generate ./... y sqlc generate"; exit 1; }
+          [ -z "$out" ] || { echo "$out"; echo "Generated code is out of date: run go generate ./... and sqlc generate"; exit 1; }
 
   test:
     runs-on: ubuntu-latest
@@ -96,15 +96,15 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: read # gitleaks lista los commits del PR
+      pull-requests: read # gitleaks lists the PR commits
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # gitleaks necesita la historia para resolver el rango base^..head
+          fetch-depth: 0 # gitleaks needs the history to resolve the base^..head range
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          check-latest: true # govulncheck reporta las vulnerabilidades del parche de Go instalado
+          check-latest: true # govulncheck reports the vulnerabilities of the installed Go patch release
       - run: go mod verify
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0

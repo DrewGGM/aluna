@@ -1,6 +1,6 @@
--- Registro de auditoría de comandos (FR-40, ADR-0012): cada comando deja aquí quién, desde dónde, qué
--- pidió y qué resultó, en la misma transacción que su efecto. Es evidencia: nadie lo modifica ni lo
--- borra, tampoco el dueño de las tablas. El sellado por bloques (T-034) llenará block_id.
+-- Command audit log (FR-40, ADR-0012): every command records here who, from where, what it asked for
+-- and what resulted, in the same transaction as its effect. It is evidence: nobody modifies or deletes
+-- it, not even the table owner. Block sealing (T-034) will fill block_id.
 
 -- +goose Up
 CREATE TABLE audit.records (
@@ -22,7 +22,7 @@ CREATE TABLE audit.records (
 -- +goose StatementBegin
 CREATE FUNCTION audit.forbid_record_change() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    RAISE EXCEPTION 'los registros de auditoría no se modifican ni se borran'
+    RAISE EXCEPTION 'audit records are never modified or deleted'
         USING ERRCODE = 'prohibited_sql_statement_attempted', TABLE = 'records';
 END
 $$;

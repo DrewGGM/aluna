@@ -18,13 +18,13 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// TestLedgerProperties (FF-1): secuencias al azar de cuentas, postings, reversas (también de reversas y
-// de captures), holds, capture parcial, release (también sobre un hold ya terminado) y agregación contra
-// PostgreSQL. El modelo lleva por cuenta el saldo con signo y el pendiente que espera, así que cada
-// rechazo por fondos tiene que ser el que predice y cada importe el que se pidió. Tras cada paso: Σ
-// entries = 0, cada cuenta tiene el saldo y los entries del modelo, el pendiente de una sync es el de
-// sus holds pending, ningún disponible queda bajo el límite y ningún hold cambia de estado salvo por la
-// operación que lo terminó.
+// TestLedgerProperties (FF-1): random sequences of accounts, postings, reversals (also of reversals and
+// of captures), holds, partial captures, releases (also on an already finished hold) and aggregation
+// against PostgreSQL. The model tracks each account's signed balance and the pending amount it expects,
+// so each funds rejection must be the one it predicts and each amount the one requested. After each step:
+// Σ entries = 0, each account has the model's balance and entries, a sync account's pending amount is
+// that of its pending holds, no available balance ends below the limit and no hold changes status except
+// through the operation that finished it.
 func TestLedgerProperties(t *testing.T) {
 	enforced := defaultChecks(t, "200")
 	ran := &coverage{}
@@ -41,26 +41,26 @@ func TestLedgerProperties(t *testing.T) {
 			"aggregate": m.aggregateStep,
 		})
 	})
-	t.Logf("pasaron %+v", *ran)
+	t.Logf("succeeded %+v", *ran)
 	if enforced && !testing.Short() && slices.Contains([]int{ran.posts, ran.reversals, ran.holds, ran.captures, ran.releases, ran.refusals, ran.reterminated}, 0) {
-		t.Errorf("alguna operación nunca pasó en %+v: la prueba no la ejercita", *ran)
+		t.Errorf("some operation never succeeded in %+v: the test does not exercise it", *ran)
 	}
 }
 
-// coverage cuenta lo que de verdad pasó en todas las secuencias: una operación que nunca pasa (porque el
-// ledger la rechaza siempre, por ejemplo) dejaría la mitad de la máquina de estados sin probar.
+// coverage counts what actually happened across all sequences: an operation that never succeeds (because
+// the ledger always rejects it, for example) would leave half the state machine untested.
 type coverage struct {
 	posts, reversals, holds, captures, releases, refusals int
-	reterminated                                          int // intentos de terminar otra vez un hold terminado
+	reterminated                                          int // attempts to finish an already finished hold again
 }
 
-// defaultChecks corre n secuencias salvo que -rapid.checks o RAPID_CHECKS digan cuántas (el CI corre la
-// prueba sin la flag) y dice si quedó n.
+// defaultChecks runs n sequences unless -rapid.checks or RAPID_CHECKS say how many (CI runs the test
+// without the flag) and reports whether n was kept.
 func defaultChecks(t *testing.T, n string) bool {
 	t.Helper()
 	f := flag.Lookup("rapid.checks")
 	if f == nil {
-		t.Fatal("rapid ya no expone -rapid.checks")
+		t.Fatal("rapid no longer exposes -rapid.checks")
 	}
 	explicit := false
 	flag.Visit(func(set *flag.Flag) { explicit = explicit || set.Name == f.Name })
@@ -79,21 +79,21 @@ func defaultChecks(t *testing.T, n string) bool {
 	return true
 }
 
-// ledgerModel es lo que la secuencia sabe que debería haber en la base. Los holds y las transacciones
-// reversibles van en orden de creación: rapid necesita elegir entre ellos siempre en el mismo orden para
-// reproducir un fallo.
+// ledgerModel is what the sequence knows should be in the database. Holds and reversible transactions
+// are kept in creation order: rapid needs to choose among them always in the same order to reproduce a
+// failure.
 type ledgerModel struct {
 	t          *testing.T
 	cop        money.Currency
 	ran        *coverage
 	accounts   []ledger.Account
-	posted     map[ids.ID]int64 // saldo con signo esperado
-	reserved   map[ids.ID]int64 // pendiente esperado del lado por el que la cuenta pierde saldo
-	reversible []posting        // transacciones asentadas que aún no se revierten
+	posted     map[ids.ID]int64 // expected signed balance
+	reserved   map[ids.ID]int64 // expected pending amount on the side through which the account loses balance
+	reversible []posting        // posted transactions not yet reversed
 	holds      []modelHold
 }
 
-// posting es una transacción asentada con sus movimientos con signo.
+// posting is a posted transaction with its signed movements.
 type posting struct {
 	id   ids.ID
 	legs []leg
@@ -101,7 +101,7 @@ type posting struct {
 
 type leg struct {
 	account ledger.Account
-	units   int64 // débito +, crédito −
+	units   int64 // debit +, credit −
 }
 
 type modelHold struct {
@@ -111,16 +111,16 @@ type modelHold struct {
 	status          ledger.HoldStatus
 }
 
-func debitNatured(k ledger.Kind) bool { return ledger.NaturalBalance(k, 1) > 0 }
+func debitNormal(k ledger.Kind) bool { return ledger.NaturalBalance(k, 1) > 0 }
 
-// room es lo que la cuenta puede perder antes de llegar a su límite.
+// room is what the account can lose before reaching its limit.
 func (m *ledgerModel) room(a ledger.Account) int64 {
 	return ledger.NaturalBalance(a.Kind, m.posted[a.ID]) - m.reserved[a.ID] - a.LowerLimit
 }
 
-// refuses dice si el ledger tiene que rechazar los movimientos por fondos: una cuenta sync que pierde
-// saldo natural quedaría bajo su límite. freed es el pendiente de la cuenta freedFrom que se libera en la
-// misma escritura (el del hold que se captura).
+// refuses reports whether the ledger must reject the movements for funds: a sync account that loses
+// natural balance would end below its limit. freed is the pending amount of account freedFrom released in
+// the same write (that of the hold being captured).
 func (m *ledgerModel) refuses(legs []leg, freedFrom ids.ID, freed int64) bool {
 	for _, l := range legs {
 		change := ledger.NaturalBalance(l.account.Kind, l.units)
@@ -138,18 +138,18 @@ func (m *ledgerModel) refuses(legs []leg, freedFrom ids.ID, freed int64) bool {
 	return false
 }
 
-// settled exige que err sea el que predice el modelo: ErrInsufficientFunds si refused, ninguno si no. Dice
-// si la operación pasó.
+// settled requires err to be the one the model predicts: ErrInsufficientFunds if refused, none
+// otherwise. It reports whether the operation succeeded.
 func (m *ledgerModel) settled(rt *rapid.T, op string, err error, refused bool) bool {
 	if refused {
 		if !errors.Is(err, ledger.ErrInsufficientFunds) {
-			rt.Fatalf("%s: se esperaba ErrInsufficientFunds, fue %v", op, err)
+			rt.Fatalf("%s: want ErrInsufficientFunds, got %v", op, err)
 		}
 		m.ran.refusals++
 		return false
 	}
 	if err != nil {
-		rt.Fatalf("%s: error inesperado (el modelo no predice un rechazo): %v", op, err)
+		rt.Fatalf("%s: unexpected error (the model predicts no rejection): %v", op, err)
 	}
 	return true
 }
@@ -163,11 +163,11 @@ func (m *ledgerModel) apply(legs []leg) {
 func (m *ledgerModel) accountStep(rt *rapid.T) {
 	in := ledger.CreateAccountInput{
 		LegalEntityID: entity, Code: "prop-" + ids.New().String(), Currency: m.cop,
-		Kind: rapid.SampledFrom([]ledger.Kind{ledger.KindAsset, ledger.KindLiability, ledger.KindIncome}).Draw(rt, "clase"),
-		Mode: rapid.SampledFrom([]ledger.BalanceMode{ledger.BalanceModeSync, ledger.BalanceModeAsync}).Draw(rt, "modo"),
+		Kind: rapid.SampledFrom([]ledger.Kind{ledger.KindAsset, ledger.KindLiability, ledger.KindIncome}).Draw(rt, "kind"),
+		Mode: rapid.SampledFrom([]ledger.BalanceMode{ledger.BalanceModeSync, ledger.BalanceModeAsync}).Draw(rt, "mode"),
 	}
 	if in.Mode == ledger.BalanceModeSync {
-		in.LowerLimit = rapid.SampledFrom([]int64{0, -200}).Draw(rt, "límite")
+		in.LowerLimit = rapid.SampledFrom([]int64{0, -200}).Draw(rt, "limit")
 	}
 	a, err := tryCreateAccount(m.t, in)
 	if err != nil {
@@ -176,32 +176,32 @@ func (m *ledgerModel) accountStep(rt *rapid.T) {
 	m.accounts = append(m.accounts, a)
 }
 
-// pair elige dos cuentas distintas; la primera recibe el débito.
+// pair picks two different accounts; the first receives the debit.
 func (m *ledgerModel) pair(rt *rapid.T) (debit, credit ledger.Account) {
 	if len(m.accounts) < 2 {
-		rt.Skip("faltan cuentas")
+		rt.Skip("not enough accounts")
 	}
-	i := rapid.IntRange(0, len(m.accounts)-1).Draw(rt, "débito")
-	j := rapid.IntRange(0, len(m.accounts)-2).Draw(rt, "crédito")
+	i := rapid.IntRange(0, len(m.accounts)-1).Draw(rt, "debit")
+	j := rapid.IntRange(0, len(m.accounts)-2).Draw(rt, "credit")
 	if j >= i {
 		j++
 	}
 	return m.accounts[i], m.accounts[j]
 }
 
-// units elige un importe; a veces el que deja justo en su límite a la cuenta sync que pierde saldo, o uno
-// más, para probar el borde por los dos lados.
+// units picks an amount; sometimes the one that leaves the sync account losing balance exactly at its
+// limit, or one more, to test the edge from both sides.
 func (m *ledgerModel) units(rt *rapid.T, losing ledger.Account) int64 {
-	if room := m.room(losing); losing.Mode == ledger.BalanceModeSync && room > 0 && rapid.Bool().Draw(rt, "al límite") {
-		return room + rapid.Int64Range(0, 1).Draw(rt, "pasado")
+	if room := m.room(losing); losing.Mode == ledger.BalanceModeSync && room > 0 && rapid.Bool().Draw(rt, "at limit") {
+		return room + rapid.Int64Range(0, 1).Draw(rt, "past")
 	}
-	return rapid.Int64Range(1, 300).Draw(rt, "importe")
+	return rapid.Int64Range(1, 300).Draw(rt, "amount")
 }
 
 func (m *ledgerModel) postStep(rt *rapid.T) {
 	debit, credit := m.pair(rt)
 	losing := credit
-	if !debitNatured(debit.Kind) { // el débito le baja el saldo
+	if !debitNormal(debit.Kind) { // the debit lowers its balance
 		losing = debit
 	}
 	units := m.units(rt, losing)
@@ -217,13 +217,13 @@ func (m *ledgerModel) postStep(rt *rapid.T) {
 	}
 }
 
-// reverseStep revierte una transacción asentada (un posting, un capture u otra reversa): sus movimientos
-// con el signo contrario.
+// reverseStep reverses a posted transaction (a posting, a capture or another reversal): its movements
+// with the opposite sign.
 func (m *ledgerModel) reverseStep(rt *rapid.T) {
 	if len(m.reversible) == 0 {
-		rt.Skip("nada que revertir")
+		rt.Skip("nothing to reverse")
 	}
-	i := rapid.IntRange(0, len(m.reversible)-1).Draw(rt, "transacción")
+	i := rapid.IntRange(0, len(m.reversible)-1).Draw(rt, "transaction")
 	original := m.reversible[i]
 	legs := make([]leg, len(original.legs))
 	for j, l := range original.legs {
@@ -231,7 +231,7 @@ func (m *ledgerModel) reverseStep(rt *rapid.T) {
 	}
 	refused := m.refuses(legs, ids.ID{}, 0)
 	reversal, err := reverse(m.t, original.id)
-	if m.settled(rt, "reversa", err, refused) {
+	if m.settled(rt, "reversal", err, refused) {
 		m.apply(legs)
 		m.reversible = append(slices.Delete(m.reversible, i, i+1), posting{reversal.ID, legs})
 		m.ran.reversals++
@@ -241,10 +241,10 @@ func (m *ledgerModel) reverseStep(rt *rapid.T) {
 func (m *ledgerModel) holdStep(rt *rapid.T) {
 	origin, counter := m.pair(rt)
 	if origin.Mode != ledger.BalanceModeSync {
-		rt.Skip("el origen de un hold es sync")
+		rt.Skip("a hold's source is sync")
 	}
 	units := m.units(rt, origin)
-	outgoing := leg{origin, ledger.NaturalBalance(origin.Kind, -units)} // retener es como si saliera ya
+	outgoing := leg{origin, ledger.NaturalBalance(origin.Kind, -units)} // holding is as if it left now
 	refused := m.refuses([]leg{outgoing}, ids.ID{}, 0)
 	hold, err := placeHold(m.t, origin.ID, counter.ID, units, time.Hour)
 	if m.settled(rt, "hold", err, refused) {
@@ -254,8 +254,8 @@ func (m *ledgerModel) holdStep(rt *rapid.T) {
 	}
 }
 
-// someHold elige un hold de la secuencia: casi siempre uno pending y a veces cualquiera, también uno ya
-// terminado.
+// someHold picks a hold of the sequence: almost always a pending one and sometimes any, including an
+// already finished one.
 func (m *ledgerModel) someHold(rt *rapid.T) *modelHold {
 	var pending []int
 	for i, h := range m.holds {
@@ -267,28 +267,29 @@ func (m *ledgerModel) someHold(rt *rapid.T) *modelHold {
 		return &m.holds[rapid.SampledFrom(pending).Draw(rt, "hold")]
 	}
 	if len(m.holds) == 0 {
-		rt.Skip("no hay holds")
+		rt.Skip("no holds")
 	}
 	return &m.holds[rapid.IntRange(0, len(m.holds)-1).Draw(rt, "hold")]
 }
 
-// endedAlready exige que terminar otra vez un hold terminado sea ErrHoldNotPending y dice si lo estaba.
+// endedAlready requires that finishing an already finished hold again be ErrHoldNotPending and reports
+// whether it was finished.
 func (m *ledgerModel) endedAlready(rt *rapid.T, h *modelHold, err error) bool {
 	if h.status == ledger.HoldPending {
 		return false
 	}
 	if !errors.Is(err, ledger.ErrHoldNotPending) {
-		rt.Fatalf("terminar otra vez un hold %s = %v, se esperaba ErrHoldNotPending", h.status, err)
+		rt.Fatalf("finishing a %s hold again = %v, want ErrHoldNotPending", h.status, err)
 	}
 	m.ran.reterminated++
 	return true
 }
 
-// captureStep asienta parte de un hold: lo capturado sale del origen hacia la contrapartida y el
-// pendiente completo se libera.
+// captureStep posts part of a hold: what is captured leaves the source toward the counterpart and the
+// whole pending amount is released.
 func (m *ledgerModel) captureStep(rt *rapid.T) {
 	h := m.someHold(rt)
-	units := rapid.Int64Range(1, h.amount).Draw(rt, "capturado")
+	units := rapid.Int64Range(1, h.amount).Draw(rt, "captured")
 	out := ledger.NaturalBalance(h.origin.Kind, -units)
 	legs := []leg{{h.origin, out}, {h.counter, -out}}
 	refused := m.refuses(legs, h.origin.ID, h.amount)
@@ -314,11 +315,11 @@ func (m *ledgerModel) releaseStep(rt *rapid.T) {
 	m.ran.releases++
 }
 
-// aggregateStep corre el agregador hasta que las cuentas async de la secuencia tienen el saldo del
-// modelo. No usa catchUp: ese espera a todas las cuentas async de la base.
+// aggregateStep runs the aggregator until the sequence's async accounts have the model's balance. It does
+// not use catchUp: that one waits for every async account in the database.
 func (m *ledgerModel) aggregateStep(rt *rapid.T) {
 	if !slices.ContainsFunc(m.accounts, func(a ledger.Account) bool { return a.Mode == ledger.BalanceModeAsync }) {
-		rt.Skip("no hay cuentas async")
+		rt.Skip("no async accounts")
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -335,17 +336,17 @@ func (m *ledgerModel) aggregateStep(rt *rapid.T) {
 			return
 		}
 		if time.Now().After(deadline) {
-			rt.Fatalf("tras 10 s quedan %d cuentas async sin el saldo del modelo", lagging)
+			rt.Fatalf("after 10 s, %d async accounts still lack the model's balance", lagging)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-// accountState es el saldo materializado de una cuenta junto a lo que dicen sus entries y sus holds.
+// accountState is an account's materialized balance together with what its entries and holds say.
 type accountState struct {
 	account                               ledger.Account
 	posted, pendingDebits, pendingCredits int64
-	entries, held                         int64 // Σ entries y Σ holds pending
+	entries, held                         int64 // Σ entries and Σ pending holds
 }
 
 func (m *ledgerModel) states(rt *rapid.T) []accountState {
@@ -377,13 +378,13 @@ func (m *ledgerModel) states(rt *rapid.T) []accountState {
 		rt.Fatal(err)
 	}
 	if len(states) != len(m.accounts) {
-		rt.Fatalf("leí %d saldos de %d cuentas", len(states), len(m.accounts))
+		rt.Fatalf("read %d balances for %d accounts", len(states), len(m.accounts))
 	}
 	return states
 }
 
-// check son los invariantes que valen tras cada paso. Todas las cuentas son en COP: Σ entries por moneda
-// es una sola suma.
+// check holds the invariants that apply after each step. Every account is in COP: Σ entries per currency
+// is a single sum.
 func (m *ledgerModel) check(rt *rapid.T) {
 	if len(m.accounts) == 0 {
 		return
@@ -392,36 +393,36 @@ func (m *ledgerModel) check(rt *rapid.T) {
 	for _, s := range m.states(rt) {
 		total += s.entries
 		if want := m.posted[s.account.ID]; s.entries != want {
-			rt.Fatalf("cuenta %s: Σ entries %d, el modelo espera %d", s.account.Code, s.entries, want)
+			rt.Fatalf("account %s: Σ entries %d, the model expects %d", s.account.Code, s.entries, want)
 		}
 		if s.account.Mode == ledger.BalanceModeSync {
 			m.checkSync(rt, s)
 		}
 	}
-	if total != 0 { // solo se asienta entre cuentas de la secuencia
-		rt.Fatalf("Σ entries = %d, se esperaba 0", total)
+	if total != 0 { // postings only go between the sequence's accounts
+		rt.Fatalf("Σ entries = %d, want 0", total)
 	}
 	m.checkHolds(rt)
 }
 
-// checkSync: el saldo de una cuenta sync es el del modelo, su pendiente del lado por el que pierde saldo
-// es el del modelo y la suma de sus holds pending (y el otro lado está en cero), y su disponible no baja
-// del límite.
+// checkSync: a sync account's balance is the model's, its pending amount on the side through which it
+// loses balance is the model's and the sum of its pending holds (and the other side is zero), and its
+// available balance does not drop below the limit.
 func (m *ledgerModel) checkSync(rt *rapid.T, s accountState) {
 	outgoing, incoming := s.pendingDebits, s.pendingCredits
-	if debitNatured(s.account.Kind) { // pierde saldo por el crédito
+	if debitNormal(s.account.Kind) { // loses balance through the credit side
 		outgoing, incoming = s.pendingCredits, s.pendingDebits
 	}
 	available := ledger.NaturalBalance(s.account.Kind, s.posted) - outgoing
 	reserved := m.reserved[s.account.ID]
 	if s.posted != s.entries || outgoing != reserved || s.held != reserved || incoming != 0 || available < s.account.LowerLimit {
-		rt.Fatalf("cuenta %s (%s, límite %d): posted %d, Σ entries %d, pendiente %d/%d, Σ holds %d, modelo %d, disponible %d",
+		rt.Fatalf("account %s (%s, limit %d): posted %d, Σ entries %d, pending %d/%d, Σ holds %d, model %d, available %d",
 			s.account.Code, s.account.Kind, s.account.LowerLimit, s.posted, s.entries, outgoing, incoming, s.held, reserved, available)
 	}
 }
 
-// checkHolds: cada hold está en el estado que le dio la última operación que pasó; un rechazo no lo
-// cambia y uno terminado no vuelve a cambiar.
+// checkHolds: each hold is in the status the last successful operation gave it; a rejection does not
+// change it and a finished one does not change again.
 func (m *ledgerModel) checkHolds(rt *rapid.T) {
 	if len(m.holds) == 0 {
 		return
@@ -449,7 +450,7 @@ func (m *ledgerModel) checkHolds(rt *rapid.T) {
 	}
 	for _, h := range m.holds {
 		if got[h.id] != h.status {
-			rt.Fatalf("hold %s = %q, se esperaba %s", h.id, got[h.id], h.status)
+			rt.Fatalf("hold %s = %q, want %s", h.id, got[h.id], h.status)
 		}
 	}
 }

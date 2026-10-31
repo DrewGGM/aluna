@@ -1,5 +1,5 @@
-// Package calendar es el módulo de calendario (ADR-0006): entidades legales, su fecha de negocio y los
-// días hábiles.
+// Package calendar is the calendar module (ADR-0006): legal entities, their business date and business
+// days.
 package calendar
 
 import (
@@ -12,55 +12,54 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// Date es un día calendario, sin hora ni zona.
+// Date is a calendar day, with no time or zone.
 type Date = domain.Date
 
-// PeriodStatus es el estado de un periodo contable.
+// PeriodStatus is the status of an accounting period.
 type PeriodStatus = app.PeriodStatus
 
-// Estados de un periodo contable.
+// Statuses of an accounting period.
 const (
 	PeriodOpen    = app.PeriodOpen
 	PeriodClosing = app.PeriodClosing
 	PeriodClosed  = app.PeriodClosed
 )
 
-// Errores del calendario.
+// Calendar errors.
 var (
 	ErrLegalEntityNotFound = app.ErrLegalEntityNotFound
 	ErrStaleBusinessDate   = app.ErrStaleBusinessDate
 	ErrPeriodClosed        = app.ErrPeriodClosed
 )
 
-// Service es la fachada del calendario. No guarda estado: cada operación recibe la conexión o la
-// transacción en la que corre.
+// Service is the calendar facade. It holds no state: each operation receives the connection or the
+// transaction it runs in.
 type Service struct{}
 
-// New crea el servicio del calendario.
+// New creates the calendar service.
 func New() *Service { return &Service{} }
 
-// BusinessDate es la fecha de negocio de la entidad legal. Un caso de uso la lee al empezar su
-// transacción y la usa en todo lo que asienta: la lectura no bloquea el rollover. q puede ser el pool o
-// una Tx.
+// BusinessDate is the business date of the legal entity. A use case reads it when its transaction starts
+// and uses it for everything it posts: the read does not block the rollover. q can be the pool or a Tx.
 func (s *Service) BusinessDate(ctx context.Context, q postgres.Querier, legalEntity ids.ID) (Date, error) {
 	return pg.NewStore(q).BusinessDate(ctx, legalEntity)
 }
 
-// Rollover avanza dentro de tx la fecha de negocio de la entidad de expected al día hábil siguiente y
-// devuelve la nueva. Si la fecha ya no es expected (otro rollover la avanzó), es ErrStaleBusinessDate y
-// no cambia nada.
+// Rollover advances, within tx, the entity's business date from expected to the next business day and
+// returns the new one. If the date is no longer expected (another rollover advanced it), it is
+// ErrStaleBusinessDate and nothing changes.
 func (s *Service) Rollover(ctx context.Context, tx postgres.Tx, legalEntity ids.ID, expected Date) (Date, error) {
 	return app.Rollover(ctx, pg.NewStore(tx), legalEntity, expected)
 }
 
-// PeriodStatus es el estado del periodo contable de d para la entidad (FR-15). Un mes que el cierre no
-// tocó está abierto. q puede ser el pool o una Tx.
+// PeriodStatus is the status of the entity's accounting period for d (FR-15). A month the close has not
+// touched is open. q can be the pool or a Tx.
 func (s *Service) PeriodStatus(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d Date) (PeriodStatus, error) {
 	return app.PeriodStatusOf(ctx, pg.NewStore(q), legalEntity, d)
 }
 
-// EnsureOpen es ErrPeriodClosed si d cae en un periodo cerrado de la entidad: el ledger lo pide antes de
-// asentar. Lee sin bloquear, como BusinessDate.
+// EnsureOpen is ErrPeriodClosed if d falls in a closed period of the entity: the ledger asks for it
+// before posting. It reads without locking, like BusinessDate.
 func (s *Service) EnsureOpen(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d Date) error {
 	return app.EnsureOpen(ctx, pg.NewStore(q), legalEntity, d)
 }

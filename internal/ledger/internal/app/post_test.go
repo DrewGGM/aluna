@@ -12,15 +12,15 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 )
 
-// ref es la clave de la unicidad de FR-11.
+// ref is the FR-11 uniqueness key.
 type ref struct {
 	entity         ids.ID
 	source, extRef string
 }
 
-// fakeStore es un PostingStore y AccountWriter en memoria que registra qué se bloqueó y qué se escribió.
-// posted son las transacciones ya asentadas. Para simular a otro productor con la misma referencia,
-// whileLocking aparece al bloquear los saldos y whileInserting al insertar.
+// fakeStore is an in-memory PostingStore and AccountWriter that records what was locked and what was
+// written. posted are the transactions already posted. To simulate another producer with the same
+// reference, whileLocking shows up when the balances are locked and whileInserting on insert.
 type fakeStore struct {
 	accounts       map[ids.ID]domain.Account
 	balances       map[ids.ID]LockedBalance
@@ -98,12 +98,12 @@ func (s *fakeStore) AddToBalance(_ context.Context, accountID ids.ID, d BalanceD
 
 var entity = ids.New()
 
-// openPeriods es un calendario con todos los periodos abiertos: la guarda la prueban las de integración.
+// openPeriods is a calendar with every period open: the integration tests cover the guard.
 type openPeriods struct{}
 
 func (openPeriods) EnsureOpen(context.Context, ids.ID, time.Time) error { return nil }
 
-// noEvents descarta los eventos: lo que emite cada caso de uso lo prueba events_integration_test.go.
+// noEvents discards the events: events_integration_test.go covers what each use case emits.
 type noEvents struct{}
 
 func (noEvents) Emit(context.Context, Event) error { return nil }
@@ -143,23 +143,23 @@ func TestPostNetsEntriesPerAccountAndLocksEachOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if store.added[cash.ID] != 100 || store.added[deposit.ID] != -100 {
-		t.Errorf("deltas = %v, se esperaba +100 en caja y -100 en el depósito", store.added)
+		t.Errorf("deltas = %v, want +100 on cash and -100 on the deposit", store.added)
 	}
 	if len(store.locked) != 2 || len(store.entries) != 3 {
-		t.Errorf("locks = %v, entries = %d: una vez por cuenta y los tres entries", store.locked, len(store.entries))
+		t.Errorf("locks = %v, entries = %d: want once per account and the three entries", store.locked, len(store.entries))
 	}
 }
 
-// TestPostChecksTheNetNotEachEntry: un débito y un crédito iguales sobre una cuenta ya bajo su límite
-// no la empeoran; revisar entry por entry la rechazaría.
+// TestPostChecksTheNetNotEachEntry: an equal debit and credit on an account already below its limit do
+// not make it worse; checking entry by entry would reject it.
 func TestPostChecksTheNetNotEachEntry(t *testing.T) {
 	cash, deposit := account(t, domain.KindAsset, domain.BalanceModeSync), account(t, domain.KindLiability, domain.BalanceModeSync)
 	store := newFakeStore(cash, deposit)
-	store.balances[deposit.ID] = LockedBalance{Posted: 50} // natural -50: bajo su límite de 0
+	store.balances[deposit.ID] = LockedBalance{Posted: 50} // natural -50: below its limit of 0
 
 	_, err := Post(t.Context(), store, openPeriods{}, noEvents{}, input(entry(deposit, 10), entry(deposit, -10), entry(cash, 5), entry(cash, -5)))
 	if err != nil {
-		t.Fatalf("un neto de cero no reduce el saldo: %v", err)
+		t.Fatalf("a zero net does not reduce the balance: %v", err)
 	}
 }
 
@@ -172,7 +172,7 @@ func TestPostSkipsAsyncAccounts(t *testing.T) {
 	}
 
 	if slices.Contains(store.locked, clearing.ID) || store.added[clearing.ID] != 0 {
-		t.Errorf("la cuenta async no se bloquea ni se actualiza aquí: locks %v, deltas %v", store.locked, store.added)
+		t.Errorf("the async account is neither locked nor updated here: locks %v, deltas %v", store.locked, store.added)
 	}
 }
 
@@ -188,11 +188,11 @@ func TestPostRejectsBeforeWriting(t *testing.T) {
 		entries []domain.EntryInput
 		want    error
 	}{
-		"desbalanceado":          {[]domain.EntryInput{entry(cash, 100), entry(deposit, -99)}, domain.ErrUnbalanced},
-		"cuenta de otra entidad": {[]domain.EntryInput{entry(cash, 100), entry(foreign, -100)}, ErrAccountNotFound},
-		"cuenta inexistente":     {[]domain.EntryInput{entry(cash, 100), {AccountID: ids.New(), Amount: money.New(-100, cop(t))}}, ErrAccountNotFound},
-		"moneda de otra cuenta":  {[]domain.EntryInput{{AccountID: cash.ID, Amount: money.New(100, usd)}, {AccountID: deposit.ID, Amount: money.New(-100, usd)}}, ErrCurrencyMismatch},
-		"sobregiro":              {[]domain.EntryInput{entry(deposit, 100), entry(cash, -100)}, domain.ErrInsufficientFunds},
+		"unbalanced":                 {[]domain.EntryInput{entry(cash, 100), entry(deposit, -99)}, domain.ErrUnbalanced},
+		"another entity's account":   {[]domain.EntryInput{entry(cash, 100), entry(foreign, -100)}, ErrAccountNotFound},
+		"nonexistent account":        {[]domain.EntryInput{entry(cash, 100), {AccountID: ids.New(), Amount: money.New(-100, cop(t))}}, ErrAccountNotFound},
+		"another account's currency": {[]domain.EntryInput{{AccountID: cash.ID, Amount: money.New(100, usd)}, {AccountID: deposit.ID, Amount: money.New(-100, usd)}}, ErrCurrencyMismatch},
+		"overdraft":                  {[]domain.EntryInput{entry(deposit, 100), entry(cash, -100)}, domain.ErrInsufficientFunds},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -201,31 +201,32 @@ func TestPostRejectsBeforeWriting(t *testing.T) {
 			_, err := Post(t.Context(), store, openPeriods{}, noEvents{}, input(tc.entries...))
 
 			if !errors.Is(err, tc.want) {
-				t.Fatalf("error = %v, se esperaba %v", err, tc.want)
+				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
 			if len(store.inserted) != 0 || len(store.entries) != 0 || len(store.added) != 0 {
-				t.Fatalf("un posting rechazado no escribe nada: %d transacciones, deltas %v", len(store.inserted), store.added)
+				t.Fatalf("a rejected posting writes nothing: %d transactions, deltas %v", len(store.inserted), store.added)
 			}
 		})
 	}
-	t.Run("cuenta sync sin fila de saldo", func(t *testing.T) {
+	t.Run("sync account without a balance row", func(t *testing.T) {
 		noBalance := account(t, domain.KindLiability, domain.BalanceModeSync)
 		store := newFakeStore(cash, deposit)
-		store.accounts[noBalance.ID] = noBalance // sin saldo materializado
+		store.accounts[noBalance.ID] = noBalance // no materialized balance
 
 		if _, err := Post(t.Context(), store, openPeriods{}, noEvents{}, input(entry(cash, 100), entry(noBalance, -100))); err == nil || len(store.inserted) != 0 {
-			t.Fatalf("debe fallar sin escribir: error = %v, transacciones %d", err, len(store.inserted))
+			t.Fatalf("it must fail without writing: error = %v, transactions %d", err, len(store.inserted))
 		}
 	})
 }
 
-// TestPostReturnsTheOriginalOfARepeatedRef: con una referencia ya asentada, Post devuelve la original
-// con ErrDuplicateExternalRef y no escribe, también si ya no cabría (FR-11). Si ya estaba, ni bloquea
-// saldos. Si otro productor la asienta mientras se esperan los locks (y con eso ya no alcanza) o entre
-// los locks y el INSERT, Post la encuentra y tampoco escribe.
+// TestPostReturnsTheOriginalOfARepeatedRef: with an already posted reference, Post returns the original
+// with ErrDuplicateExternalRef and does not write, even if it would no longer fit (FR-11). If it was
+// already there, it does not even lock balances. If another producer posts it while the locks are awaited
+// (and with that it no longer fits) or between the locks and the INSERT, Post finds it and does not write
+// either.
 func TestPostReturnsTheOriginalOfARepeatedRef(t *testing.T) {
 	cash, deposit := account(t, domain.KindAsset, domain.BalanceModeSync), account(t, domain.KindLiability, domain.BalanceModeSync)
-	in := input(entry(deposit, 100), entry(cash, -100)) // sin fondos: no debe importar
+	in := input(entry(deposit, 100), entry(cash, -100)) // no funds: it must not matter
 	original := Transaction{TransactionRecord: TransactionRecord{
 		ID: ids.New(), LegalEntityID: in.LegalEntityID, Source: in.Source, ExternalRef: in.ExternalRef,
 	}}
@@ -233,9 +234,9 @@ func TestPostReturnsTheOriginalOfARepeatedRef(t *testing.T) {
 		prepare    func(*fakeStore)
 		wantLocked bool
 	}{
-		"ya asentada":           {func(s *fakeStore) { s.posted[refOf(original.TransactionRecord)] = original }, false},
-		"asentada en los locks": {func(s *fakeStore) { s.whileLocking = &original }, true},
-		"asentada en el INSERT": {func(s *fakeStore) { // con fondos: la validación pasa y el INSERT descubre el repetido
+		"already posted":          {func(s *fakeStore) { s.posted[refOf(original.TransactionRecord)] = original }, false},
+		"posted during the locks": {func(s *fakeStore) { s.whileLocking = &original }, true},
+		"posted during the INSERT": {func(s *fakeStore) { // with funds: the check passes and the INSERT finds the duplicate
 			s.whileInserting = &original
 			s.balances[cash.ID], s.balances[deposit.ID] = LockedBalance{Posted: 100}, LockedBalance{Posted: -100}
 		}, true},
@@ -248,10 +249,10 @@ func TestPostReturnsTheOriginalOfARepeatedRef(t *testing.T) {
 			got, err := Post(t.Context(), store, openPeriods{}, noEvents{}, in)
 
 			if !errors.Is(err, ErrDuplicateExternalRef) || got.ID != original.ID {
-				t.Fatalf("= %s, %v; se esperaba la original %s con ErrDuplicateExternalRef", got.ID, err, original.ID)
+				t.Fatalf("= %s, %v; want the original %s with ErrDuplicateExternalRef", got.ID, err, original.ID)
 			}
 			if len(store.inserted) != 0 || len(store.added) != 0 || (len(store.locked) > 0) != tc.wantLocked {
-				t.Fatalf("un repetido no escribe: %d transacciones, deltas %v, bloqueó %v", len(store.inserted), store.added, store.locked)
+				t.Fatalf("a duplicate does not write: %d transactions, deltas %v, locked %v", len(store.inserted), store.added, store.locked)
 			}
 		})
 	}
@@ -264,21 +265,21 @@ func TestPostDoesNotTakeAnotherEntitysRefAsRepeated(t *testing.T) {
 	store.posted[ref{ids.New(), in.Source, in.ExternalRef}] = Transaction{TransactionRecord: TransactionRecord{ID: ids.New()}}
 
 	if _, err := Post(t.Context(), store, openPeriods{}, noEvents{}, in); err != nil || len(store.inserted) != 1 {
-		t.Fatalf("la misma referencia en otra entidad = %v, %d insertadas; se esperaba asentarla", err, len(store.inserted))
+		t.Fatalf("the same reference in another entity = %v, %d inserted; want it posted", err, len(store.inserted))
 	}
 }
 
 func TestPostValidatesTheHeader(t *testing.T) {
 	cash, deposit := account(t, domain.KindAsset, domain.BalanceModeSync), account(t, domain.KindLiability, domain.BalanceModeSync)
 	cases := map[string]func(*PostInput){
-		"sin code":           func(in *PostInput) { in.Code = "" },
-		"sin channel":        func(in *PostInput) { in.Channel = "" },
-		"sin fecha contable": func(in *PostInput) { in.BusinessDate = time.Time{} },
-		"sin source":         func(in *PostInput) { in.Source = "" },
-		"sin external_ref":   func(in *PostInput) { in.ExternalRef = "" },
-		"sin actor":          func(in *PostInput) { in.Actor = "" },
-		"sin rule_version":   func(in *PostInput) { in.RuleVersion = "" },
-		"sin fecha valor":    func(in *PostInput) { in.ValueDate = time.Time{} },
+		"no code":          func(in *PostInput) { in.Code = "" },
+		"no channel":       func(in *PostInput) { in.Channel = "" },
+		"no business date": func(in *PostInput) { in.BusinessDate = time.Time{} },
+		"no source":        func(in *PostInput) { in.Source = "" },
+		"no external_ref":  func(in *PostInput) { in.ExternalRef = "" },
+		"no actor":         func(in *PostInput) { in.Actor = "" },
+		"no rule_version":  func(in *PostInput) { in.RuleVersion = "" },
+		"no value date":    func(in *PostInput) { in.ValueDate = time.Time{} },
 	}
 	for name, breakIt := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -287,19 +288,19 @@ func TestPostValidatesTheHeader(t *testing.T) {
 			breakIt(&in)
 
 			if _, err := Post(t.Context(), store, openPeriods{}, noEvents{}, in); !errors.Is(err, ErrInvalidPosting) || len(store.inserted) != 0 {
-				t.Fatalf("error = %v, se esperaba ErrInvalidPosting sin escribir", err)
+				t.Fatalf("error = %v, want ErrInvalidPosting without writing", err)
 			}
 		})
 	}
 }
 
-// TestPostKeepsTheCalendarDay: una fecha escrita en otra zona horaria se guarda con su mismo día.
+// TestPostKeepsTheCalendarDay: a date written in another time zone is stored with its same day.
 func TestPostKeepsTheCalendarDay(t *testing.T) {
 	cash, deposit := account(t, domain.KindAsset, domain.BalanceModeSync), account(t, domain.KindLiability, domain.BalanceModeSync)
 	store := newFakeStore(cash, deposit)
 	bogota := time.FixedZone("COT", -5*60*60)
 	in := input(entry(cash, 1), entry(deposit, -1))
-	in.ValueDate = time.Date(2026, 10, 26, 23, 30, 0, 0, bogota) // en UTC ya es el 27
+	in.ValueDate = time.Date(2026, 10, 26, 23, 30, 0, 0, bogota) // in UTC it is already the 27th
 	in.BusinessDate = in.ValueDate
 
 	posted, err := Post(t.Context(), store, openPeriods{}, noEvents{}, in)
@@ -310,17 +311,17 @@ func TestPostKeepsTheCalendarDay(t *testing.T) {
 	want := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
 	rec := store.inserted[0]
 	if !posted.ValueDate.Equal(want) || !rec.ValueDate.Equal(want) || !rec.BusinessDate.Equal(want) {
-		t.Fatalf("fechas guardadas %v y %v, se esperaba %v", rec.ValueDate, rec.BusinessDate, want)
+		t.Fatalf("stored dates %v and %v, want %v", rec.ValueDate, rec.BusinessDate, want)
 	}
 }
 
 func TestCreateAccountValidatesItsInput(t *testing.T) {
-	valid := CreateAccountInput{LegalEntityID: entity, Code: "caja", Kind: domain.KindAsset, Currency: cop(t), Mode: domain.BalanceModeSync}
+	valid := CreateAccountInput{LegalEntityID: entity, Code: "cash", Kind: domain.KindAsset, Currency: cop(t), Mode: domain.BalanceModeSync}
 	cases := map[string]func(*CreateAccountInput){
-		"sin código":        func(in *CreateAccountInput) { in.Code = "" },
-		"sin moneda":        func(in *CreateAccountInput) { in.Currency = money.Currency{} },
-		"clase desconocida": func(in *CreateAccountInput) { in.Kind = "revenue" },
-		"modo desconocido":  func(in *CreateAccountInput) { in.Mode = "lazy" },
+		"no code":      func(in *CreateAccountInput) { in.Code = "" },
+		"no currency":  func(in *CreateAccountInput) { in.Currency = money.Currency{} },
+		"unknown kind": func(in *CreateAccountInput) { in.Kind = "revenue" },
+		"unknown mode": func(in *CreateAccountInput) { in.Mode = "lazy" },
 	}
 	for name, breakIt := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -328,13 +329,13 @@ func TestCreateAccountValidatesItsInput(t *testing.T) {
 			breakIt(&in)
 
 			if _, err := CreateAccount(t.Context(), newFakeStore(), in); !errors.Is(err, ErrInvalidAccount) {
-				t.Fatalf("error = %v, se esperaba ErrInvalidAccount", err)
+				t.Fatalf("error = %v, want ErrInvalidAccount", err)
 			}
 		})
 	}
 	store := newFakeStore()
 	a, err := CreateAccount(t.Context(), store, valid)
 	if err != nil || store.accounts[a.ID] != a {
-		t.Fatalf("la cuenta válida debe registrarse: %v", err)
+		t.Fatalf("the valid account must be registered: %v", err)
 	}
 }

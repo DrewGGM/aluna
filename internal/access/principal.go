@@ -1,5 +1,5 @@
-// Package access es la identidad y la autorización de quien llama al core (ADR-0014): el principal que
-// sale de un token OIDC ya verificado.
+// Package access is the identity and authorization of whoever calls the core (ADR-0014): the principal
+// taken from an already verified OIDC token.
 package access
 
 import (
@@ -8,9 +8,9 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 )
 
-// Principal es quien hace el request, tal como lo dice su token: Subject es el sujeto del IAM,
-// LegalEntityID la entidad legal con la que opera (FR-41: sale del token, nunca de un header), PartyID el
-// cliente al que representa un canal (nil si es un operador) y Roles sus roles.
+// Principal is whoever makes the request, as its token says: Subject is the IAM subject, LegalEntityID the
+// legal entity it operates with (FR-41: it comes from the token, never from a header), PartyID the customer
+// a channel represents (nil for an operator) and Roles its roles.
 type Principal struct {
 	Subject       string
 	LegalEntityID ids.ID
@@ -20,12 +20,12 @@ type Principal struct {
 
 type principalKey struct{}
 
-// WithPrincipal es ctx con el principal p del request.
+// WithPrincipal is ctx with the request's principal p.
 func WithPrincipal(ctx context.Context, p Principal) context.Context {
 	return context.WithValue(ctx, principalKey{}, p)
 }
 
-// PrincipalFrom es el principal del request; false si el request no se autenticó.
+// PrincipalFrom is the request's principal; false if the request was not authenticated.
 func PrincipalFrom(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(Principal)
 	return p, ok

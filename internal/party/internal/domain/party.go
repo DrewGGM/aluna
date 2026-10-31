@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -50,6 +51,23 @@ const (
 // Valid reports whether r is a known risk level.
 func (r RiskLevel) Valid() bool { return r == RiskLow || r == RiskMedium || r == RiskHigh }
 
+// kycTransitions are the KYC changes onboarding and compliance may make (FR-16): a pending party is approved
+// or rejected, an approved one is suspended, and a suspended one is approved again. A rejected party stays
+// rejected: onboarding registers it again if it comes back.
+var kycTransitions = map[KYCStatus][]KYCStatus{
+	KYCPending:   {KYCApproved, KYCRejected},
+	KYCApproved:  {KYCSuspended},
+	KYCSuspended: {KYCApproved},
+}
+
+// CheckKYCTransition reports whether the KYC status may move from from to to.
+func CheckKYCTransition(from, to KYCStatus) error {
+	if slices.Contains(kycTransitions[from], to) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s to %s", ErrInvalidKYCTransition, from, to)
+}
+
 // Limits of what a party stores forever (its versions are immutable): an external_ref of up to 255
 // characters, and up to 32 consents named like personal_data.
 const (
@@ -66,6 +84,11 @@ var (
 	ErrAlreadyRegistered = errors.New("party already registered")
 	// ErrNotFound means the party does not exist in the entity.
 	ErrNotFound = errors.New("party not found")
+	// ErrInvalidKYCTransition means the KYC status cannot move from the current status to the requested one.
+	ErrInvalidKYCTransition = errors.New("invalid KYC status transition")
+	// ErrStaleKYCChange means the party changed after the KYC change was requested: the change was decided
+	// against another situation.
+	ErrStaleKYCChange = errors.New("the party changed after the KYC change was requested")
 )
 
 // Party is the reference data of one of the entity's customers, with its current version.

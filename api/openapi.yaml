@@ -343,6 +343,38 @@ paths:
               schema: {$ref: "#/components/schemas/Party"}
         "404": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/parties/{id}/kyc-status-changes:
+    post:
+      operationId: requestKYCStatusChange
+      summary: Request a KYC status change
+      description: >-
+        Creates a `party.kyc_status_change` maker-checker request and answers 202 with it. The new version of
+        the party, with the new KYC status, is recorded when someone else with `party.kyc.change` approves it
+        at `POST /v1/approvals/{id}/approval`. Valid changes: pending to approved or rejected, approved to
+        suspended and suspended to approved; any other is 422 `invalid_kyc_transition` when requesting. If the
+        party changed after the request (another version, even with the same status), approving it leaves the
+        request `failed`.
+        Idempotent by `Idempotency-Key`.
+      x-aluna-permission: party.kyc.change
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RequestKYCStatusChange"}
+      responses:
+        "202":
+          description: KYC change request created, pending approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
 components:
   parameters:
     ID:
@@ -600,3 +632,8 @@ components:
           type: object
           additionalProperties: {type: boolean}
         valid_from: {type: string, format: date-time}
+    RequestKYCStatusChange:
+      type: object
+      required: [kyc_status]
+      properties:
+        kyc_status: {$ref: "#/components/schemas/KYCStatus"}

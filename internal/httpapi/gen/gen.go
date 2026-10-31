@@ -384,6 +384,11 @@ type RejectApproval struct {
 	Reason string `json:"reason"`
 }
 
+// RequestKYCStatusChange defines model for RequestKYCStatusChange.
+type RequestKYCStatusChange struct {
+	KycStatus KYCStatus `json:"kyc_status"`
+}
+
 // RequestReversal defines model for RequestReversal.
 type RequestReversal struct {
 	// BusinessDate Business date of the reversal; by default, the entity's when approved.
@@ -446,6 +451,11 @@ type GetLedgerAccountBalanceParams struct {
 	AsKnownAt *time.Time `form:"as_known_at,omitempty" json:"as_known_at,omitempty"`
 }
 
+// RequestKYCStatusChangeParams defines parameters for RequestKYCStatusChange.
+type RequestKYCStatusChangeParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // PostTransactionParams defines parameters for PostTransaction.
 type PostTransactionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -470,6 +480,9 @@ type CreateLedgerAccountJSONRequestBody = CreateLedgerAccount
 
 // RegisterPartyJSONRequestBody defines body for RegisterParty for application/json ContentType.
 type RegisterPartyJSONRequestBody = RegisterParty
+
+// RequestKYCStatusChangeJSONRequestBody defines body for RequestKYCStatusChange for application/json ContentType.
+type RequestKYCStatusChangeJSONRequestBody = RequestKYCStatusChange
 
 // PostTransactionJSONRequestBody defines body for PostTransaction for application/json ContentType.
 type PostTransactionJSONRequestBody = PostTransaction
@@ -512,6 +525,9 @@ type ServerInterface interface {
 	// GetParty Read a party
 	// (GET /v1/parties/{id})
 	GetParty(w http.ResponseWriter, r *http.Request, id ID)
+	// RequestKYCStatusChange Request a KYC status change
+	// (POST /v1/parties/{id}/kyc-status-changes)
+	RequestKYCStatusChange(w http.ResponseWriter, r *http.Request, id ID, params RequestKYCStatusChangeParams)
 	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(w http.ResponseWriter, r *http.Request, params PostTransactionParams)
@@ -933,6 +949,60 @@ func (siw *ServerInterfaceWrapper) GetParty(w http.ResponseWriter, r *http.Reque
 	handler.ServeHTTP(w, r)
 }
 
+// RequestKYCStatusChange operation middleware
+func (siw *ServerInterfaceWrapper) RequestKYCStatusChange(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RequestKYCStatusChangeParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestKYCStatusChange(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PostTransaction operation middleware
 func (siw *ServerInterfaceWrapper) PostTransaction(w http.ResponseWriter, r *http.Request) {
 
@@ -1192,6 +1262,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/approvals/{id}/rejection", wrapper.RejectRequest)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/parties", wrapper.RegisterParty)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/parties/{id}", wrapper.GetParty)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/parties/{id}/kyc-status-changes", wrapper.RequestKYCStatusChange)
 
 	return m
 }
@@ -2132,6 +2203,105 @@ func (response GetPartydefaultApplicationProblemPlusJSONResponse) VisitGetPartyR
 	return err
 }
 
+type RequestKYCStatusChangeRequestObject struct {
+	Id     ID `json:"id"`
+	Params RequestKYCStatusChangeParams
+	Body   *RequestKYCStatusChangeJSONRequestBody
+}
+
+type RequestKYCStatusChangeResponseObject interface {
+	VisitRequestKYCStatusChangeResponse(w http.ResponseWriter) error
+}
+
+type RequestKYCStatusChange202JSONResponse Approval
+
+func (response RequestKYCStatusChange202JSONResponse) VisitRequestKYCStatusChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestKYCStatusChange400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RequestKYCStatusChange400ApplicationProblemPlusJSONResponse) VisitRequestKYCStatusChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestKYCStatusChange404ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestKYCStatusChange404ApplicationProblemPlusJSONResponse) VisitRequestKYCStatusChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestKYCStatusChange409ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestKYCStatusChange409ApplicationProblemPlusJSONResponse) VisitRequestKYCStatusChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestKYCStatusChange422ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestKYCStatusChange422ApplicationProblemPlusJSONResponse) VisitRequestKYCStatusChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestKYCStatusChangedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RequestKYCStatusChangedefaultApplicationProblemPlusJSONResponse) VisitRequestKYCStatusChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PostTransactionRequestObject struct {
 	Params PostTransactionParams
 	Body   *PostTransactionJSONRequestBody
@@ -2447,6 +2617,9 @@ type StrictServerInterface interface {
 	// GetParty Read a party
 	// (GET /v1/parties/{id})
 	GetParty(ctx context.Context, request GetPartyRequestObject) (GetPartyResponseObject, error)
+	// RequestKYCStatusChange Request a KYC status change
+	// (POST /v1/parties/{id}/kyc-status-changes)
+	RequestKYCStatusChange(ctx context.Context, request RequestKYCStatusChangeRequestObject) (RequestKYCStatusChangeResponseObject, error)
 	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(ctx context.Context, request PostTransactionRequestObject) (PostTransactionResponseObject, error)
@@ -2811,6 +2984,40 @@ func (sh *strictHandler) GetParty(w http.ResponseWriter, r *http.Request, id ID)
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetPartyResponseObject); ok {
 		if err := validResponse.VisitGetPartyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RequestKYCStatusChange operation middleware
+func (sh *strictHandler) RequestKYCStatusChange(w http.ResponseWriter, r *http.Request, id ID, params RequestKYCStatusChangeParams) {
+	var request RequestKYCStatusChangeRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body RequestKYCStatusChangeJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestKYCStatusChange(ctx, request.(RequestKYCStatusChangeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestKYCStatusChange")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestKYCStatusChangeResponseObject); ok {
+		if err := validResponse.VisitRequestKYCStatusChangeResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

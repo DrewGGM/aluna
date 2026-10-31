@@ -70,7 +70,7 @@ func apiServerAs(t *testing.T, entity ids.ID, events ledger.Events, subject stri
 	api := API{
 		LedgerHandlers:   NewLedgerHandlers(l, requests, uow, keys, testPool),
 		ApprovalHandlers: NewApprovalHandlers(requests, uow, keys, testPool),
-		PartyHandlers:    NewPartyHandlers(party.New(events), uow, testPool),
+		PartyHandlers:    NewPartyHandlers(party.New(events), requests, uow, keys, testPool),
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},

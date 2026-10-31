@@ -253,6 +253,16 @@ func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestRev
 	return resp, nil
 }
 
+// asCommandRejection wraps in approvals.ErrCommandRejected an error of an approved command that is a
+// business rule (a 4xx in the problems table): the request is left failed. Any other error goes up as is,
+// so the request stays pending and can be approved later.
+func asCommandRejection(err error) error {
+	if p, known := problemFor(err); known && p.Status < http.StatusInternalServerError {
+		return fmt.Errorf("%w: %w", approvals.ErrCommandRejected, err)
+	}
+	return err
+}
+
 // reverseOnApproval is the Executor of reversalKind: it posts the payload's reversal in the entity of the
 // approver, who becomes its actor. A ledger rejection (a 4xx from its problems table: already reversed,
 // period closed, insufficient funds) is wrapped in approvals.ErrCommandRejected and leaves the request
@@ -269,10 +279,7 @@ func reverseOnApproval(l *ledger.Service) approvals.Executor {
 		}
 		reversal, err := l.Reverse(ctx, tx, in)
 		if err != nil {
-			if p, known := problemFor(err); known && p.Status < http.StatusInternalServerError {
-				return nil, fmt.Errorf("%w: %w", approvals.ErrCommandRejected, err)
-			}
-			return nil, err
+			return nil, asCommandRejection(err)
 		}
 		result, err := json.Marshal(toTransactionJSON(reversal))
 		if err != nil {

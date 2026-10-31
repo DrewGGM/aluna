@@ -78,6 +78,11 @@ func (r storedResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error { 
 // VisitReleaseHoldResponse writes the stored response of POST /v1/holds/{id}/release.
 func (r storedResponse) VisitReleaseHoldResponse(w http.ResponseWriter) error { return r.write(w) }
 
+// VisitRequestKYCStatusChangeResponse writes the stored response of POST /v1/parties/{id}/kyc-status-changes.
+func (r storedResponse) VisitRequestKYCStatusChangeResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitRegisterPartyResponse writes the response of POST /v1/parties.
 func (r storedResponse) VisitRegisterPartyResponse(w http.ResponseWriter) error { return r.write(w) }
 

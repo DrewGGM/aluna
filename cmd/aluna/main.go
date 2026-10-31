@@ -265,7 +265,7 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	api := httpapi.API{
 		LedgerHandlers:   httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
 		ApprovalHandlers: httpapi.NewApprovalHandlers(requests, uow, keys, pool),
-		PartyHandlers:    httpapi.NewPartyHandlers(party.New(events), uow, pool),
+		PartyHandlers:    httpapi.NewPartyHandlers(party.New(events), requests, uow, keys, pool),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)

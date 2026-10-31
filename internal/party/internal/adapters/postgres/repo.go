@@ -32,14 +32,14 @@ func Insert(ctx context.Context, tx postgres.Tx, p domain.Party) (domain.Party, 
 	if err != nil {
 		return domain.Party{}, fmt.Errorf("insert party: %w", err)
 	}
-	if p.Current, err = insertVersion(ctx, tx, p.ID, p.Current); err != nil {
+	if p.Current, err = InsertVersion(ctx, tx, p.ID, p.Current); err != nil {
 		return domain.Party{}, err
 	}
 	return p, nil
 }
 
-// insertVersion stores version v of party id; the database sets valid_from and recorded_at.
-func insertVersion(ctx context.Context, tx postgres.Tx, id ids.ID, v domain.Version) (domain.Version, error) {
+// InsertVersion stores version v of party id; the database sets valid_from and recorded_at.
+func InsertVersion(ctx context.Context, tx postgres.Tx, id ids.ID, v domain.Version) (domain.Version, error) {
 	err := tx.QueryRow(ctx, `INSERT INTO party.versions (party_id, version, kyc_status, risk_level, pep, consents)
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING valid_from, recorded_at`,
 		id, v.Number, v.KYCStatus, v.RiskLevel, v.PEP, v.Consents).Scan(&v.ValidFrom, &v.RecordedAt)
@@ -47,6 +47,16 @@ func insertVersion(ctx context.Context, tx postgres.Tx, id ids.ID, v domain.Vers
 		return domain.Version{}, fmt.Errorf("insert version %d of party %s: %w", v.Number, id, err)
 	}
 	return v, nil
+}
+
+// LockForChange serializes, until tx ends, the changes to party id: two concurrent changes would read the
+// same version and both write the next one. It is an advisory lock because aluna_app cannot lock party rows
+// FOR UPDATE (it has no UPDATE privilege on them, and must not).
+func LockForChange(ctx context.Context, tx postgres.Tx, id ids.ID) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('party:' || $1::text, 0))`, id); err != nil {
+		return fmt.Errorf("lock party %s: %w", id, err)
+	}
+	return nil
 }
 
 // Get returns party id of the entity with its latest version, or domain.ErrNotFound.

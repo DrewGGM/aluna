@@ -17,6 +17,7 @@ operator:
     - approvals.decide
     - party.parties.create
     - party.parties.read
+    - party.kyc.change
     - ledger.accounts.create
     - ledger.accounts.read
     - ledger.balances.read
@@ -38,12 +39,13 @@ finance:
     - ledger.transactions.read
     - ledger.transactions.reverse
 
-# Compliance: queries and deciding requests.
+# Compliance: queries, KYC changes and deciding requests.
 compliance:
   all:
     - approvals.read
     - approvals.decide
     - party.parties.read
+    - party.kyc.change
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read

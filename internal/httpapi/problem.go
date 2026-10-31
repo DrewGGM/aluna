@@ -151,6 +151,8 @@ var problems = []struct {
 	{party.ErrInvalidParty, unprocessable("invalid_party", "Invalid party data")},
 	{party.ErrAlreadyRegistered, conflict("party_already_registered", "The entity already registered that external_ref")},
 	{party.ErrNotFound, notFound},
+	{party.ErrInvalidKYCTransition, unprocessable("invalid_kyc_transition", "The KYC status cannot change that way")},
+	{party.ErrStaleKYCChange, conflict("kyc_change_stale", "The party changed after the KYC change was requested")},
 	// approvals
 	{approvals.ErrSelfApproval, Problem{
 		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "The requester cannot decide their own request",

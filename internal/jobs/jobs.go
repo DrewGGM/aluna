@@ -10,19 +10,34 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/DrewGGM/aluna/internal/audit"
+	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// QueueLedger is the queue for the jobs that write to the ledger; the rest go to river.QueueDefault.
-const QueueLedger = "ledger"
+// QueueLedger is the queue for the jobs that write to the ledger and QueueInterest the one of the accrual,
+// which runs one at a time: a catch-up can outlast its interval, and the runs it enqueues meanwhile wait and
+// then find nothing to do, instead of sharing the work, colliding on its rows and taking the default queue's
+// workers from the other jobs. The rest go to river.QueueDefault.
+const (
+	QueueLedger   = "ledger"
+	QueueInterest = "interest"
+)
 
 // The two ledger jobs keep taking batches until they catch up; the size bounds each transaction.
 const (
 	holdsBatch     = 500
 	aggregateBatch = 1000
+)
+
+// The accrual (FR-25) locks accounts batch by batch, so a batch also bounds how long a movement on one of
+// them waits. A run catches up every closed day, which after a long stop can take longer than River's
+// default limit of a minute; its batches commit as they go, so a run cut short only leaves work for the next.
+const (
+	accrualBatch   = 500
+	accrualTimeout = 30 * time.Minute
 )
 
 // Sealing (ADR-0012) closes blocks of at most auditBlockSize records, sealRounds per run so it finishes
@@ -44,6 +59,7 @@ type Deps struct {
 	Idempotency *idempotency.Store
 	Outbox      *outbox.Outbox
 	Audit       *audit.Service
+	Deposits    *deposits.Service
 }
 
 // Config is the worker's River configuration: the queues, the workers from Register, the periodic jobs
@@ -53,7 +69,9 @@ func Config(deps Deps) *river.Config {
 	Register(workers, deps)
 	return &river.Config{
 		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: Periodic(),
-		Queues: map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}},
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1},
+		},
 		// REINDEX requires owning the index and the worker runs as aluna_app (migration 0009).
 		ReindexerIndexNames: []string{},
 	}
@@ -86,6 +104,10 @@ func Register(w *river.Workers, deps Deps) {
 		}
 		return nil
 	}})
+	river.AddWorker(w, &task[accrueInterest]{timeout: accrualTimeout, run: func(ctx context.Context) error {
+		_, err := deps.Deposits.Accrue(ctx, deps.UnitOfWork, accrualBatch)
+		return err
+	}})
 	deps.Outbox.AddWorkers(w)
 }
 
@@ -99,6 +121,7 @@ func Periodic() []*river.PeriodicJob {
 		every(time.Hour, purgeIdempotency{}),
 		every(24*time.Hour, purgeOutbox{}),
 		every(time.Minute, sealAudit{}),
+		every(5*time.Minute, accrueInterest{}),
 	}
 }
 
@@ -108,13 +131,17 @@ func every(interval time.Duration, args river.JobArgs) *river.PeriodicJob {
 		&river.PeriodicJobOpts{RunOnStart: true})
 }
 
-// task is the worker of a periodic job: it has no arguments, only something to run.
+// task is the worker of a periodic job: it has no arguments, only something to run, within timeout (River's
+// default if zero).
 type task[A river.JobArgs] struct {
 	river.WorkerDefaults[A]
-	run func(ctx context.Context) error
+	run     func(ctx context.Context) error
+	timeout time.Duration
 }
 
 func (t *task[A]) Work(ctx context.Context, _ *river.Job[A]) error { return t.run(ctx) }
+
+func (t *task[A]) Timeout(*river.Job[A]) time.Duration { return t.timeout }
 
 // insertOpts puts the job in queue without retries: a failing periodic job runs again on the next
 // interval, instead of piling up retries of the same run.
@@ -144,3 +171,9 @@ type sealAudit struct{}
 
 func (sealAudit) Kind() string                 { return "audit.seal" }
 func (sealAudit) InsertOpts() river.InsertOpts { return insertOpts(river.QueueDefault) }
+
+// accrueInterest accrues the closed days, once each: running it often only shortens the wait after a rollover.
+type accrueInterest struct{}
+
+func (accrueInterest) Kind() string                 { return "deposits.interest.accrue" }
+func (accrueInterest) InsertOpts() river.InsertOpts { return insertOpts(QueueInterest) }

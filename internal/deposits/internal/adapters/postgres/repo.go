@@ -1,5 +1,6 @@
 // Package postgres stores deposit accounts in deposits.accounts, their status changes in
-// deposits.status_changes and what they moved per day and month in deposits.counters.
+// deposits.status_changes, what they moved per day and month in deposits.counters and their daily interest
+// in deposits.accruals.
 package postgres
 
 import (
@@ -93,6 +94,88 @@ func (s Store) Count(ctx context.Context, id ids.ID, on calendar.Date, debits, c
 		id, day, month, debits, credits)
 	if err != nil {
 		return fmt.Errorf("count a movement of deposit account %s: %w", id, err)
+	}
+	return nil
+}
+
+// EntitiesToAccrue are the legal entities with deposit accounts that are not closed, in id order.
+func (s Store) EntitiesToAccrue(ctx context.Context) ([]ids.ID, error) {
+	rows, err := s.q.Query(ctx, `SELECT DISTINCT legal_entity_id FROM deposits.accounts WHERE status <> 'closed' ORDER BY legal_entity_id`)
+	if err != nil {
+		return nil, fmt.Errorf("read the entities with deposit accounts: %w", err)
+	}
+	entities, err := pgx.CollectRows(rows, pgx.RowTo[ids.ID])
+	if err != nil {
+		return nil, fmt.Errorf("read the entities with deposit accounts: %w", err)
+	}
+	return entities, nil
+}
+
+// DaysToAccrue are the closed days the entity has to accrue, in order: from the earliest one an account
+// that is not closed has yet to accrue (the day after its last accrual, or its opening day) to the day before
+// today, the entity's business date. None if every one is up to date.
+func (s Store) DaysToAccrue(ctx context.Context, entity ids.ID, today calendar.Date) ([]calendar.Date, error) {
+	rows, err := s.q.Query(ctx, `SELECT day::date FROM generate_series(
+			(SELECT min(coalesce((SELECT max(r.value_date) FROM deposits.accruals r WHERE r.account_id = a.id) + 1, a.opened_on))
+				FROM deposits.accounts a WHERE a.legal_entity_id = $1 AND a.status <> 'closed'),
+			$2::date - 1, interval '1 day') AS day`, entity, dateOf(today))
+	if err != nil {
+		return nil, fmt.Errorf("find the days to accrue: %w", err)
+	}
+	days, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (calendar.Date, error) {
+		var day time.Time
+		err := row.Scan(&day)
+		return calendarDate(day), err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("find the days to accrue: %w", err)
+	}
+	return days, nil
+}
+
+// Due locks, in id order and skipping those locked, up to batch accounts of the entity that are not closed
+// and are due to accrue day, with their state at the end of the day before (app.Accruals).
+func (s Store) Due(ctx context.Context, entity ids.ID, day calendar.Date, batch int) ([]app.DueAccount, error) {
+	rows, err := s.q.Query(ctx, `SELECT a.id, a.ledger_account_id, a.product_version_id, coalesce(p.accrued_precise, 0)::text, coalesce(p.posted_units, 0)
+		FROM deposits.accounts a
+		LEFT JOIN deposits.accruals p ON p.account_id = a.id AND p.value_date = $2::date - 1
+		WHERE a.legal_entity_id = $1 AND a.status <> 'closed' AND (p.account_id IS NOT NULL OR a.opened_on = $2)
+			AND NOT EXISTS (SELECT 1 FROM deposits.accruals r WHERE r.account_id = a.id AND r.value_date = $2)
+		ORDER BY a.id LIMIT $3
+		FOR UPDATE OF a SKIP LOCKED`, entity, dateOf(day), batch)
+	if err != nil {
+		return nil, fmt.Errorf("read the accounts due to accrue %s: %w", dateOf(day).Format(time.DateOnly), err)
+	}
+	due, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (app.DueAccount, error) {
+		var a app.DueAccount
+		var accrued string
+		if err := row.Scan(&a.ID, &a.LedgerAccountID, &a.ProductVersionID, &accrued, &a.State.PostedUnits); err != nil {
+			return app.DueAccount{}, err
+		}
+		var err error
+		a.State.AccruedPrecise, err = money.ParsePrecise(accrued)
+		return a, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read the accounts due to accrue %s: %w", dateOf(day).Format(time.DateOnly), err)
+	}
+	return due, nil
+}
+
+// InsertAccruals stores the accruals of day, in one statement.
+func (s Store) InsertAccruals(ctx context.Context, day calendar.Date, rows []app.Accrual) error {
+	accounts, balances, interest := make([]ids.ID, len(rows)), make([]int64, len(rows)), make([]string, len(rows))
+	accrued, posted := make([]string, len(rows)), make([]int64, len(rows))
+	for i, r := range rows {
+		accounts[i], balances[i], interest[i] = r.AccountID, r.BalanceUnits, r.Interest.String()
+		accrued[i], posted[i] = r.State.AccruedPrecise.String(), r.State.PostedUnits
+	}
+	_, err := s.q.Exec(ctx, `INSERT INTO deposits.accruals (account_id, value_date, balance_units, interest, accrued_precise, posted_units)
+		SELECT account, $2, balance, interest::numeric, accrued::numeric, posted
+		FROM unnest($1::uuid[], $3::bigint[], $4::text[], $5::text[], $6::bigint[]) AS r (account, balance, interest, accrued, posted)`,
+		accounts, dateOf(day), balances, interest, accrued, posted)
+	if err != nil {
+		return fmt.Errorf("store the accruals of %s: %w", dateOf(day).Format(time.DateOnly), err)
 	}
 	return nil
 }

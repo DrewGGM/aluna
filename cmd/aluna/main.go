@@ -376,9 +376,11 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, log *slog.Logger) (*r
 	if err != nil {
 		return nil, err
 	}
+	calendarSvc := calendar.New()
+	ledgerSvc := ledger.New(calendarSvc, events)
 	cfg := jobs.Config(jobs.Deps{
-		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledger.New(calendar.New(), events), Idempotency: idempotency.NewStore(pool), Outbox: events,
-		Audit: records,
+		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
+		Audit: records, Deposits: deposits.New(ledgerSvc, party.New(events), products.New(events), calendarSvc, events),
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)

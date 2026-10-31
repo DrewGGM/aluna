@@ -17,14 +17,17 @@ import (
 
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/jobs"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/outbox"
+	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
+	"github.com/DrewGGM/aluna/internal/products"
 )
 
 var testPool *pgxpool.Pool
@@ -41,9 +44,12 @@ func newDeps(t *testing.T) jobs.Deps {
 	if err != nil {
 		t.Fatal(err)
 	}
+	calendarSvc := calendar.New()
+	ledgerSvc := ledger.New(calendarSvc, events)
 	return jobs.Deps{
 		Audit:      records,
-		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledger.New(calendar.New(), events), Idempotency: idempotency.NewStore(testPool), Outbox: events,
+		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(testPool), Outbox: events,
+		Deposits: deposits.New(ledgerSvc, party.New(events), products.New(events), calendarSvc, events),
 	}
 }
 
@@ -172,7 +178,8 @@ func TestTheWorkerRunsEveryJob(t *testing.T) {
 	})
 
 	waitFor(t, startWorker(t, deps),
-		"ledger.holds.expire", "ledger.balances.aggregate", "idempotency.purge", "outbox.purge", "outbox.publish", "audit.seal")
+		"ledger.holds.expire", "ledger.balances.aggregate", "idempotency.purge", "outbox.purge", "outbox.publish", "audit.seal",
+		"deposits.interest.accrue")
 
 	var block *int64
 	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil || block == nil {

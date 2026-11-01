@@ -1,8 +1,9 @@
 // Package simrail is a simulated Bre-B rail (AR-2) until the real one can be reached (D-1). It takes every
 // valid message and decides by the whole part of its amount: ending in 13 it is rejected, ending in 99 the
 // rail takes over 20 seconds to take it, and anything else is accepted. The outcome comes as a notification
-// signed as Standard Webhooks says (HMAC-SHA256 of id.timestamp.body) to /v1/rails/simbreb/notifications.
-// Notifications still waiting when the process stops are lost, as a real rail's would be until it retried.
+// signed as Standard Webhooks says (HMAC-SHA256 of id.timestamp.body) to /v1/rails/simbreb/notifications,
+// where the core reads it back with Outcome. Notifications still waiting when the process stops are lost, as a
+// real rail's would be until it retried.
 package simrail
 
 import (
@@ -28,7 +29,8 @@ const (
 	notificationPath = "/v1/rails/" + name + "/notifications"
 	slowTake         = 21 * time.Second // over 20 s: longer than the core waits (app.Send)
 	notifyTimeout    = 10 * time.Second
-	closedAccount    = "AC04" // ISO 20022 reason of a rejection
+	closedAccount    = "AC04"          // ISO 20022 reason of a rejection
+	replayWindow     = 5 * time.Minute // how far from now a notification may be signed (ADR-0010)
 )
 
 // errNotTaken means the core answered a notification with an error.
@@ -117,6 +119,40 @@ func byAccountOrKey(a app.AccountRef) bool { return (a.Number == "") != (a.Key =
 func wholePart(msg app.OutboundMessage) string {
 	whole, _, _ := strings.Cut(msg.Amount.Precise().String(), ".")
 	return whole
+}
+
+// Outcome is the outcome n carries if the rail signed it within 5 minutes of now, before or after: any of its
+// v1 signatures is the HMAC-SHA256 with the rail's secret of its id, its timestamp and its body. Otherwise it
+// is app.ErrUnverifiedNotification, which says nothing of what the body carries; a signed body that is not a
+// notification is app.ErrInvalidNotification.
+func (s *Simulator) Outcome(n app.Notification) (app.RailOutcome, error) {
+	if err := s.verify(n); err != nil {
+		return app.RailOutcome{}, err
+	}
+	var body notification
+	if err := json.Unmarshal(n.Body, &body); err != nil {
+		return app.RailOutcome{}, fmt.Errorf("%w: %w", app.ErrInvalidNotification, err)
+	}
+	return app.RailOutcome(body), nil
+}
+
+// verify is nil if the rail signed n within the replay window, comparing signatures in constant time.
+func (s *Simulator) verify(n app.Notification) error {
+	id, timestamp := n.Header.Get("webhook-id"), n.Header.Get("webhook-timestamp")
+	unix, err := strconv.ParseInt(timestamp, 10, 64)
+	switch {
+	case id == "" || err != nil:
+		return fmt.Errorf("%w: without its id or its timestamp", app.ErrUnverifiedNotification)
+	case s.now().Sub(time.Unix(unix, 0)).Abs() > replayWindow:
+		return fmt.Errorf("%w: signed at %d, outside the replay window", app.ErrUnverifiedNotification, unix)
+	}
+	want := []byte(sign(s.secret, id, timestamp, n.Body))
+	for _, signature := range strings.Fields(n.Header.Get("webhook-signature")) {
+		if version, value, _ := strings.Cut(signature, ","); version == "v1" && hmac.Equal([]byte(value), want) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: no signature of the rail", app.ErrUnverifiedNotification)
 }
 
 // notifyAfter sends outcome to the core after wait, and logs it if the core does not take it.

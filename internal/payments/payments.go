@@ -1,5 +1,6 @@
 // Package payments is the facade of payment orders (FR-30, FR-31): an outgoing payment is screened, held on its
-// account with its charges and queued to be sent through its rail.
+// account with its charges and queued to be sent through its rail, whose outcome settles it against the rail's
+// clearing account or rejects it and releases its hold.
 package payments
 
 import (
@@ -39,10 +40,13 @@ type (
 	Status = domain.Status
 )
 
-// Statuses an order is initiated into.
+// Statuses of an order.
 const (
 	StatusPendingScreening = domain.StatusPendingScreening
 	StatusHeld             = domain.StatusHeld
+	StatusSent             = domain.StatusSent
+	StatusSettled          = domain.StatusSettled
+	StatusRejected         = domain.StatusRejected
 )
 
 // RailSimBreB is the simulated Bre-B rail, the only one for now.
@@ -62,24 +66,25 @@ var (
 // is reconciled, not released by its hold expiring.
 const holdLife = 30 * 24 * time.Hour
 
-// queuePayments is the River queue of the payments jobs.
-const queuePayments = "payments"
+// Queue is the River queue of the payments jobs.
+const Queue = "payments"
 
 // undoTimeout bounds undoing a payment that failed, which runs even if the request was canceled.
 const undoTimeout = 5 * time.Second
 
-// Events of an order (architecture §8).
-const (
-	typeInitiated = "aluna.payments.order.initiated.v1"
-	typeHeld      = "aluna.payments.order.held.v1"
-)
+// typeInitiated is the event of a new order; the others are of where it stands (eventType).
+const typeInitiated = "aluna.payments.order.initiated.v1"
+
+// eventType is the event of an order that moved to status (architecture §8): aluna.payments.order.held.v1, and
+// so on.
+func eventType(status Status) string { return "aluna.payments.order." + string(status) + ".v1" }
 
 // Events publishes payments events; outbox.Outbox implements it.
 type Events interface {
 	Emit(ctx context.Context, tx postgres.Tx, e outbox.Event) error
 }
 
-// Service initiates payment orders.
+// Service initiates payment orders, sends them through their rail and takes its outcome.
 type Service struct {
 	ledger     *ledger.Service
 	deposits   *deposits.Service
@@ -87,15 +92,18 @@ type Service struct {
 	pricing    *pricing.Service
 	events     Events
 	jobs       *river.Client[pgx.Tx] // only inserts jobs: the worker's client works them
+	rail       Rail
 }
 
-// New creates the service; it publishes its events to events and queues its jobs in pool's River.
-func New(l *ledger.Service, d *deposits.Service, c *compliance.Service, p *pricing.Service, events Events, pool *pgxpool.Pool) (*Service, error) {
+// New creates the service of rail, the only one; it publishes its events to events and queues its jobs in
+// pool's River.
+func New(l *ledger.Service, d *deposits.Service, c *compliance.Service, p *pricing.Service, events Events, pool *pgxpool.Pool, rail Rail,
+) (*Service, error) {
 	jobs, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Schema: outbox.RiverSchema})
 	if err != nil {
 		return nil, fmt.Errorf("payments jobs: %w", err)
 	}
-	return &Service{ledger: l, deposits: d, compliance: c, pricing: p, events: events, jobs: jobs}, nil
+	return &Service{ledger: l, deposits: d, compliance: c, pricing: p, events: events, jobs: jobs, rail: rail}, nil
 }
 
 // Initiate starts, within tx, an outgoing payment (FR-31): its beneficiary is screened (FR-42), and if screening
@@ -207,7 +215,7 @@ func (i initiation) Record(ctx context.Context, o app.Order) error {
 	if o.Status != StatusHeld {
 		return nil
 	}
-	if err := i.s.emit(ctx, i.tx, typeHeld, o); err != nil {
+	if err := i.s.emit(ctx, i.tx, eventType(StatusHeld), o); err != nil {
 		return err
 	}
 	if _, err := i.s.jobs.InsertTx(ctx, i.tx.Pgx(), sendArgs{OrderID: o.ID}, nil); err != nil {
@@ -215,15 +223,6 @@ func (i initiation) Record(ctx context.Context, o app.Order) error {
 	}
 	return nil
 }
-
-// sendArgs is the job that sends a held order through its rail (T-062 works it).
-type sendArgs struct {
-	OrderID ids.ID `json:"order_id"`
-}
-
-func (sendArgs) Kind() string { return "payments.send" }
-
-func (sendArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: queuePayments} }
 
 // orderEvent is the data of an order's event: where it stands, nothing about its beneficiary.
 type orderEvent struct {

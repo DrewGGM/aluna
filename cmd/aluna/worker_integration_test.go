@@ -27,6 +27,7 @@ func TestRunWorkerStopsOnSIGTERM(t *testing.T) {
 	}
 	t.Setenv("ALUNA_DATABASE_URL", appDSN)
 	t.Setenv("ALUNA_AUDIT_ANCHOR_DIR", t.TempDir())
+	t.Setenv("ALUNA_SIMBREB_SECRET", railSecret)
 	exit := make(chan int, 1)
 	go func() { exit <- run([]string{"worker"}, io.Discard) }()
 	waitLeaders(t, 1)

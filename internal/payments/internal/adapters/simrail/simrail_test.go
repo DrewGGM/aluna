@@ -239,46 +239,85 @@ func (h handlerFunc) WithAttrs([]slog.Attr) slog.Handler { return h }
 
 func (h handlerFunc) WithGroup(string) slog.Handler { return h }
 
-// deaf is a rail that keeps the deadline its Send got and, with ended, does not return until ended closes,
-// whatever its context says, or 5 seconds pass: a regression fails the test instead of hanging it.
-type deaf struct {
-	at    time.Time
-	ended chan struct{}
+// notificationOf is r as the core reads it.
+func notificationOf(r received) app.Notification {
+	h := http.Header{}
+	h.Set("webhook-id", r.id)
+	h.Set("webhook-timestamp", r.timestamp)
+	h.Set("webhook-signature", r.signature)
+	return app.Notification{Header: h, Body: r.body}
 }
 
-func (d *deaf) Name() string { return "deaf" }
-
-func (d *deaf) Send(ctx context.Context, _ app.OutboundMessage) (app.SendAck, error) {
-	d.at, _ = ctx.Deadline()
-	if d.ended != nil {
-		select {
-		case <-d.ended:
-		case <-time.After(5 * time.Second):
-		}
-	}
-	return app.SendAck{}, nil
-}
-
-// TestSendWaitsForTheRail15Seconds (FR-31): the core gives a rail 15 seconds to take a message, and stops
-// waiting when its context ends even if the rail does not return.
-func TestSendWaitsForTheRail15Seconds(t *testing.T) {
-	rail := &deaf{}
-	before := time.Now()
-	if _, err := app.Send(t.Context(), rail, message(t, 50000, 1)); err != nil {
+// TestTheCoreReadsTheRailsNotification (TH-7): a notification the rail signed within 5 minutes carries the
+// outcome it sent, also among other signatures, as Standard Webhooks allows during a key rotation.
+func TestTheCoreReadsTheRailsNotification(t *testing.T) {
+	ts, got := receiver(t)
+	rail := simulator(ts, discard())
+	if _, err := rail.Send(t.Context(), message(t, 50013, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if waited := rail.at.Sub(before); waited < 15*time.Second || waited > 16*time.Second {
-		t.Fatalf("the rail had %s, want 15 s", waited)
-	}
-	holding := &deaf{ended: make(chan struct{})}
-	t.Cleanup(func() { close(holding.ended) })
-	impatient, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
+	r, sent := notified(t, got)
+	n := notificationOf(r)
+	rotating := notificationOf(r)
+	rotating.Header.Set("webhook-signature", "v1,c29tZW9uZSBlbHNl "+r.signature)
+	want := app.RailOutcome{EndToEndID: "ALUNA1", TxID: "TX1", RailRef: sent.RailRef, Status: app.RailRejected, Reason: "AC04"}
 
-	start := time.Now()
-	_, err := app.Send(impatient, holding, message(t, 50000, 2))
-
-	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
-		t.Fatalf("a rail that does not return = %v after %s, want DeadlineExceeded at once", err, time.Since(start))
+	for name, at := range map[string]time.Time{"at once": signedAt, "4 minutes later": signedAt.Add(4 * time.Minute)} {
+		rail.now = func() time.Time { return at }
+		for _, n := range []app.Notification{n, rotating} {
+			if out, err := rail.Outcome(n); err != nil || out != want {
+				t.Fatalf("%s: outcome = %+v (%v), want %+v", name, out, err, want)
+			}
+		}
 	}
+}
+
+// TestANotificationNotTheRailsIsRefused (TH-7): one signed with another secret, changed after signing, without
+// its id, timestamp or signature, with another version, or signed more than 5 minutes before or after now, is
+// ErrUnverifiedNotification; a signed body that is not a notification, ErrInvalidNotification.
+func TestANotificationNotTheRailsIsRefused(t *testing.T) {
+	ts, got := receiver(t)
+	rail := simulator(ts, discard())
+	if _, err := rail.Send(t.Context(), message(t, 50000, 1)); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := notified(t, got)
+	forger := New(ts.URL, []byte("another secret of another rail"), ts.Client(), discard())
+	timestamp := strconv.FormatInt(signedAt.Unix(), 10)
+	cases := map[string]struct {
+		change func(n *app.Notification)
+		want   error
+	}{
+		"another secret": {func(n *app.Notification) {
+			n.Header.Set("webhook-signature", "v1,"+sign(forger.secret, r.id, r.timestamp, r.body))
+		}, app.ErrUnverifiedNotification},
+		"a changed body":       {func(n *app.Notification) { n.Body = append([]byte(" "), n.Body...) }, app.ErrUnverifiedNotification},
+		"another id":           {func(n *app.Notification) { n.Header.Set("webhook-id", "SIMOTHER") }, app.ErrUnverifiedNotification},
+		"without its id":       {func(n *app.Notification) { n.Header.Del("webhook-id") }, app.ErrUnverifiedNotification},
+		"signed without an id": {func(n *app.Notification) { n.Header.Del("webhook-id"); resign(n, "", r.timestamp, r.body) }, app.ErrUnverifiedNotification},
+		"without timestamp":    {func(n *app.Notification) { n.Header.Del("webhook-timestamp") }, app.ErrUnverifiedNotification},
+		"without signature":    {func(n *app.Notification) { n.Header.Del("webhook-signature") }, app.ErrUnverifiedNotification},
+		"another version":      {func(n *app.Notification) { n.Header.Set("webhook-signature", "v1a"+r.signature[2:]) }, app.ErrUnverifiedNotification},
+		"6 minutes old":        {func(_ *app.Notification) { rail.now = func() time.Time { return signedAt.Add(6 * time.Minute) } }, app.ErrUnverifiedNotification},
+		"6 minutes ahead":      {func(_ *app.Notification) { rail.now = func() time.Time { return signedAt.Add(-6 * time.Minute) } }, app.ErrUnverifiedNotification},
+		"a timestamp far away": {func(n *app.Notification) { resign(n, r.id, "-9223372036854775808", r.body) }, app.ErrUnverifiedNotification},
+		"not a notification":   {func(n *app.Notification) { resign(n, r.id, timestamp, []byte(`["accepted"]`)) }, app.ErrInvalidNotification},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rail.now = func() time.Time { return signedAt }
+			n := notificationOf(r)
+			tc.change(&n)
+			if out, err := rail.Outcome(n); !errors.Is(err, tc.want) || out != (app.RailOutcome{}) {
+				t.Fatalf("outcome = %+v (%v), want %v", out, err, tc.want)
+			}
+		})
+	}
+}
+
+// resign makes n a notification of body, id and timestamp signed with the rail's secret.
+func resign(n *app.Notification, id, timestamp string, body []byte) {
+	n.Header.Set("webhook-timestamp", timestamp)
+	n.Header.Set("webhook-signature", "v1,"+sign(secret, id, timestamp, body))
+	n.Body = body
 }

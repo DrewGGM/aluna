@@ -36,13 +36,14 @@ var testPool *pgxpool.Pool
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
 // world is an entity with a savings account funded with 1,000,000 COP, the ledger accounts its product names
-// and the clearing account of the simulated rail.
+// and the clearing account of the simulated rail, which notifies the test.
 type world struct {
 	entity   ids.ID
 	ledger   *ledger.Service
 	deposits *deposits.Service
 	pricing  *pricing.Service
 	payments *payments.Service
+	rail     *testRail
 	account  deposits.Account
 }
 
@@ -91,7 +92,8 @@ func worldOf(t *testing.T, file string, clearing bool) world {
 	w.ledger = ledger.New(calendar.New(), events)
 	w.pricing = pricing.New(catalog, calendar.New(), pricing.SingleAccount)
 	w.deposits = deposits.New(w.ledger, parties, catalog, calendar.New(), w.pricing, events)
-	if w.payments, err = payments.New(w.ledger, w.deposits, screening, w.pricing, events, testPool); err != nil {
+	w.rail = newTestRail(t)
+	if w.payments, err = payments.New(w.ledger, w.deposits, screening, w.pricing, events, testPool, w.rail); err != nil {
 		t.Fatal(err)
 	}
 	w.accounts(t, clearing)

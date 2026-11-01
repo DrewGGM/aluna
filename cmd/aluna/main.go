@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -51,16 +52,20 @@ var stderr io.Writer = os.Stderr
 const usage = `usage: aluna <command>
 
 commands:
-  api                        serves the HTTP API on ALUNA_HTTP_ADDR (default :8080); requires
-                             ALUNA_DATABASE_URL, ALUNA_OIDC_ISSUER (the token issuer) and
-                             ALUNA_OIDC_AUDIENCE (the audience tokens must carry); with
-                             OTEL_EXPORTER_OTLP_ENDPOINT it exports traces and metrics over OTLP;
-                             ALUNA_GMF_MODALITY is the GMF exemption's modality, single_account
-                             (the default) or split_accounts
-  worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing)
-                             on ALUNA_DATABASE_URL, anchoring blocks in ALUNA_AUDIT_ANCHOR_DIR;
-                             multiple workers elect a leader for the periodic jobs; it reads
-                             ALUNA_GMF_MODALITY as api does
+  api                        serves the HTTP API on ALUNA_HTTP_ADDR (default :8080) and the rail
+                             notifications on ALUNA_RAIL_ADDR (default :8081); requires
+                             ALUNA_DATABASE_URL, ALUNA_OIDC_ISSUER (the token issuer),
+                             ALUNA_OIDC_AUDIENCE (the audience tokens must carry) and
+                             ALUNA_SIMBREB_SECRET (at least 32 bytes, the simulated rail signs its
+                             notifications with it); with OTEL_EXPORTER_OTLP_ENDPOINT it exports
+                             traces and metrics over OTLP; ALUNA_GMF_MODALITY is the GMF
+                             exemption's modality, single_account (the default) or split_accounts
+  worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing,
+                             payments) on ALUNA_DATABASE_URL, anchoring blocks in
+                             ALUNA_AUDIT_ANCHOR_DIR; multiple workers elect a leader for the
+                             periodic jobs; it reads ALUNA_GMF_MODALITY and ALUNA_SIMBREB_SECRET as
+                             api does, and the simulated rail notifies ALUNA_SIMBREB_NOTIFY_URL
+                             (default http://localhost:8081)
   audit verify --from N --to M
                              recomputes the audit chain of blocks N to M and checks it against
                              their anchors in ALUNA_AUDIT_ANCHOR_DIR
@@ -205,24 +210,27 @@ func flushTelemetry(ctx context.Context, shutdown telemetry.Shutdown, log *slog.
 	}
 }
 
-// apiConfig is the configuration of aluna api. The legal entity of each request comes from its token
-// (FR-41), not from the configuration.
+// apiConfig is the configuration of aluna api: it serves the channels on addr and the rails on railAddr. The
+// legal entity of each request comes from its token (FR-41), not from the configuration.
 type apiConfig struct {
-	addr, dsn        string
-	issuer, audience string
-	gmf              pricing.Modality
+	addr, railAddr, dsn string
+	issuer, audience    string
+	gmf                 pricing.Modality
+	railSecret          string
 }
 
 func apiConfigFromEnv() (apiConfig, error) {
-	cfg := apiConfig{addr: envOr("ALUNA_HTTP_ADDR", ":8080"), dsn: os.Getenv("ALUNA_DATABASE_URL")}
+	cfg := apiConfig{addr: envOr("ALUNA_HTTP_ADDR", ":8080"), railAddr: envOr("ALUNA_RAIL_ADDR", ":8081"), dsn: os.Getenv("ALUNA_DATABASE_URL")}
 	if cfg.dsn == "" {
 		return apiConfig{}, errNoDatabaseURL
 	}
-	gmf, err := gmfModalityFromEnv()
-	if err != nil {
+	var err error
+	if cfg.gmf, err = gmfModalityFromEnv(); err != nil {
 		return apiConfig{}, err
 	}
-	cfg.gmf = gmf
+	if cfg.railSecret, err = railSecretFromEnv(); err != nil {
+		return apiConfig{}, err
+	}
 	cfg.issuer, cfg.audience = os.Getenv("ALUNA_OIDC_ISSUER"), os.Getenv("ALUNA_OIDC_AUDIENCE")
 	if cfg.issuer == "" {
 		return apiConfig{}, fmt.Errorf("%w: missing ALUNA_OIDC_ISSUER", errNoOIDC)
@@ -239,9 +247,23 @@ func gmfModalityFromEnv() (pricing.Modality, error) {
 	return pricing.ModalityOf(envOr("ALUNA_GMF_MODALITY", string(pricing.SingleAccount)))
 }
 
+// minRailSecret is the shortest rail secret: an HMAC-SHA256 key shorter than its hash weakens it.
+const minRailSecret = 32
+
+// railSecretFromEnv is the secret the simulated rail signs its notifications with, ALUNA_SIMBREB_SECRET: the
+// worker signs with it and api verifies with it.
+func railSecretFromEnv() (string, error) {
+	secret := os.Getenv("ALUNA_SIMBREB_SECRET")
+	if len(secret) < minRailSecret {
+		return "", errRailSecret
+	}
+	return secret, nil
+}
+
 var (
 	errNoDatabaseURL = errors.New("missing ALUNA_DATABASE_URL")
 	errNoOIDC        = errors.New("incomplete OIDC configuration")
+	errRailSecret    = fmt.Errorf("ALUNA_SIMBREB_SECRET must have at least %d bytes", minRailSecret)
 )
 
 // connectTimeout bounds the initial connection: if the database does not respond, the process fails
@@ -254,12 +276,13 @@ const telemetryFlushTimeout = 5 * time.Second
 // readyTimeout bounds the /readyz ping: a probe must not hang if the database does not respond.
 const readyTimeout = 2 * time.Second
 
-// runAPI opens the port first (a busy port fails without touching the database), connects to the
-// database, wires the modules (newAPI) and serves until ctx is canceled.
+// runAPI opens the ports first (a busy port fails without touching the database), connects to the
+// database, wires the modules (newAPI) and serves until ctx is canceled: the channels' API, with tokens, and
+// the rails' notifications, which they sign, on a port of their own that the channels do not reach (TH-7).
 func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, authz authorization, log *slog.Logger) int {
-	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.addr)
+	lns, err := listen(ctx, cfg.addr, cfg.railAddr)
 	if err != nil {
-		log.Error("could not open the port", "addr", cfg.addr, "error", err)
+		log.Error("could not open the port", "error", err)
 		return 1
 	}
 	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
@@ -267,14 +290,15 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	pool, err := postgres.Open(openCtx, cfg.dsn)
 	if err != nil {
 		log.Error("could not connect to the database", "error", err)
-		if closeErr := ln.Close(); closeErr != nil {
-			log.Error("close the port", "error", closeErr)
+		if closeErr := closeAll(lns); closeErr != nil {
+			log.Error("close the ports", "error", closeErr)
 		}
 		return 1
 	}
 	defer pool.Close()
 	uow := postgres.NewUnitOfWork(pool)
-	api, err := newAPI(pool, uow, cfg.gmf, authz.policy)
+	rail := payments.NewSimulatedRail("", []byte(cfg.railSecret), http.DefaultClient, log) // api only reads its notifications
+	api, err := newAPI(pool, uow, cfg.gmf, authz.policy, rail)
 	if err != nil {
 		log.Error("wire the modules", "error", err)
 		return 1
@@ -287,12 +311,34 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	serverCfg := httpapi.ServerConfig{
 		Ready: ready, Audit: &httpapi.CommandAudit{Records: audit.New(), UoW: uow}, Verifier: verifier, Authorizer: authz.authorizer,
 	}
-	return serveAPI(ctx, ln, httpapi.NewServer(serverCfg, httpapi.Routes(api, log), log), log)
+	return serveAPI(ctx, log, serving{lns[0], httpapi.NewServer(serverCfg, httpapi.Routes(api, log), log)},
+		serving{lns[1], httpapi.NewServer(httpapi.ServerConfig{Ready: ready}, httpapi.RailRoutes(api.PaymentHandlers, log), log)})
 }
 
-// newAPI wires the modules by hand over pool, with the entity's GMF modality and the policy that says who
-// approves each maker-checker request.
-func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, policy *access.Policy) (httpapi.API, error) {
+// listen opens a port on each of addrs, or none: if one fails, it closes those it opened.
+func listen(ctx context.Context, addrs ...string) ([]net.Listener, error) {
+	lns := make([]net.Listener, 0, len(addrs))
+	for _, addr := range addrs {
+		ln, err := new(net.ListenConfig).Listen(ctx, "tcp", addr)
+		if err != nil {
+			return nil, errors.Join(err, closeAll(lns))
+		}
+		lns = append(lns, ln)
+	}
+	return lns, nil
+}
+
+func closeAll(lns []net.Listener) error {
+	errs := make([]error, len(lns))
+	for i, ln := range lns {
+		errs[i] = ln.Close()
+	}
+	return errors.Join(errs...)
+}
+
+// newAPI wires the modules by hand over pool, with the entity's GMF modality, the policy that says who
+// approves each maker-checker request and the payments rail.
+func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, policy *access.Policy, rail payments.Rail) (httpapi.API, error) {
 	events, err := outbox.New(pool)
 	if err != nil {
 		return httpapi.API{}, fmt.Errorf("configure the outbox: %w", err)
@@ -306,7 +352,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 	productSvc := products.New(events)
 	pricingSvc := pricing.New(productSvc, calendarSvc, gmf)
 	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
-	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool)
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, rail)
 	if err != nil {
 		return httpapi.API{}, err
 	}
@@ -323,31 +369,51 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 	}, nil
 }
 
-// serveAPI serves on ln until ctx is canceled and then waits up to shutdownTimeout for in-flight
-// requests to finish.
-func serveAPI(ctx context.Context, ln net.Listener, srv *http.Server, log *slog.Logger) int {
-	served := make(chan error, 1)
-	go func() { served <- srv.Serve(ln) }()
-	log.Info("api listening", "addr", ln.Addr().String())
+// serving is a server and the port it serves on.
+type serving struct {
+	ln  net.Listener
+	srv *http.Server
+}
 
+// serveAPI serves each server on its port until ctx is canceled or one of them stops, and then shuts them
+// down, waiting up to shutdownTimeout for in-flight requests to finish.
+func serveAPI(ctx context.Context, log *slog.Logger, servers ...serving) int {
+	served := make(chan error, len(servers))
+	for _, s := range servers {
+		go func() { served <- s.srv.Serve(s.ln) }()
+		log.Info("api listening", "addr", s.ln.Addr().String())
+	}
+	code, running := 0, len(servers)
 	select {
 	case err := <-served:
 		log.Error("server stopped", "error", err)
-		return 1
+		code, running = 1, running-1
 	case <-ctx.Done():
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Error("incomplete shutdown", "error", err)
-		return 1
+	stopped := make([]error, len(servers))
+	var wg sync.WaitGroup
+	for i, s := range servers { // at once: one slow to drain does not leave the others without time
+		wg.Go(func() { stopped[i] = s.srv.Shutdown(shutdownCtx) })
 	}
-	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
-		log.Error("server stopped", "error", err)
-		return 1
+	wg.Wait()
+	for _, err := range stopped {
+		if err != nil {
+			log.Error("incomplete shutdown", "error", err)
+			code = 1
+		}
 	}
-	log.Info("api stopped")
-	return 0
+	for range running {
+		if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+			log.Error("server stopped", "error", err)
+			code = 1
+		}
+	}
+	if code == 0 {
+		log.Info("api stopped")
+	}
+	return code
 }
 
 // workerCommand sets up telemetry and runs the worker on ALUNA_DATABASE_URL; logs go to stdout as JSON.
@@ -372,7 +438,13 @@ func workerCommand(ctx context.Context, stdout io.Writer) int {
 		log.Error("worker configuration", "error", err)
 		return 1
 	}
-	return runWorker(ctx, dsn, records, gmf, log)
+	secret, err := railSecretFromEnv()
+	if err != nil {
+		log.Error("worker configuration", "error", err)
+		return 1
+	}
+	rail := payments.NewSimulatedRail(envOr("ALUNA_SIMBREB_NOTIFY_URL", "http://localhost:8081"), []byte(secret), &http.Client{}, log)
+	return runWorker(ctx, dsn, records, gmf, rail, log)
 }
 
 var errNoAnchorDir = errors.New("missing ALUNA_AUDIT_ANCHOR_DIR")
@@ -387,9 +459,10 @@ func auditFromEnv() (*audit.Service, error) {
 	return audit.WithFileAnchor(dir)
 }
 
-// runWorker connects to the database, wires the jobs by hand and runs River until ctx is canceled. It then
-// stops taking jobs and waits up to shutdownTimeout for the running ones before canceling them.
-func runWorker(ctx context.Context, dsn string, records *audit.Service, gmf pricing.Modality, log *slog.Logger) int {
+// runWorker connects to the database, wires the jobs by hand and runs River until ctx is canceled; payments go
+// through rail. It then stops taking jobs and waits up to shutdownTimeout for the running ones before
+// canceling them.
+func runWorker(ctx context.Context, dsn string, records *audit.Service, gmf pricing.Modality, rail payments.Rail, log *slog.Logger) int {
 	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	pool, err := postgres.Open(openCtx, dsn)
@@ -398,7 +471,7 @@ func runWorker(ctx context.Context, dsn string, records *audit.Service, gmf pric
 		return 1
 	}
 	defer pool.Close()
-	client, err := newWorker(pool, records, gmf, log)
+	client, err := newWorker(pool, records, gmf, rail, log)
 	if err != nil {
 		log.Error("configure the worker", "error", err)
 		return 1
@@ -414,8 +487,8 @@ func runWorker(ctx context.Context, dsn string, records *audit.Service, gmf pric
 }
 
 // newWorker builds the worker's River client from the jobs configuration, wired by hand; gmf is the entity's
-// modality of the GMF exemption.
-func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality, log *slog.Logger) (*river.Client[pgx.Tx], error) {
+// modality of the GMF exemption, and rail the payments rail.
+func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality, rail payments.Rail, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	events, err := outbox.New(pool)
 	if err != nil {
 		return nil, err
@@ -423,11 +496,17 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality,
 	calendarSvc := calendar.New()
 	ledgerSvc := ledger.New(calendarSvc, events)
 	productSvc := products.New(events)
-	parties := party.New(events, compliance.New(events).PartyScreener()) // the jobs read parties, never register them
-	depositSvc := deposits.New(ledgerSvc, parties, productSvc, calendarSvc, pricing.New(productSvc, calendarSvc, gmf), events)
+	complianceSvc := compliance.New(events)
+	parties := party.New(events, complianceSvc.PartyScreener()) // the jobs read parties, never register them
+	pricingSvc := pricing.New(productSvc, calendarSvc, gmf)
+	depositSvc := deposits.New(ledgerSvc, parties, productSvc, calendarSvc, pricingSvc, events)
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, rail) // the jobs send payments, never initiate them
+	if err != nil {
+		return nil, err
+	}
 	cfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
-		Audit: records, Deposits: depositSvc,
+		Audit: records, Deposits: depositSvc, Payments: paymentSvc,
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)

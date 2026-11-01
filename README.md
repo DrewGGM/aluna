@@ -46,7 +46,9 @@ go build -o aluna ./cmd/aluna
 docker compose -f deploy/compose.yaml up -d postgres   # ALUNA_PG_PORT=55432 si el 5432 está ocupado
 docker compose -f deploy/compose.yaml --profile iam up -d keycloak   # IAM de desarrollo en :8180
 ALUNA_DATABASE_URL="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable" ./aluna migrate up
-# la API corre con el rol aluna_app, que no puede modificar ni borrar lo asentado
+# la API corre con el rol aluna_app, que no puede modificar ni borrar lo asentado; el secreto del rail
+# simulado es el mismo para api y worker
+export ALUNA_SIMBREB_SECRET="$(openssl rand -hex 32)"
 ALUNA_DATABASE_URL="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable&options=-c%20role%3Daluna_app" \
 ALUNA_OIDC_ISSUER=http://localhost:8180/realms/aluna ALUNA_OIDC_AUDIENCE=aluna-api ./aluna api
 # un token del realm de prueba (usuario operator/operator), para el header Authorization: Bearer
@@ -57,6 +59,12 @@ curl -s -d grant_type=password -d client_id=aluna-dev -d username=operator -d pa
 Cada request, salvo `/healthz` y `/readyz`, lleva un token OIDC del emisor configurado, con `iat` y una
 vida de 15 min como mucho; la entidad legal con la que opera sale del claim `legal_entity_id` del token,
 nunca de un header.
+
+Las notificaciones de los rails (`POST /v1/rails/simbreb/notifications`) no van por ese puerto sino por
+`ALUNA_RAIL_ADDR`, que no se expone a los canales: el rail no trae token, firma cada notificación
+(Standard Webhooks, HMAC-SHA256 con `ALUNA_SIMBREB_SECRET`), y una con otra firma, o firmada hace más de
+5 min, responde 401. El worker envía los pagos por el rail simulado, que notifica a
+`ALUNA_SIMBREB_NOTIFY_URL`.
 
 Cada operación del contrato declara el permiso que exige (`x-aluna-permission`), y
 [`config/roles.yaml`](config/roles.yaml) dice qué roles lo dan: `channel`, `operator`, `finance`,
@@ -79,6 +87,9 @@ los 7 días.
 | `ALUNA_OIDC_AUDIENCE` | Audiencia que deben traer los tokens (obligatoria para `api`) |
 | `ALUNA_AUDIT_ANCHOR_DIR` | Directorio, ya existente, del ancla de los bloques de auditoría (obligatoria para `worker` y `audit verify`) |
 | `ALUNA_HTTP_ADDR` | Dirección de la API; por defecto `:8080` |
+| `ALUNA_RAIL_ADDR` | Dirección de las notificaciones de los rails (`api`); por defecto `:8081` |
+| `ALUNA_SIMBREB_SECRET` | Secreto, de al menos 32 bytes, con que el rail simulado firma sus notificaciones (obligatoria para `api` y `worker`, el mismo en los dos) |
+| `ALUNA_SIMBREB_NOTIFY_URL` | A dónde notifica el rail simulado (`worker`): las notificaciones de `api`; por defecto `http://localhost:8081` |
 | `ALUNA_GMF_MODALITY` | Modalidad de la exención del GMF de la entidad (`api` y `worker`): `single_account`, por defecto, para una sola cuenta exenta por titular, o `split_accounts`, para repartir los 350 UVT del mes entre varias |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Si existe, trazas y métricas salen por OTLP/HTTP (y el resto de variables `OTEL_*`) |
 

@@ -29,7 +29,7 @@ var ErrDuplicatePayment = errors.New("a payment with that reference was already 
 
 // Order is a payment order as payments keeps it: the domain's order, its beneficiary, the caller's reference to
 // it, and, once it is held, the hold on its account, what it holds, and the charges it covers, which are posted
-// when it settles.
+// when it settles. RailRef is the rail's reference to it, once the rail notified its outcome.
 type Order struct {
 	domain.Order
 	Creditor    AccountRef
@@ -38,6 +38,7 @@ type Order struct {
 	Held        money.Amount
 	Fees        []pricing.Fee
 	GMF         money.Amount
+	RailRef     string
 }
 
 // InitiateInput is an outgoing payment of Amount from deposit account AccountID of LegalEntityID to Creditor,

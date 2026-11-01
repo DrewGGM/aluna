@@ -123,6 +123,7 @@ func startAPI(t *testing.T, bin, dsn string) runningAPI {
 	issuer, sign := oidcIssuer(t)
 	cmd := alunaCmd(t, bin, []string{
 		"ALUNA_HTTP_ADDR=" + addr, "ALUNA_DATABASE_URL=" + appDSN, "ALUNA_OIDC_ISSUER=" + issuer, "ALUNA_OIDC_AUDIENCE=" + audience,
+		"ALUNA_RAIL_ADDR=" + freeAddr(t), "ALUNA_SIMBREB_SECRET=a secret of the simulated rail, for the tests",
 	}, "api")
 	var logs bytes.Buffer // os/exec does not write to Stdout and Stderr concurrently if they are the same writer
 	cmd.Stdout, cmd.Stderr = &logs, &logs

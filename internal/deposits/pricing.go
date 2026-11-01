@@ -84,3 +84,16 @@ func (m movements) FeeIncome(ctx context.Context, a Account) (ids.ID, error) {
 func (m movements) GMFPayable(ctx context.Context, a Account) (ids.ID, error) {
 	return m.productAccountOf(ctx, a, "GMF payable", func(v products.Version) string { return v.Definition.Accounts.GMFPayable })
 }
+
+// FeeIncome is, within tx, the ledger account the product of deposit account a names for its fees, in a's
+// currency: one that is missing is ErrProductAccountMissing. Another module that charges a's fees posts them
+// there (payments, FR-31).
+func (s *Service) FeeIncome(ctx context.Context, tx postgres.Tx, a Account) (ids.ID, error) {
+	return s.movements(tx).FeeIncome(ctx, a)
+}
+
+// GMFPayable is, within tx, the ledger account the product of deposit account a names for the GMF, as
+// FeeIncome.
+func (s *Service) GMFPayable(ctx context.Context, tx postgres.Tx, a Account) (ids.ID, error) {
+	return s.movements(tx).GMFPayable(ctx, a)
+}

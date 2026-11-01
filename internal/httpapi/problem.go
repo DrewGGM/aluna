@@ -190,6 +190,13 @@ var problems = []struct {
 	// account exists
 	{payments.ErrDuplicatePayment, conflict("duplicate_payment", "A payment with that reference was already made")},
 	{payments.ErrInvalidOrder, unprocessable("invalid_payment_order", "The payment is in another currency than its account, through an unknown rail, without a reference, or its beneficiary is not one account of up to 64 characters or one key of up to 128")},
+	{payments.ErrUnverifiedNotification, Problem{
+		Status: http.StatusUnauthorized, Code: "invalid_signature", Title: "The rail did not sign the notification in the last 5 minutes",
+	}},
+	{payments.ErrInvalidNotification, invalidRequest("Invalid notification",
+		"The notification carries an outcome, accepted or rejected with its reason, and its reference and reason are text of up to 255 characters.")},
+	{payments.ErrOrderNotFound, notFound},
+	{payments.ErrOutcomeConflict, conflict("outcome_conflict", "The payment order already took another outcome")},
 	// compliance
 	{compliance.ErrCaseNotFound, notFound},
 	{compliance.ErrCaseResolved, conflict("case_already_resolved", "The screening case is already resolved")},

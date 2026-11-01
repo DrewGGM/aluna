@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -25,6 +27,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/party"
+	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 	"github.com/DrewGGM/aluna/internal/pricing"
@@ -55,10 +58,18 @@ func newDeps(t *testing.T) jobs.Deps {
 	calendarSvc := calendar.New()
 	ledgerSvc := ledger.New(calendarSvc, events)
 	productSvc := products.New(events)
+	pricingSvc := pricing.New(productSvc, calendarSvc, pricing.SingleAccount)
+	depositSvc := deposits.New(ledgerSvc, party.New(events, screenedClear{}), productSvc, calendarSvc, pricingSvc, events)
+	idle := payments.NewSimulatedRail("http://127.0.0.1:1", []byte("a secret of the simulated rail, for the tests"), http.DefaultClient,
+		slog.New(slog.DiscardHandler)) // these tests send no payment through it
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, compliance.New(events), pricingSvc, events, testPool, idle)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return jobs.Deps{
 		Audit:      records,
 		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(testPool), Outbox: events,
-		Deposits: deposits.New(ledgerSvc, party.New(events, screenedClear{}), productSvc, calendarSvc, pricing.New(productSvc, calendarSvc, pricing.SingleAccount), events),
+		Deposits: depositSvc, Payments: paymentSvc,
 	}
 }
 
@@ -186,9 +197,11 @@ func TestTheWorkerRunsEveryJob(t *testing.T) {
 		})
 	})
 
+	queueSend(t)
+
 	waitFor(t, startWorker(t, deps),
 		"ledger.holds.expire", "ledger.balances.aggregate", "idempotency.purge", "outbox.purge", "outbox.publish", "audit.seal",
-		"deposits.interest.accrue", "deposits.accounts.mark_dormant")
+		"deposits.interest.accrue", "deposits.accounts.mark_dormant", "payments.send")
 
 	var block *int64
 	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil || block == nil {
@@ -267,4 +280,32 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// sendArgs is payments.send as payments queues it: the worker must take it from the payments queue.
+type sendArgs struct {
+	OrderID ids.ID `json:"order_id"`
+}
+
+func (sendArgs) Kind() string { return "payments.send" }
+
+func (sendArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: payments.Queue} }
+
+// queueSend queues payments.send for an order already rejected, which the worker takes and has nothing to send.
+func queueSend(t *testing.T) {
+	t.Helper()
+	id := ids.New()
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO payments.orders (id, legal_entity_id, account_id, direction, rail, end_to_end_id, instr_id,
+			tx_id, currency, amount_units, creditor_key, status, reason, external_ref)
+			VALUES ($1, $2, $3, 'outgoing', 'simbreb', $4, 'INSTR1', 'TX1', 'COP', 100, '@x', 'rejected', 'AC04', $4)`, id, ids.New(), ids.New(), id.String()[:35])
+		return err
+	})
+	client, err := river.NewClient(riverpgxv5.New(testPool), &river.Config{Schema: outbox.RiverSchema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Insert(t.Context(), sendArgs{OrderID: id}, nil); err != nil {
+		t.Fatal(err)
+	}
 }

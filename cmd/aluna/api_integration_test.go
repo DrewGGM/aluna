@@ -49,6 +49,8 @@ func TestRunAPIStopsOnSIGTERM(t *testing.T) {
 	t.Setenv("ALUNA_DATABASE_URL", appDSN)
 	t.Setenv("ALUNA_OIDC_ISSUER", oidcIssuer(t))
 	t.Setenv("ALUNA_OIDC_AUDIENCE", "aluna-api")
+	t.Setenv("ALUNA_RAIL_ADDR", freeAddr(t))
+	t.Setenv("ALUNA_SIMBREB_SECRET", railSecret)
 	exit := make(chan int, 1)
 	go func() { exit <- run([]string{"api"}, io.Discard) }()
 	waitHealthy(t, addr)

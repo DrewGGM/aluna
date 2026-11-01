@@ -49,10 +49,11 @@ const (
 type ServerConfig struct {
 	// Ready reports whether the process can serve traffic (database, dependencies). Nil means "ready".
 	Ready func(ctx context.Context) error
-	// Audit records the commands (POST); nil only in a server without command routes.
+	// Audit records the commands (POST); nil only in a server without the channels' commands: the probes alone,
+	// or the rails' notifications, which carry no principal to record (RailRoutes).
 	Audit *CommandAudit
-	// Verifier verifies the token of every request that is not a probe; nil only in a server without
-	// business routes (the handlers do not run without a principal).
+	// Verifier verifies the token of every request that is not a probe; nil only in a server whose routes
+	// need no principal: the probes alone, or the rails' notifications, which the rail signs (RailRoutes).
 	Verifier TokenVerifier
 	// Authorizer authorizes every authenticated request; with Verifier and without Authorizer, every route is
 	// denied.

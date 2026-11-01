@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/money"
@@ -13,9 +14,16 @@ import (
 // sendTimeout is the longest the core waits for a rail to take a message (FR-31).
 const sendTimeout = 15 * time.Second
 
-// ErrRailRefused means the rail did not take the message: unlike a rail that does not answer, the payment
-// certainly did not leave.
-var ErrRailRefused = errors.New("the rail did not take the message")
+var (
+	// ErrRailRefused means the rail did not take the message: unlike a rail that does not answer, the payment
+	// certainly did not leave.
+	ErrRailRefused = errors.New("the rail did not take the message")
+	// ErrUnverifiedNotification means a notification the rail did not sign, or signed too long ago: it may be
+	// forged or replayed (TH-7).
+	ErrUnverifiedNotification = errors.New("the notification is not the rail's")
+	// ErrInvalidNotification means a notification of the rail whose outcome the core cannot read.
+	ErrInvalidNotification = errors.New("invalid rail notification")
+)
 
 // AccountRef is a party of a payment at its bank, by account number or by key (a Bre-B "llave"): one of the
 // two.
@@ -53,11 +61,19 @@ type RailOutcome struct {
 	Reason                    string
 }
 
+// Notification is a rail's notification as it reached the core: its headers and its body.
+type Notification struct {
+	Header http.Header
+	Body   []byte
+}
+
 // RailPort is a payment rail (Bre-B, ACH): its adapter speaks its protocol, and the core speaks of messages
 // (architecture §3, anticorruption layer). Send should return when ctx ends, though app.Send does not rely on
-// it, and is ErrRailRefused, wrapped, if the rail did not take the message.
+// it, and is ErrRailRefused, wrapped, if the rail did not take the message. Outcome is the outcome n carries if
+// the rail sent it, and ErrUnverifiedNotification, wrapped, otherwise.
 type RailPort interface {
 	Send(ctx context.Context, msg OutboundMessage) (SendAck, error)
+	Outcome(n Notification) (RailOutcome, error)
 	Name() string
 }
 

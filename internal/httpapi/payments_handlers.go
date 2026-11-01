@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -70,4 +72,36 @@ func toPaymentOrderJSON(o payments.Order) gen.PaymentOrder {
 		j.Held = &held
 	}
 	return j
+}
+
+// RailRoutes registers in mux the rails' notifications (TH-7): the outcomes of the simulated Bre-B rail, which
+// signs them instead of carrying a token, so they go on a server of their own, without the channels' tokens
+// and permissions. The signature is checked before the database is touched; log records the errors that are
+// not the rail's.
+func RailRoutes(h *PaymentHandlers, log *slog.Logger) func(*http.ServeMux) {
+	answer := responseError(log)
+	return func(mux *http.ServeMux) {
+		mux.HandleFunc("POST /v1/rails/"+payments.RailSimBreB+"/notifications", func(w http.ResponseWriter, r *http.Request) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				requestError(w, r, err) // a body over the limit is 413
+				return
+			}
+			if err := h.takeNotification(r.Context(), payments.Notification{Header: r.Header, Body: body}); err != nil {
+				answer(w, r, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
+}
+
+// takeNotification reads the outcome that n, a notification of the rail, carries and applies it in its own
+// transaction.
+func (h *PaymentHandlers) takeNotification(ctx context.Context, n payments.Notification) error {
+	out, err := h.payments.ReadNotification(n)
+	if err != nil {
+		return err
+	}
+	return h.commands.uow.Do(ctx, func(tx postgres.Tx) error { return h.payments.TakeOutcome(ctx, tx, out) })
 }

@@ -86,13 +86,41 @@ func TestServeAPIShutsDownWhenContextEnds(t *testing.T) {
 	}
 	exit := make(chan int, 1)
 	go func() {
-		exit <- serveAPI(ctx, ln, httpapi.NewServer(httpapi.ServerConfig{}, nil, quietLogger()), quietLogger())
+		exit <- serveAPI(ctx, quietLogger(), serving{ln, httpapi.NewServer(httpapi.ServerConfig{}, nil, quietLogger())})
 	}()
 
 	waitHealthy(t, ln.Addr().String())
 	cancel()
 
 	expectExit(t, exit, 0)
+}
+
+// TestServeAPIStopsWhenAServerStops: if one server stops on its own, the others shut down and the api ends
+// with an error.
+func TestServeAPIStopsWhenAServerStops(t *testing.T) {
+	var lns [2]net.Listener
+	for i := range lns {
+		ln, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		lns[i] = ln
+	}
+	exit := make(chan int, 1)
+	go func() {
+		exit <- serveAPI(t.Context(), quietLogger(), serving{lns[0], httpapi.NewServer(httpapi.ServerConfig{}, nil, quietLogger())},
+			serving{lns[1], httpapi.NewServer(httpapi.ServerConfig{}, nil, quietLogger())})
+	}()
+	waitHealthy(t, lns[1].Addr().String())
+
+	if err := lns[0].Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	expectExit(t, exit, 1)
+	if _, err := http.Get("http://" + lns[1].Addr().String() + "/healthz"); err == nil { //nolint:bodyclose,noctx // it must not connect
+		t.Fatal("the other server still serves")
+	}
 }
 
 func TestRunAPIInvalidAddr(t *testing.T) {
@@ -154,31 +182,40 @@ func TestMigrateNeedsDatabaseURL(t *testing.T) {
 	}
 }
 
+// railSecret is a secret of the simulated rail as long as the shortest it takes.
+const railSecret = "a secret of the simulated rail.."
+
 func TestAPIConfigFromEnv(t *testing.T) {
 	const issuer, audience = "https://iam.example/realms/aluna", "aluna-api"
 	cases := map[string]struct {
-		dsn, issuer, audience, gmf string
-		wantGMF                    pricing.Modality
-		wantErr                    string
+		dsn, issuer, audience, gmf, secret string
+		wantGMF                            pricing.Modality
+		wantErr                            string
 	}{
-		"complete":              {"postgres://x@db/aluna", issuer, audience, "", pricing.SingleAccount, ""},
-		"split GMF exemption":   {"postgres://x@db/aluna", issuer, audience, "split_accounts", pricing.SplitAccounts, ""},
-		"without database":      {"", issuer, audience, "", "", "ALUNA_DATABASE_URL"},
-		"without issuer":        {"postgres://x@db/aluna", "", audience, "", "", "ALUNA_OIDC_ISSUER"},
-		"without audience":      {"postgres://x@db/aluna", issuer, "", "", "", "ALUNA_OIDC_AUDIENCE"},
-		"unknown GMF exemption": {"postgres://x@db/aluna", issuer, audience, "both", "", "unknown modality"},
+		"complete":              {"postgres://x@db/aluna", issuer, audience, "", railSecret, pricing.SingleAccount, ""},
+		"split GMF exemption":   {"postgres://x@db/aluna", issuer, audience, "split_accounts", railSecret, pricing.SplitAccounts, ""},
+		"without database":      {"", issuer, audience, "", railSecret, "", "ALUNA_DATABASE_URL"},
+		"without issuer":        {"postgres://x@db/aluna", "", audience, "", railSecret, "", "ALUNA_OIDC_ISSUER"},
+		"without audience":      {"postgres://x@db/aluna", issuer, "", "", railSecret, "", "ALUNA_OIDC_AUDIENCE"},
+		"unknown GMF exemption": {"postgres://x@db/aluna", issuer, audience, "both", railSecret, "", "unknown modality"},
+		"without rail secret":   {"postgres://x@db/aluna", issuer, audience, "", "", "", "ALUNA_SIMBREB_SECRET"},
+		"a short rail secret":   {"postgres://x@db/aluna", issuer, audience, "", railSecret[1:], "", "ALUNA_SIMBREB_SECRET"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("ALUNA_HTTP_ADDR", "") // the defaults are tested without depending on the environment
+			t.Setenv("ALUNA_RAIL_ADDR", "")
 			t.Setenv("ALUNA_DATABASE_URL", tc.dsn)
 			t.Setenv("ALUNA_OIDC_ISSUER", tc.issuer)
 			t.Setenv("ALUNA_OIDC_AUDIENCE", tc.audience)
 			t.Setenv("ALUNA_GMF_MODALITY", tc.gmf)
+			t.Setenv("ALUNA_SIMBREB_SECRET", tc.secret)
 
 			cfg, err := apiConfigFromEnv()
 
-			want := apiConfig{addr: ":8080", dsn: tc.dsn, issuer: issuer, audience: audience, gmf: tc.wantGMF}
+			want := apiConfig{
+				addr: ":8080", railAddr: ":8081", dsn: tc.dsn, issuer: issuer, audience: audience, gmf: tc.wantGMF, railSecret: railSecret,
+			}
 			if tc.wantErr == "" && (err != nil || cfg != want) {
 				t.Fatalf("cfg = %+v, err = %v", cfg, err)
 			}

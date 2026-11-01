@@ -32,7 +32,7 @@ const (
 // this list with the shape func(http.Handler) http.Handler. Auditing goes before authentication, to also
 // record a command rejected without a token, and before recovery, to see a command that panicked as a 500.
 // Authorization sits right after authentication: one is never mounted without the other. Without cfg.Audit
-// or cfg.Verifier, the server only has probes.
+// or cfg.Verifier, the server only has probes or the rails' notifications, which the rail signs.
 func middleware(log *slog.Logger, mux *http.ServeMux, cfg ServerConfig) http.Handler {
 	chain := []func(http.Handler) http.Handler{withRequestID, withObservability(log)}
 	if cfg.Audit != nil {

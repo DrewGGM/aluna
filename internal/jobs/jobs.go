@@ -14,13 +14,16 @@ import (
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/outbox"
+	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
 // QueueLedger is the queue for the jobs that write to the ledger and QueueInterest the one of the accrual,
 // which runs one at a time: a catch-up can outlast its interval, and the runs it enqueues meanwhile wait and
 // then find nothing to do, instead of sharing the work, colliding on its rows and taking the default queue's
-// workers from the other jobs. The rest go to river.QueueDefault.
+// workers from the other jobs. Payments are sent from their own queue (payments.Queue), whose jobs wait up to
+// 15 seconds for the rail and would otherwise hold the default queue's workers. The rest go to
+// river.QueueDefault.
 const (
 	QueueLedger   = "ledger"
 	QueueInterest = "interest"
@@ -72,6 +75,7 @@ type Deps struct {
 	Outbox      *outbox.Outbox
 	Audit       *audit.Service
 	Deposits    *deposits.Service
+	Payments    *payments.Service
 }
 
 // Config is the worker's River configuration: the queues, the workers from Register, the periodic jobs
@@ -82,14 +86,15 @@ func Config(deps Deps) *river.Config {
 	return &river.Config{
 		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: Periodic(),
 		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1},
+			river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1}, payments.Queue: {MaxWorkers: 4},
 		},
 		// REINDEX requires owning the index and the worker runs as aluna_app (migration 0009).
 		ReindexerIndexNames: []string{},
 	}
 }
 
-// Register registers in w the workers of the periodic jobs and the one that publishes the outbox.
+// Register registers in w the workers of the periodic jobs, the one that publishes the outbox and the one that
+// sends payments.
 func Register(w *river.Workers, deps Deps) {
 	river.AddWorker(w, &task[expireHolds]{run: func(ctx context.Context) error {
 		_, err := deps.Ledger.ExpireDueHolds(ctx, deps.UnitOfWork, time.Now(), holdsBatch)
@@ -125,6 +130,7 @@ func Register(w *river.Workers, deps Deps) {
 		return err
 	}})
 	deps.Outbox.AddWorkers(w)
+	deps.Payments.AddWorkers(w, deps.UnitOfWork)
 }
 
 // Periodic are the periodic jobs. They also run at startup (RunOnStart): River's scheduler lives in the

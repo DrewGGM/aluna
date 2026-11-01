@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/httpapi"
+	"github.com/DrewGGM/aluna/internal/pricing"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -156,24 +157,28 @@ func TestMigrateNeedsDatabaseURL(t *testing.T) {
 func TestAPIConfigFromEnv(t *testing.T) {
 	const issuer, audience = "https://iam.example/realms/aluna", "aluna-api"
 	cases := map[string]struct {
-		dsn, issuer, audience string
-		wantErr               string
+		dsn, issuer, audience, gmf string
+		wantGMF                    pricing.Modality
+		wantErr                    string
 	}{
-		"complete":         {"postgres://x@db/aluna", issuer, audience, ""},
-		"without database": {"", issuer, audience, "ALUNA_DATABASE_URL"},
-		"without issuer":   {"postgres://x@db/aluna", "", audience, "ALUNA_OIDC_ISSUER"},
-		"without audience": {"postgres://x@db/aluna", issuer, "", "ALUNA_OIDC_AUDIENCE"},
+		"complete":              {"postgres://x@db/aluna", issuer, audience, "", pricing.SingleAccount, ""},
+		"split GMF exemption":   {"postgres://x@db/aluna", issuer, audience, "split_accounts", pricing.SplitAccounts, ""},
+		"without database":      {"", issuer, audience, "", "", "ALUNA_DATABASE_URL"},
+		"without issuer":        {"postgres://x@db/aluna", "", audience, "", "", "ALUNA_OIDC_ISSUER"},
+		"without audience":      {"postgres://x@db/aluna", issuer, "", "", "", "ALUNA_OIDC_AUDIENCE"},
+		"unknown GMF exemption": {"postgres://x@db/aluna", issuer, audience, "both", "", "unknown modality"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("ALUNA_HTTP_ADDR", "") // the default is tested without depending on the environment
+			t.Setenv("ALUNA_HTTP_ADDR", "") // the defaults are tested without depending on the environment
 			t.Setenv("ALUNA_DATABASE_URL", tc.dsn)
 			t.Setenv("ALUNA_OIDC_ISSUER", tc.issuer)
 			t.Setenv("ALUNA_OIDC_AUDIENCE", tc.audience)
+			t.Setenv("ALUNA_GMF_MODALITY", tc.gmf)
 
 			cfg, err := apiConfigFromEnv()
 
-			want := apiConfig{addr: ":8080", dsn: tc.dsn, issuer: issuer, audience: audience}
+			want := apiConfig{addr: ":8080", dsn: tc.dsn, issuer: issuer, audience: audience, gmf: tc.wantGMF}
 			if tc.wantErr == "" && (err != nil || cfg != want) {
 				t.Fatalf("cfg = %+v, err = %v", cfg, err)
 			}

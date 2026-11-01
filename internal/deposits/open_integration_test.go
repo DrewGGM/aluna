@@ -25,6 +25,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
+	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
 )
 
@@ -49,6 +50,7 @@ type world struct {
 	ledger   *ledger.Service
 	parties  *party.Service
 	products *products.Service
+	pricing  *pricing.Service
 	deposits *deposits.Service
 }
 
@@ -67,7 +69,8 @@ func newWorldOn(t *testing.T, day string) world {
 		return err
 	})
 	w.ledger, w.parties, w.products = ledger.New(calendar.New(), w.events), party.New(w.events), products.New(w.events)
-	w.deposits = deposits.New(w.ledger, w.parties, w.products, calendar.New(), w.events)
+	w.pricing = pricing.New(w.products, calendar.New(), pricing.SingleAccount)
+	w.deposits = deposits.New(w.ledger, w.parties, w.products, calendar.New(), w.pricing, w.events)
 	return w
 }
 

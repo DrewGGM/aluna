@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/outbox"
@@ -33,23 +34,36 @@ type discard struct{}
 
 func (discard) Emit(context.Context, postgres.Tx, outbox.Event) error { return nil }
 
-// world is an entity with the tiered savings product of products' testdata published: a withdrawal fee of
-// 4,500 COP that the first three withdrawals of the month do not pay (month_tx_count < 3), and a transfer fee
-// of 3,000 COP.
+// world is an entity on business date day with a product of products' testdata published, priced with a
+// modality of the GMF exemption.
 type world struct {
 	entity  ids.ID
 	version products.Version
 	pricing *pricing.Service
 }
 
+// newWorld is an entity with the tiered savings product published: a withdrawal fee of 4,500 COP that the
+// first three withdrawals of the month do not pay (month_tx_count < 3), and a transfer fee of 3,000 COP.
 func newWorld(t *testing.T) world {
 	t.Helper()
-	definition, err := os.ReadFile(filepath.Join("..", "products", "internal", "domain", "testdata", "valid-tiered-savings.json"))
+	return worldOf(t, "valid-tiered-savings.json", pricing.SingleAccount, "2026-03-02")
+}
+
+// worldOf is an entity on business date day with the product of testdata file published, priced with
+// modality m.
+func worldOf(t *testing.T, file string, m pricing.Modality, day string) world {
+	t.Helper()
+	definition, err := os.ReadFile(filepath.Join("..", "products", "internal", "domain", "testdata", file)) //nolint:gosec // products' test fixtures
 	if err != nil {
 		t.Fatal(err)
 	}
 	catalog := products.New(discard{})
-	w := world{entity: ids.New(), pricing: pricing.New(catalog)}
+	w := world{entity: ids.New(), pricing: pricing.New(catalog, calendar.New(), m)}
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
+			VALUES ($1, 'Entity', $2, 'COP')`, w.entity, day)
+		return err
+	})
 	inTx(t, func(tx postgres.Tx) error {
 		p, err := catalog.CreateProduct(t.Context(), tx, w.entity, "p"+strings.ReplaceAll(ids.New().String(), "-", ""), "Tiered savings")
 		if err != nil {
@@ -91,16 +105,27 @@ func cop(t *testing.T, units int64) money.Amount {
 
 func (w world) quote(t *testing.T, account ids.ID, op pricing.Operation, amount money.Amount) (pricing.Quote, error) {
 	t.Helper()
+	return w.quoteFor(t, ids.New(), account, op, amount)
+}
+
+// quoteFor quotes op of amount on account of party.
+func (w world) quoteFor(t *testing.T, party, account ids.ID, op pricing.Operation, amount money.Amount) (pricing.Quote, error) {
+	t.Helper()
 	var q pricing.Quote
 	err := try(t, func(tx postgres.Tx) error {
 		var err error
-		q, err = w.pricing.Quote(t.Context(), tx, pricing.QuoteInput{
-			LegalEntityID: w.entity, AccountID: account, ProductVersionID: w.version.ID, Operation: op, Amount: amount,
-			Facts: products.RuleVars{PartyKind: "natural", RiskLevel: "low", BalanceUnits: 100000000},
-		})
+		q, err = w.pricing.Quote(t.Context(), tx, w.input(party, account, op, amount))
 		return err
 	})
 	return q, err
+}
+
+// input is op of amount on account of party, a natural person of low risk with 1,000,000 COP.
+func (w world) input(party, account ids.ID, op pricing.Operation, amount money.Amount) pricing.QuoteInput {
+	return pricing.QuoteInput{
+		LegalEntityID: w.entity, AccountID: account, PartyID: party, ProductVersionID: w.version.ID, Operation: op, Amount: amount,
+		Facts: products.RuleVars{PartyKind: "natural", RiskLevel: "low", BalanceUnits: 100000000},
+	}
 }
 
 func (w world) charges(t *testing.T, u pricing.QuoteUse) (pricing.Charges, error) {
@@ -116,7 +141,7 @@ func (w world) charges(t *testing.T, u pricing.QuoteUse) (pricing.Charges, error
 
 // useOf is the use of quote q by the operation it quoted.
 func useOf(q pricing.Quote) pricing.QuoteUse {
-	return pricing.QuoteUse{QuoteID: q.ID, AccountID: q.AccountID, Operation: q.Operation, Amount: q.Amount}
+	return pricing.QuoteUse{QuoteID: q.ID, AccountID: q.AccountID, PartyID: q.PartyID, Operation: q.Operation, Amount: q.Amount}
 }
 
 // TestAQuoteShowsTheFeesOfTheOperation (FR-28, US-7): a quote shows the fees of the product for its operation,
@@ -206,7 +231,7 @@ func (w world) usedAt(t *testing.T, account ids.ID, offset string) {
 }
 
 // TestAQuoteIsChargedOnceAndExactly (FR-28, US-7): the operation that uses a quote is charged exactly what it
-// showed; used again or expired, it is ErrQuoteUnavailable.
+// showed, its fee and its GMF (4 per thousand of 5,000 COP); used again or expired, it is ErrQuoteUnavailable.
 func TestAQuoteIsChargedOnceAndExactly(t *testing.T) {
 	w := newWorld(t)
 	account := ids.New()
@@ -222,8 +247,8 @@ func TestAQuoteIsChargedOnceAndExactly(t *testing.T) {
 	_, late := w.charges(t, expired)
 
 	if want := []pricing.Fee{{Code: "transfer_fee", Amount: cop(t, 300000)}}; err != nil || !slices.Equal(charged.Fees, want) ||
-		charged.GMF != cop(t, 0) {
-		t.Fatalf("charges = %+v (%v), want the quoted 3,000 COP and no GMF", charged, err)
+		charged.GMF != cop(t, 2000) || q.GMF.Tax != charged.GMF {
+		t.Fatalf("charges = %+v (%v), want the quoted 3,000 COP and 20 COP of GMF", charged, err)
 	}
 	for name, err := range map[string]error{"used again": again, "expired": late} {
 		if !errors.Is(err, pricing.ErrQuoteUnavailable) {
@@ -324,10 +349,13 @@ func TestTheDatabaseGuardsTheQuotes(t *testing.T) {
 	for name, sql := range map[string]string{
 		"change the fees":               `UPDATE pricing.quotes SET fees = '[]'` + where(unused),
 		"change the fees as it is used": `UPDATE pricing.quotes SET fees = '[]', used_at = clock_timestamp()` + where(unused),
-		"use it without a time":         `UPDATE pricing.quotes SET used_at = NULL` + where(unused),
-		"use it again":                  `UPDATE pricing.quotes SET used_at = clock_timestamp()` + where(used),
-		"delete":                        `DELETE FROM pricing.quotes` + where(unused),
-		"truncate":                      `TRUNCATE pricing.quotes`,
+		"change the GMF as it is used":  `UPDATE pricing.quotes SET gmf_units = 1, used_at = clock_timestamp()` + where(unused),
+		"change the exemption as it is used": `UPDATE pricing.quotes SET exempt_units = 1, used_at = clock_timestamp()` +
+			where(unused),
+		"use it without a time": `UPDATE pricing.quotes SET used_at = NULL` + where(unused),
+		"use it again":          `UPDATE pricing.quotes SET used_at = clock_timestamp()` + where(used),
+		"delete":                `DELETE FROM pricing.quotes` + where(unused),
+		"truncate":              `TRUNCATE pricing.quotes`,
 	} {
 		var err error
 		pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {

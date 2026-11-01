@@ -25,6 +25,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
+	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
 )
 
@@ -51,11 +52,21 @@ func newDepositWorld(t *testing.T) depositWorld {
 		t.Fatal(err)
 	}
 	w := depositWorld{ts: apiServerWith(t, entity, events), entity: entity, parties: party.New(events), products: products.New(events)}
-	w.deposits = deposits.New(ledger.New(calendar.New(), events), w.parties, w.products, calendar.New(), events)
+	w.deposits = deposits.New(ledger.New(calendar.New(), events), w.parties, w.products, calendar.New(),
+		pricing.New(w.products, calendar.New(), pricing.SingleAccount), events)
 	var vault gen.LedgerAccount
 	if status := call(t, w.ts, http.MethodPost, "/v1/ledger-accounts",
 		`{"code":"A.CASH.VAULT","kind":"asset","currency":"COP","balance_mode":"sync"}`, &vault); status != http.StatusCreated {
 		t.Fatalf("create the vault = %d", status)
+	}
+	for _, account := range []string{
+		`{"code":"I.FEES.SAVINGS","kind":"income","currency":"COP","balance_mode":"async"}`,
+		`{"code":"I.FEES.TIERED","kind":"income","currency":"COP","balance_mode":"async"}`,
+		`{"code":"L.TAX.GMF","kind":"liability","currency":"COP","balance_mode":"async"}`,
+	} {
+		if status := call(t, w.ts, http.MethodPost, "/v1/ledger-accounts", account, nil); status != http.StatusCreated {
+			t.Fatalf("create %s = %d", account, status)
+		}
 	}
 	return w
 }
@@ -199,8 +210,8 @@ func TestAnAccountOpensOverHTTP(t *testing.T) {
 }
 
 // TestMoneyMovesOverHTTP (US-5, FR-23): deposit 100,000 into an account, retry the deposit with the same
-// key (the same response, posted once), transfer 30,000 to another account and withdraw the rest of the
-// first: balances 0 and 30,000.
+// key (the same response, posted once), transfer 30,000 to another account, which costs the first its GMF of
+// 120 (FR-29), and withdraw 60,000 from the first, with its GMF of 240: balances 9,640 and 30,000.
 func TestMoneyMovesOverHTTP(t *testing.T) {
 	w := newDepositWorld(t)
 	customer, savings := w.party(t, party.KYCApproved), w.savings(t, true)
@@ -213,12 +224,12 @@ func TestMoneyMovesOverHTTP(t *testing.T) {
 		t.Fatalf("retry = %d %s, want 201 with the deposit's body %s", retried.status, retried.body, deposited.body)
 	}
 	expectCreated(t, "transfer", postTo(t, w.ts, "/v1/transfers", ids.New().String(), transferBody(first, second, 3000000)))
-	if w.natural(t, first) != 7000000 || w.natural(t, second) != 3000000 {
-		t.Fatalf("after the transfer, balances %d and %d, want 7000000 and 3000000", w.natural(t, first), w.natural(t, second))
+	if w.natural(t, first) != 6988000 || w.natural(t, second) != 3000000 {
+		t.Fatalf("after the transfer, balances %d and %d, want 6988000 and 3000000", w.natural(t, first), w.natural(t, second))
 	}
-	expectCreated(t, "withdrawal", w.move(t, first.Id.String(), "withdrawals", amountBody(7000000)))
-	if w.natural(t, first) != 0 {
-		t.Fatalf("after the withdrawal, balance %d, want 0", w.natural(t, first))
+	expectCreated(t, "withdrawal", w.move(t, first.Id.String(), "withdrawals", amountBody(6000000)))
+	if w.natural(t, first) != 964000 {
+		t.Fatalf("after the withdrawal, balance %d, want 964000", w.natural(t, first))
 	}
 }
 

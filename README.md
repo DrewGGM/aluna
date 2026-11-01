@@ -79,6 +79,7 @@ los 7 días.
 | `ALUNA_OIDC_AUDIENCE` | Audiencia que deben traer los tokens (obligatoria para `api`) |
 | `ALUNA_AUDIT_ANCHOR_DIR` | Directorio, ya existente, del ancla de los bloques de auditoría (obligatoria para `worker` y `audit verify`) |
 | `ALUNA_HTTP_ADDR` | Dirección de la API; por defecto `:8080` |
+| `ALUNA_GMF_MODALITY` | Modalidad de la exención del GMF de la entidad (`api` y `worker`): `single_account`, por defecto, para una sola cuenta exenta por titular, o `split_accounts`, para repartir los 350 UVT del mes entre varias |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Si existe, trazas y métricas salen por OTLP/HTTP (y el resto de variables `OTEL_*`) |
 
 El contrato de la API está en [`api/openapi.yaml`](api/openapi.yaml); los errores son

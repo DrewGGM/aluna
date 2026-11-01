@@ -12,6 +12,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
+	"github.com/DrewGGM/aluna/internal/pricing"
 )
 
 var (
@@ -35,21 +36,22 @@ const (
 
 // CashInput is cash into or out of deposit account AccountID of the entity. ExternalRef identifies the
 // movement among the entity's deposit movements: a retry with the same one is ledger.ErrDuplicateExternalRef
-// and posts nothing. Actor (a subject) and Channel are recorded with the transaction.
+// and posts nothing. Actor (a subject) and Channel are recorded with the transaction. QuoteID, of a
+// withdrawal only, is the quote that priced it; the zero ID prices it as it is done.
 type CashInput struct {
-	LegalEntityID, AccountID ids.ID
-	Amount                   money.Amount
-	ExternalRef              string
-	Actor, Channel           string
+	LegalEntityID, AccountID, QuoteID ids.ID
+	Amount                            money.Amount
+	ExternalRef                       string
+	Actor, Channel                    string
 }
 
-// TransferInput moves money from deposit account From of the entity to its account To; ExternalRef, Actor and
-// Channel as in CashInput.
+// TransferInput moves money from deposit account From of the entity to its account To; ExternalRef, Actor,
+// Channel and QuoteID as in CashInput.
 type TransferInput struct {
-	LegalEntityID, From, To ids.ID
-	Amount                  money.Amount
-	ExternalRef             string
-	Actor, Channel          string
+	LegalEntityID, From, To, QuoteID ids.ID
+	Amount                           money.Amount
+	ExternalRef                      string
+	Actor, Channel                   string
 }
 
 // header is what a movement's transaction records besides its entries.
@@ -91,9 +93,8 @@ type Movements interface {
 	// LockAccount reads account id of the entity and keeps it locked (FOR UPDATE) until the transaction
 	// ends.
 	LockAccount(ctx context.Context, entity, id ids.ID) (domain.Account, error)
-	// CashAccount is the ledger account of the cash the product of versionID names, in currency c, or
-	// ErrProductAccountMissing.
-	CashAccount(ctx context.Context, entity, versionID ids.ID, c money.Currency) (ids.ID, error)
+	// CashAccount is the ledger account the product of a names for its cash, or ErrProductAccountMissing.
+	CashAccount(ctx context.Context, a domain.Account) (ids.ID, error)
 	BusinessDate(ctx context.Context, entity ids.ID) (calendar.Date, error)
 	Post(ctx context.Context, in ledger.PostInput) (ledger.Transaction, error)
 	// RecordActivity sets the account's last customer activity to on.
@@ -113,42 +114,77 @@ type Limiting interface {
 	Count(ctx context.Context, id ids.ID, on calendar.Date, debits, credits int64) error
 }
 
-// Deposit posts cash into an active account from the product's cash account (FR-23), within its limits.
+// Charging is what charging an operation's fees and GMF needs (FR-28, FR-29), within the transaction it runs
+// in.
+type Charging interface {
+	// Charges are what op of amount on account a pays: what quote quoteID quoted or, with the zero ID, what
+	// it costs now.
+	Charges(ctx context.Context, a domain.Account, op pricing.Operation, amount money.Amount, quoteID ids.ID) (pricing.Charges, error)
+	// FeeIncome is the ledger account the product of a names for its fees, or ErrProductAccountMissing.
+	FeeIncome(ctx context.Context, a domain.Account) (ids.ID, error)
+	// GMFPayable is the ledger account the product of a names for the GMF, or ErrProductAccountMissing.
+	GMFPayable(ctx context.Context, a domain.Account) (ids.ID, error)
+}
+
+// cash is a kind of cash movement: the side of the account it moves, its transaction code, its posting rule
+// and what it charges besides, given the account.
+type cash struct {
+	side    side
+	code    string
+	rule    func(postingrules.Movement) ([]ledger.EntryInput, error)
+	charges func(domain.Account) ([]ledger.EntryInput, error)
+}
+
+// Deposit posts cash into an active account from the product's cash account (FR-23), within its limits; it
+// charges nothing.
 func Deposit(ctx context.Context, s Movements, l Limiting, in CashInput) (ledger.Transaction, error) {
-	return cashMovement(ctx, s, l, in, credit, codeDeposit, postingrules.CashDeposit)
+	return cashMovement(ctx, s, l, in, cash{
+		side: credit, code: codeDeposit, rule: postingrules.CashDeposit,
+		charges: func(domain.Account) ([]ledger.EntryInput, error) { return []ledger.EntryInput{}, nil },
+	})
 }
 
-// Withdraw posts cash out of an active account to the product's cash account (FR-23), within its limits;
-// the ledger rejects it without funds (ledger.ErrInsufficientFunds).
-func Withdraw(ctx context.Context, s Movements, l Limiting, in CashInput) (ledger.Transaction, error) {
-	return cashMovement(ctx, s, l, in, debit, codeWithdrawal, postingrules.Withdrawal)
+// Withdraw posts cash out of an active account to the product's cash account (FR-23), within its limits, with
+// its fees and its GMF in the same transaction (FR-28, FR-29); the ledger rejects it without funds for all of
+// them (ledger.ErrInsufficientFunds).
+func Withdraw(ctx context.Context, s Movements, l Limiting, c Charging, in CashInput) (ledger.Transaction, error) {
+	return cashMovement(ctx, s, l, in, cash{
+		side: debit, code: codeWithdrawal, rule: postingrules.Withdrawal,
+		charges: func(a domain.Account) ([]ledger.EntryInput, error) {
+			return charged(ctx, c, a, pricing.Withdrawal, in.Amount, in.QuoteID)
+		},
+	})
 }
 
-func cashMovement(ctx context.Context, s Movements, l Limiting, in CashInput, sd side, code string,
-	rule func(postingrules.Movement) ([]ledger.EntryInput, error),
-) (ledger.Transaction, error) {
+// cashMovement posts in as k on its account, locked and active, with what k charges.
+func cashMovement(ctx context.Context, s Movements, l Limiting, in CashInput, k cash) (ledger.Transaction, error) {
 	a, err := lockActive(ctx, s, in.LegalEntityID, in.AccountID)
 	if err != nil {
 		return ledger.Transaction{}, err
 	}
-	vault, err := s.CashAccount(ctx, a.LegalEntityID, a.ProductVersionID, a.Currency)
+	vault, err := s.CashAccount(ctx, a)
 	if err != nil {
 		return ledger.Transaction{}, err
 	}
-	entries, err := rule(postingrules.Movement{Amount: in.Amount, Account: a.LedgerAccountID, Counter: vault})
+	entries, err := k.rule(postingrules.Movement{Amount: in.Amount, Account: a.LedgerAccountID, Counter: vault})
+	if err != nil {
+		return ledger.Transaction{}, err
+	}
+	charges, err := k.charges(a)
 	if err != nil {
 		return ledger.Transaction{}, err
 	}
 	return move(ctx, s, l, movement{
-		header: header{code, in.ExternalRef, in.Actor, in.Channel}, units: in.Amount.Units(), entries: entries,
-		legs: []leg{{a, sd}},
+		header: header{k.code, in.ExternalRef, in.Actor, in.Channel}, units: in.Amount.Units(), entries: append(entries, charges...),
+		legs: []leg{{a, k.side}},
 	})
 }
 
 // Transfer moves money between two active accounts of the entity (FR-23, US-5), within the limits of both:
-// a debit of From and a credit of To. The ledger rejects it without funds in From. Only From records customer
-// activity: what To receives is not its customer's doing.
-func Transfer(ctx context.Context, s Movements, l Limiting, in TransferInput) (ledger.Transaction, error) {
+// a debit of From and a credit of To, with From's fees and GMF in the same transaction (FR-28, FR-29). The
+// ledger rejects it without funds in From for all of them. Only From records customer activity: what To
+// receives is not its customer's doing.
+func Transfer(ctx context.Context, s Movements, l Limiting, c Charging, in TransferInput) (ledger.Transaction, error) {
 	from, to, err := lockPair(ctx, s, in.LegalEntityID, in.From, in.To)
 	if err != nil {
 		return ledger.Transaction{}, err
@@ -157,17 +193,78 @@ func Transfer(ctx context.Context, s Movements, l Limiting, in TransferInput) (l
 	if err != nil {
 		return ledger.Transaction{}, err
 	}
+	charges, err := charged(ctx, c, from, pricing.Transfer, in.Amount, in.QuoteID)
+	if err != nil {
+		return ledger.Transaction{}, err
+	}
 	return move(ctx, s, l, movement{
-		header: header{codeTransfer, in.ExternalRef, in.Actor, in.Channel}, units: in.Amount.Units(), entries: entries,
+		header: header{codeTransfer, in.ExternalRef, in.Actor, in.Channel}, units: in.Amount.Units(), entries: append(entries, charges...),
 		legs: []leg{{from, debit}, {to, credit}},
 	})
+}
+
+// charged are the entries of what op of amount on account a pays besides the movement (FR-28, FR-29): its
+// fees and its GMF. A quote's rejection (pricing.ErrQuoteUnavailable) thus comes before the ledger's.
+func charged(ctx context.Context, c Charging, a domain.Account, op pricing.Operation, amount money.Amount, quoteID ids.ID,
+) ([]ledger.EntryInput, error) {
+	if amount.Currency() != a.Currency {
+		return []ledger.EntryInput{}, nil // nothing to price: the ledger rejects the movement (ledger.ErrCurrencyMismatch)
+	}
+	charges, err := c.Charges(ctx, a, op, amount, quoteID)
+	if err != nil {
+		return nil, err
+	}
+	fees, err := feeEntries(ctx, c, a, charges.Fees)
+	if err != nil {
+		return nil, err
+	}
+	gmf, err := gmfEntries(ctx, c, a, charges.GMF)
+	if err != nil {
+		return nil, err
+	}
+	return append(fees, gmf...), nil
+}
+
+// feeEntries charge fees to account a, to its product's fee income account, which an operation without fees
+// does not look up.
+func feeEntries(ctx context.Context, c Charging, a domain.Account, fees []pricing.Fee) ([]ledger.EntryInput, error) {
+	if len(fees) == 0 {
+		return []ledger.EntryInput{}, nil
+	}
+	income, err := c.FeeIncome(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	var entries []ledger.EntryInput
+	for _, f := range fees {
+		fee, err := postingrules.FeeCharge(postingrules.Movement{Amount: f.Amount, Account: a.LedgerAccountID, Counter: income})
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, fee...)
+	}
+	return entries, nil
+}
+
+// gmfEntries withhold gmf from account a, to its product's GMF payable account; a GMF of zero is not posted,
+// nor is that account looked up.
+func gmfEntries(ctx context.Context, c Charging, a domain.Account, gmf money.Amount) ([]ledger.EntryInput, error) {
+	if gmf.Sign() == 0 {
+		return []ledger.EntryInput{}, nil
+	}
+	payable, err := c.GMFPayable(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	return postingrules.GMFWithholding(postingrules.Movement{Amount: gmf, Account: a.LedgerAccountID, Counter: payable})
 }
 
 // move posts m on the entity's business date within the limits of each of its legs (FR-24) and adds it to
 // their counters. What the legs used is read before posting, under their locks, so nothing changes it in
 // between; the limits are checked after the ledger accepts the posting, so that its rejections (a reference
-// already posted, another currency, no funds) come first. A limit exceeded fails the movement after posting,
-// so whoever runs it undoes what it wrote (the facade, under a savepoint): nothing is credited in part.
+// already posted, another currency, no funds) come first, after those of the charges' quote. A limit exceeded
+// fails the movement after posting, so whoever runs it undoes what it wrote (the facade, under a savepoint):
+// nothing is credited in part.
 func move(ctx context.Context, s Movements, l Limiting, m movement) (ledger.Transaction, error) {
 	today, err := s.BusinessDate(ctx, m.legs[0].account.LegalEntityID)
 	if err != nil {

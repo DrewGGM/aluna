@@ -616,9 +616,12 @@ paths:
       summary: Withdraw cash from an account
       description: >-
         Posts the amount from the account to the product's cash account, like a deposit (an `active` account,
-        the business date); without funds it is
-        422 `insufficient_funds`, and over a limit of its product it is 422 `limit_exceeded` (with the limit in
-        `detail`). Idempotent by `Idempotency-Key`, like a deposit.
+        the business date), with its fees and its GMF in the same transaction (FR-28, FR-29): those of the
+        quote `quote_id` names, exactly, or without one those it costs now. A quote that is not of this
+        account, operation and amount, was used, expired or no longer has the GMF exemption it quoted is 409
+        `quote_unavailable`. Without funds for all of it it is 422 `insufficient_funds`, and over a limit of
+        its product it is 422 `limit_exceeded` (with the limit in `detail`). Idempotent by
+        `Idempotency-Key`, like a deposit.
       x-aluna-permission: deposits.withdrawals.post
       parameters:
         - $ref: "#/components/parameters/ID"
@@ -627,7 +630,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: {$ref: "#/components/schemas/CashMovement"}
+            schema: {$ref: "#/components/schemas/CashWithdrawal"}
       responses:
         "201":
           description: Withdrawal posted
@@ -647,8 +650,9 @@ paths:
       description: >-
         Quotes a withdrawal or a transfer from a deposit account of the entity before it is done (FR-28,
         US-7): the fees of its product for the operation, with their exemptions decided on the account
-        (its party, its balance and the quotes it used this month), valid for 5 minutes. An amount that is
-        not positive or not in the account's currency is 422 `invalid_quote`.
+        (its party, its balance and the quotes it used this month), and its GMF (FR-29): 4 per thousand of
+        what the exemption of an exempt account does not cover. Valid for 5 minutes. An amount that is not
+        positive or not in the account's currency is 422 `invalid_quote`.
       x-aluna-permission: pricing.quotes.create
       requestBody:
         required: true
@@ -674,7 +678,9 @@ paths:
         Moves the amount between two `active` deposit accounts of the entity (FR-23, US-5), on its business
         date: 409 `account_not_active` if either is not, 422 `insufficient_funds` without funds, 422
         `limit_exceeded` over a limit of the origin (a debit) or of the destination (a credit), and 422
-        `invalid_movement` to the same account. Idempotent by `Idempotency-Key`, like a deposit.
+        `invalid_movement` to the same account. The origin pays the fees and the GMF of the transfer, as a
+        withdrawal does, with `quote_id` or without it (409 `quote_unavailable`). Idempotent by
+        `Idempotency-Key`, like a deposit.
       x-aluna-permission: deposits.transfers.post
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -693,6 +699,29 @@ paths:
         "404": {$ref: "#/components/responses/Problem"}
         "409": {$ref: "#/components/responses/Problem"}
         "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/deposit-accounts/{id}/gmf-exemption:
+    post:
+      operationId: createGMFExemption
+      summary: Exempt an account from GMF
+      description: >-
+        Marks the account as exempt from GMF (FR-29): its party's debits from its exempt accounts pay no GMF
+        up to 350 UVT a month. The product must allow it and the account must be in COP and not closed (422
+        `gmf_not_eligible`). With the exemption on a single account, the entity's default, a party with
+        another exempt account is 409 `gmf_exemption_taken`, as is an account already exempt.
+      x-aluna-permission: pricing.gmf_exemptions.create
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "201":
+          description: Account exempt
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GMFExemption"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
 components:
@@ -1050,6 +1079,12 @@ components:
       required: [amount]
       properties:
         amount: {$ref: "#/components/schemas/Money", description: "Positive, in the account's currency"}
+    CashWithdrawal:
+      type: object
+      required: [amount]
+      properties:
+        amount: {$ref: "#/components/schemas/Money", description: "Positive, in the account's currency"}
+        quote_id: {type: string, format: uuid, description: "Quote of this withdrawal (POST /v1/quotes); without one it is priced as it is done"}
     CreateTransfer:
       type: object
       required: [from_account_id, to_account_id, amount]
@@ -1057,6 +1092,7 @@ components:
         from_account_id: {type: string, format: uuid, description: Deposit account the money leaves}
         to_account_id: {type: string, format: uuid, description: Deposit account that receives it}
         amount: {$ref: "#/components/schemas/Money", description: "Positive, in the accounts' currency"}
+        quote_id: {type: string, format: uuid, description: "Quote of this transfer from the origin; without one it is priced as it is done"}
     QuoteOperation:
       type: string
       enum: [withdrawal, transfer]
@@ -1075,7 +1111,7 @@ components:
         amount: {$ref: "#/components/schemas/Money"}
     Quote:
       type: object
-      required: [id, account_id, operation, amount, fees, total_fees, expires_at]
+      required: [id, account_id, operation, amount, fees, total_fees, gmf, expires_at]
       properties:
         id: {type: string, format: uuid}
         account_id: {type: string, format: uuid}
@@ -1085,7 +1121,15 @@ components:
           type: array
           items: {$ref: "#/components/schemas/QuotedFee"}
         total_fees: {$ref: "#/components/schemas/Money", description: What the fees add up to}
+        gmf: {$ref: "#/components/schemas/Money", description: "GMF the operation withholds: 4 per thousand of what the exemption does not cover"}
         expires_at: {type: string, format: date-time}
+    GMFExemption:
+      type: object
+      required: [account_id, party_id, marked_at]
+      properties:
+        account_id: {type: string, format: uuid}
+        party_id: {type: string, format: uuid}
+        marked_at: {type: string, format: date-time}
     RequestKYCStatusChange:
       type: object
       required: [kyc_status]

@@ -79,7 +79,8 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	ledgerSvc := ledger.New(calendarSvc, events)
 	partySvc := party.New(events)
 	productSvc := products.New(events)
-	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, events)
+	pricingSvc := pricing.New(productSvc, calendarSvc, pricing.SingleAccount)
+	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
 	requests := approvals.New(policy)
 	api := API{
 		LedgerHandlers:   NewLedgerHandlers(ledgerSvc, requests, uow, keys, testPool),
@@ -87,7 +88,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 		PartyHandlers:    NewPartyHandlers(partySvc, requests, uow, keys, testPool),
 		ProductHandlers:  NewProductHandlers(productSvc, requests, uow, keys, testPool),
 		DepositHandlers:  NewDepositHandlers(depositSvc, uow, keys, testPool),
-		PricingHandlers:  NewPricingHandlers(pricing.New(productSvc), depositSvc, partySvc, ledgerSvc, uow),
+		PricingHandlers:  NewPricingHandlers(pricingSvc, depositSvc, uow),
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},

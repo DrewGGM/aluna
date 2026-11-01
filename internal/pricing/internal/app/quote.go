@@ -27,31 +27,33 @@ var (
 	ErrQuoteUnavailable = errors.New("the quote is not available")
 )
 
-// QuoteInput is an operation of Amount on deposit account AccountID of the entity, whose product version is
-// ProductVersionID, to quote. Facts are what the product's rules read about the account and its party; the
-// quote counts MonthTxCount itself.
+// QuoteInput is an operation of Amount on deposit account AccountID of the entity, of party PartyID and whose
+// product version is ProductVersionID, to quote. Facts are what the product's rules read about the account and
+// its party; the quote counts MonthTxCount itself.
 type QuoteInput struct {
-	LegalEntityID, AccountID, ProductVersionID ids.ID
-	Operation                                  domain.Operation
-	Amount                                     money.Amount
-	Facts                                      products.RuleVars
+	LegalEntityID, AccountID, PartyID, ProductVersionID ids.ID
+	Operation                                           domain.Operation
+	Amount                                              money.Amount
+	Facts                                               products.RuleVars
 }
 
-// Quote is what an operation costs, shown before it is done and charged when it is (FR-28).
+// Quote is what an operation costs, shown before it is done and charged when it is (FR-28, FR-29): its fees
+// and its GMF, with the part of the exemption of PartyID, the account's party, it uses.
 type Quote struct {
-	ID, LegalEntityID, AccountID ids.ID
-	Operation                    domain.Operation
-	Amount                       money.Amount
-	Fees                         []domain.Fee
-	CreatedAt, ExpiresAt         time.Time
+	ID, LegalEntityID, AccountID, PartyID ids.ID
+	Operation                             domain.Operation
+	Amount                                money.Amount
+	Fees                                  []domain.Fee
+	GMF                                   domain.GMF
+	CreatedAt, ExpiresAt                  time.Time
 }
 
-// QuoteUse is the use of quote QuoteID by an Operation of Amount on deposit account AccountID: the quote
-// must be of that same operation.
+// QuoteUse is the use of quote QuoteID by an Operation of Amount on deposit account AccountID, of party
+// PartyID: the quote must be of that same operation.
 type QuoteUse struct {
-	QuoteID, AccountID ids.ID
-	Operation          domain.Operation
-	Amount             money.Amount
+	QuoteID, AccountID, PartyID ids.ID
+	Operation                   domain.Operation
+	Amount                      money.Amount
 }
 
 // Quotes is what quoting needs, within the transaction they run in.
@@ -65,9 +67,10 @@ type Quotes interface {
 	InsertQuote(ctx context.Context, q Quote, ttl time.Duration) (Quote, error)
 }
 
-// MakeQuote quotes in: the fees of its operation by its product's rules, with their exemptions (CEL) decided
-// on its facts and the account's quotes used this month (month_tx_count), valid for QuoteTTL.
-func MakeQuote(ctx context.Context, s Quotes, in QuoteInput) (Quote, error) {
+// MakeQuote quotes in, valid for QuoteTTL: the fees of its operation by its product's rules, with their
+// exemptions (CEL) decided on its facts and the account's quotes used this month (month_tx_count), and its
+// GMF, with what remains of its party's exemption if the account is exempt.
+func MakeQuote(ctx context.Context, s Quotes, g GMFs, in QuoteInput) (Quote, error) {
 	v, err := s.Version(ctx, in.ProductVersionID)
 	if err != nil {
 		return Quote{}, err
@@ -87,8 +90,13 @@ func MakeQuote(ctx context.Context, s Quotes, in QuoteInput) (Quote, error) {
 	fees := domain.FeesFor(feeRules(v.Definition.Fees), in.Operation, c, func(rule string) bool {
 		return s.Satisfies(v, rule, facts)
 	})
+	gmf, err := gmfOf(ctx, g, in)
+	if err != nil {
+		return Quote{}, err
+	}
 	return s.InsertQuote(ctx, Quote{
-		ID: ids.New(), LegalEntityID: in.LegalEntityID, AccountID: in.AccountID, Operation: in.Operation, Amount: in.Amount, Fees: fees,
+		ID: ids.New(), LegalEntityID: in.LegalEntityID, AccountID: in.AccountID, PartyID: in.PartyID, Operation: in.Operation,
+		Amount: in.Amount, Fees: fees, GMF: gmf,
 	}, QuoteTTL)
 }
 

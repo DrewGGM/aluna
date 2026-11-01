@@ -27,6 +27,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
+	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
 )
 
@@ -46,10 +47,11 @@ func newDeps(t *testing.T) jobs.Deps {
 	}
 	calendarSvc := calendar.New()
 	ledgerSvc := ledger.New(calendarSvc, events)
+	productSvc := products.New(events)
 	return jobs.Deps{
 		Audit:      records,
 		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(testPool), Outbox: events,
-		Deposits: deposits.New(ledgerSvc, party.New(events), products.New(events), calendarSvc, events),
+		Deposits: deposits.New(ledgerSvc, party.New(events), productSvc, calendarSvc, pricing.New(productSvc, calendarSvc, pricing.SingleAccount), events),
 	}
 }
 

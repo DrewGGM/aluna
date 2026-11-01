@@ -17,7 +17,7 @@ var moduleDeps = map[string][]string{
 	"ledger":         {"calendar"},
 	"party":          nil,
 	"payments":       {"ledger", "deposits", "compliance", "pricing"},
-	"pricing":        {"products"},
+	"pricing":        {"products", "calendar"},
 	"products":       {"approvals", "calendar"},
 	"reconciliation": {"ledger", "payments"},
 	"webhooks":       nil,

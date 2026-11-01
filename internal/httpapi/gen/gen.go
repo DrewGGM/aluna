@@ -351,6 +351,15 @@ type CashMovement struct {
 	Amount Money `json:"amount"`
 }
 
+// CashWithdrawal defines model for CashWithdrawal.
+type CashWithdrawal struct {
+	// Amount Positive, in the account's currency
+	Amount Money `json:"amount"`
+
+	// QuoteId Quote of this withdrawal (POST /v1/quotes); without one it is priced as it is done
+	QuoteId *openapi_types.UUID `json:"quote_id,omitempty"`
+}
+
 // CreateLedgerAccount defines model for CreateLedgerAccount.
 type CreateLedgerAccount struct {
 	BalanceMode BalanceMode `json:"balance_mode"`
@@ -393,6 +402,9 @@ type CreateTransfer struct {
 	// FromAccountId Deposit account the money leaves
 	FromAccountId openapi_types.UUID `json:"from_account_id"`
 
+	// QuoteId Quote of this transfer from the origin; without one it is priced as it is done
+	QuoteId *openapi_types.UUID `json:"quote_id,omitempty"`
+
 	// ToAccountId Deposit account that receives it
 	ToAccountId openapi_types.UUID `json:"to_account_id"`
 }
@@ -424,6 +436,13 @@ type Entry struct {
 
 	// Amount Signed, debit positive and credit negative.
 	Amount Money `json:"amount"`
+}
+
+// GMFExemption defines model for GMFExemption.
+type GMFExemption struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+	MarkedAt  time.Time          `json:"marked_at"`
+	PartyId   openapi_types.UUID `json:"party_id"`
 }
 
 // Hold defines model for Hold.
@@ -592,6 +611,9 @@ type Quote struct {
 	Amount    Money              `json:"amount"`
 	ExpiresAt time.Time          `json:"expires_at"`
 	Fees      []QuotedFee        `json:"fees"`
+
+	// Gmf GMF the operation withholds: 4 per thousand of what the exemption does not cover
+	Gmf       Money              `json:"gmf"`
 	Id        openapi_types.UUID `json:"id"`
 	Operation QuoteOperation     `json:"operation"`
 
@@ -767,7 +789,7 @@ type OpenDepositAccountJSONRequestBody = OpenDepositAccount
 type CreateDepositJSONRequestBody = CashMovement
 
 // CreateWithdrawalJSONRequestBody defines body for CreateWithdrawal for application/json ContentType.
-type CreateWithdrawalJSONRequestBody = CashMovement
+type CreateWithdrawalJSONRequestBody = CashWithdrawal
 
 // PlaceHoldJSONRequestBody defines body for PlaceHold for application/json ContentType.
 type PlaceHoldJSONRequestBody = PlaceHold
@@ -825,6 +847,9 @@ type ServerInterface interface {
 	// CreateDeposit Deposit cash into an account
 	// (POST /v1/deposit-accounts/{id}/deposits)
 	CreateDeposit(w http.ResponseWriter, r *http.Request, id ID, params CreateDepositParams)
+	// CreateGMFExemption Exempt an account from GMF
+	// (POST /v1/deposit-accounts/{id}/gmf-exemption)
+	CreateGMFExemption(w http.ResponseWriter, r *http.Request, id ID)
 	// CreateWithdrawal Withdraw cash from an account
 	// (POST /v1/deposit-accounts/{id}/withdrawals)
 	CreateWithdrawal(w http.ResponseWriter, r *http.Request, id ID, params CreateWithdrawalParams)
@@ -1128,6 +1153,32 @@ func (siw *ServerInterfaceWrapper) CreateDeposit(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateDeposit(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateGMFExemption operation middleware
+func (siw *ServerInterfaceWrapper) CreateGMFExemption(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateGMFExemption(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2116,6 +2167,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/withdrawals", wrapper.CreateWithdrawal)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transfers", wrapper.CreateTransfer)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/gmf-exemption", wrapper.CreateGMFExemption)
 
 	return m
 }
@@ -2656,6 +2708,103 @@ type CreateDepositdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response CreateDepositdefaultApplicationProblemPlusJSONResponse) VisitCreateDepositResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateGMFExemptionRequestObject struct {
+	Id ID `json:"id"`
+}
+
+type CreateGMFExemptionResponseObject interface {
+	VisitCreateGMFExemptionResponse(w http.ResponseWriter) error
+}
+
+type CreateGMFExemption201JSONResponse GMFExemption
+
+func (response CreateGMFExemption201JSONResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateGMFExemption400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateGMFExemption400ApplicationProblemPlusJSONResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateGMFExemption404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateGMFExemption404ApplicationProblemPlusJSONResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateGMFExemption409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateGMFExemption409ApplicationProblemPlusJSONResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateGMFExemption422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateGMFExemption422ApplicationProblemPlusJSONResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateGMFExemptiondefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreateGMFExemptiondefaultApplicationProblemPlusJSONResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -4559,6 +4708,9 @@ type StrictServerInterface interface {
 	// CreateDeposit Deposit cash into an account
 	// (POST /v1/deposit-accounts/{id}/deposits)
 	CreateDeposit(ctx context.Context, request CreateDepositRequestObject) (CreateDepositResponseObject, error)
+	// CreateGMFExemption Exempt an account from GMF
+	// (POST /v1/deposit-accounts/{id}/gmf-exemption)
+	CreateGMFExemption(ctx context.Context, request CreateGMFExemptionRequestObject) (CreateGMFExemptionResponseObject, error)
 	// CreateWithdrawal Withdraw cash from an account
 	// (POST /v1/deposit-accounts/{id}/withdrawals)
 	CreateWithdrawal(ctx context.Context, request CreateWithdrawalRequestObject) (CreateWithdrawalResponseObject, error)
@@ -4835,6 +4987,32 @@ func (sh *strictHandler) CreateDeposit(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateDepositResponseObject); ok {
 		if err := validResponse.VisitCreateDepositResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateGMFExemption operation middleware
+func (sh *strictHandler) CreateGMFExemption(w http.ResponseWriter, r *http.Request, id ID) {
+	var request CreateGMFExemptionRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateGMFExemption(ctx, request.(CreateGMFExemptionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateGMFExemption")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateGMFExemptionResponseObject); ok {
+		if err := validResponse.VisitCreateGMFExemptionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

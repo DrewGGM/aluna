@@ -4,6 +4,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +14,16 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/party"
+	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/pricing"
+	"github.com/DrewGGM/aluna/internal/products"
 )
 
 // quoteBody is the body of a quote of units COP of operation op on account.
@@ -150,5 +156,91 @@ func TestAnUnavailableQuoteIsAConflict(t *testing.T) {
 	p, ok := problemFor(fmt.Errorf("charge: %w", pricing.ErrQuoteUnavailable))
 	if !ok || p.Status != http.StatusConflict || p.Code != "quote_unavailable" {
 		t.Fatalf("problem = %+v (%v), want 409 quote_unavailable", p, ok)
+	}
+}
+
+// TestAQuotedTransferOverHTTP (FR-28, US-7): a transfer with the quote of its origin is charged exactly what
+// it showed, its fee and its GMF; the same quote again is 409 quote_unavailable and moves nothing.
+func TestAQuotedTransferOverHTTP(t *testing.T) {
+	w := newDepositWorld(t)
+	from, to := w.tiered(t), w.tiered(t)
+	expectCreated(t, "deposit", w.move(t, from.Id.String(), "deposits", amountBody(100000000)))
+	q := quoted(t, w.ts, quoteBody(from.Id.String(), "transfer", 10000000))
+	body := strings.Replace(transferBody(from, to, 10000000), `{`, `{"quote_id":"`+q.Id.String()+`",`, 1)
+
+	transferred := postTo(t, w.ts, "/v1/transfers", ids.New().String(), body)
+	again := postTo(t, w.ts, "/v1/transfers", ids.New().String(), body)
+
+	if q.TotalFees.Amount != 300000 || q.Gmf != (gen.Money{Amount: 40000, Currency: "COP"}) {
+		t.Fatalf("quote = %+v, want the transfer fee of 3,000 COP and 400 COP of GMF", q)
+	}
+	expectCreated(t, "transfer", transferred)
+	if again.status != http.StatusConflict || problemCode(t, again) != "quote_unavailable" {
+		t.Fatalf("the same quote again = %d %s, want 409 quote_unavailable", again.status, again.body)
+	}
+	if w.natural(t, from) != 89660000 || w.natural(t, to) != 10000000 {
+		t.Fatalf("balances %d and %d, want 896,600 and 100,000 COP", w.natural(t, from), w.natural(t, to))
+	}
+}
+
+// exemption asks to exempt account id from GMF, without Idempotency-Key.
+func exemption(t *testing.T, ts *httptest.Server, id string) response {
+	t.Helper()
+	r, err := send(t.Context(), ts, "/v1/deposit-accounts/"+id+"/gmf-exemption", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// TestAnExemptionOverHTTP (FR-29): an account of a product that allows it becomes exempt, and its quotes show
+// no GMF while its party's exemption covers them. On a single account, the same account or another one of
+// the party is 409 gmf_exemption_taken; a product that does not allow it is 422 gmf_not_eligible; an unknown
+// account, 404.
+func TestAnExemptionOverHTTP(t *testing.T) {
+	w := newDepositWorld(t)
+	w.uvt(t)
+	customer, savings := w.party(t, party.KYCApproved), w.savings(t, true)
+	a, b := w.opened(t, customer, savings), w.opened(t, customer, savings)
+
+	marked := exemption(t, w.ts, a.Id.String())
+	var e gen.GMFExemption
+	if err := json.Unmarshal(marked.body, &e); err != nil || marked.status != http.StatusCreated || e.AccountId != a.Id || e.PartyId.String() != customer {
+		t.Fatalf("exemption = %d %s, want 201 for the account of the party", marked.status, marked.body)
+	}
+	if q := quoted(t, w.ts, quoteBody(a.Id.String(), "withdrawal", 100000000)); q.Gmf.Amount != 0 {
+		t.Fatalf("quote of the exempt account = %+v, want no GMF", q)
+	}
+	for name, c := range map[string]struct {
+		id     string
+		status int
+		code   string
+	}{
+		"the same account":        {a.Id.String(), http.StatusConflict, "gmf_exemption_taken"},
+		"another account":         {b.Id.String(), http.StatusConflict, "gmf_exemption_taken"},
+		"a product that does not": {w.tiered(t).Id.String(), http.StatusUnprocessableEntity, "gmf_not_eligible"},
+		"an unknown account":      {ids.New().String(), http.StatusNotFound, "not_found"},
+	} {
+		if r := exemption(t, w.ts, c.id); r.status != c.status || problemCode(t, r) != c.code {
+			t.Errorf("%s = %d %s, want %d %s", name, r.status, r.body, c.status, c.code)
+		}
+	}
+}
+
+// uvt loads the UVT of 2026, 52,374 pesos, unless another test of the package's database already did.
+func (w depositWorld) uvt(t *testing.T) {
+	t.Helper()
+	uvt, err := money.ParsePrecise("52374")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
+		return w.products.LoadMarketParameter(t.Context(), tx, products.MarketParameter{
+			Kind: products.UVT, ValidFrom: calendar.Date{Year: 2026, Month: time.January, Day: 1},
+			ValidTo: calendar.Date{Year: 2027, Month: time.January, Day: 1}, Value: uvt,
+		})
+	})
+	if err != nil && !errors.Is(err, products.ErrMarketParameterOverlap) {
+		t.Fatal(err)
 	}
 }

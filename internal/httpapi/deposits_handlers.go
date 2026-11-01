@@ -73,24 +73,34 @@ func (h *DepositHandlers) GetDepositAccount(ctx context.Context, req gen.GetDepo
 
 // CreateDeposit posts cash into an account of the token's entity, once per Idempotency-Key.
 func (h *DepositHandlers) CreateDeposit(ctx context.Context, req gen.CreateDepositRequestObject) (gen.CreateDepositResponseObject, error) {
-	resp, err := h.cash(ctx, ids.ID(req.Id), "deposits", req.Params.IdempotencyKey, req.Body, h.deposits.Deposit)
+	resp, err := h.cash(ctx, ids.ID(req.Id), "deposits", req.Params.IdempotencyKey, cashRequest{req.Body, req.Body.Amount, nil},
+		h.deposits.Deposit)
 	if err != nil {
 		return nil, err
 	}
 	return resp, nil
 }
 
-// CreateWithdrawal posts cash out of an account of the token's entity, once per Idempotency-Key.
+// CreateWithdrawal posts cash out of an account of the token's entity, with its fees and its GMF, once per
+// Idempotency-Key.
 func (h *DepositHandlers) CreateWithdrawal(ctx context.Context, req gen.CreateWithdrawalRequestObject) (gen.CreateWithdrawalResponseObject, error) {
-	resp, err := h.cash(ctx, ids.ID(req.Id), "withdrawals", req.Params.IdempotencyKey, req.Body, h.deposits.Withdraw)
+	resp, err := h.cash(ctx, ids.ID(req.Id), "withdrawals", req.Params.IdempotencyKey,
+		cashRequest{req.Body, req.Body.Amount, req.Body.QuoteId}, h.deposits.Withdraw)
 	if err != nil {
 		return nil, err
 	}
 	return resp, nil
+}
+
+// cashRequest is the body of a deposit or a withdrawal, with its amount and, of a withdrawal, its quote.
+type cashRequest struct {
+	body   any
+	amount gen.Money
+	quote  *openapi_types.UUID
 }
 
 // cash runs move, a deposit or a withdrawal on account id, as the action action on it.
-func (h *DepositHandlers) cash(ctx context.Context, id ids.ID, action, key string, body *gen.CashMovement,
+func (h *DepositHandlers) cash(ctx context.Context, id ids.ID, action, key string, r cashRequest,
 	move func(context.Context, postgres.Tx, deposits.CashInput) (ledger.Transaction, error),
 ) (storedResponse, error) {
 	p, err := principal(ctx)
@@ -99,15 +109,15 @@ func (h *DepositHandlers) cash(ctx context.Context, id ids.ID, action, key strin
 	}
 	op := resourceOperation("deposit-accounts", id, action, http.StatusCreated)
 	noteTargets(ctx, op.targets) // before validating the body: its rejection also names the account
-	amount, err := amountOf(body.Amount)
+	amount, err := amountOf(r.amount)
 	if err != nil {
 		return storedResponse{}, fmt.Errorf("%s: %w", action, err)
 	}
 	in := deposits.CashInput{
-		LegalEntityID: p.LegalEntityID, AccountID: id, Amount: amount, ExternalRef: movementRef(p, op, key),
+		LegalEntityID: p.LegalEntityID, AccountID: id, QuoteID: quoteIDOf(r.quote), Amount: amount, ExternalRef: movementRef(p, op, key),
 		Actor: p.Subject, Channel: movementChannel,
 	}
-	return h.commands.idempotent(ctx, p, op, key, body, func(tx postgres.Tx) (any, error) {
+	return h.commands.idempotent(ctx, p, op, key, r.body, func(tx postgres.Tx) (any, error) {
 		posted, err := move(ctx, tx, in)
 		if err != nil {
 			return nil, err
@@ -131,8 +141,8 @@ func (h *DepositHandlers) CreateTransfer(ctx context.Context, req gen.CreateTran
 	}
 	key := req.Params.IdempotencyKey
 	in := deposits.TransferInput{
-		LegalEntityID: p.LegalEntityID, From: from, To: to, Amount: amount, ExternalRef: movementRef(p, op, key),
-		Actor: p.Subject, Channel: movementChannel,
+		LegalEntityID: p.LegalEntityID, From: from, To: to, QuoteID: quoteIDOf(req.Body.QuoteId), Amount: amount,
+		ExternalRef: movementRef(p, op, key), Actor: p.Subject, Channel: movementChannel,
 	}
 	resp, err := h.commands.idempotent(ctx, p, op, key, req.Body, func(tx postgres.Tx) (any, error) {
 		posted, err := h.deposits.Transfer(ctx, tx, in)
@@ -145,6 +155,14 @@ func (h *DepositHandlers) CreateTransfer(ctx context.Context, req gen.CreateTran
 		return nil, err
 	}
 	return resp, nil
+}
+
+// quoteIDOf is the quote a movement names, or the zero ID if it names none: it is priced as it is done.
+func quoteIDOf(id *openapi_types.UUID) ids.ID {
+	if id == nil {
+		return ids.ID{}
+	}
+	return ids.ID(*id)
 }
 
 // movementRef is the ledger reference of the movement op does for p with Idempotency-Key key: the same key on

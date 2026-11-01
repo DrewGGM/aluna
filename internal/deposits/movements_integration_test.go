@@ -37,10 +37,15 @@ func (w world) vaultIn(t *testing.T, c money.Currency) ids.ID {
 		}); err != nil {
 			return err
 		}
-		for _, code := range []string{"E.INTEREST.SAVINGS", "E.INTEREST.SIMPLIFIED"} {
-			if _, err := w.ledger.CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
-				LegalEntityID: w.entity, Code: code, Kind: ledger.KindExpense, Currency: c, Mode: ledger.BalanceModeSync,
-			}); err != nil {
+		for _, a := range []ledger.CreateAccountInput{
+			{Code: "E.INTEREST.SAVINGS", Kind: ledger.KindExpense, Mode: ledger.BalanceModeSync},
+			{Code: "E.INTEREST.SIMPLIFIED", Kind: ledger.KindExpense, Mode: ledger.BalanceModeSync},
+			{Code: "I.FEES.SAVINGS", Kind: ledger.KindIncome, Mode: ledger.BalanceModeAsync},
+			{Code: "I.FEES.SIMPLIFIED", Kind: ledger.KindIncome, Mode: ledger.BalanceModeAsync},
+			{Code: "L.TAX.GMF", Kind: ledger.KindLiability, Mode: ledger.BalanceModeAsync},
+		} {
+			a.LegalEntityID, a.Currency = w.entity, c
+			if _, err := w.ledger.CreateAccount(t.Context(), tx, a); err != nil {
 				return err
 			}
 		}
@@ -162,9 +167,10 @@ func (w world) posted(t *testing.T, ledgerAccountID ids.ID) int64 {
 }
 
 // TestMoneyMovesBetweenAccounts (US-5, FR-23): open two accounts, deposit 100,000 into the first and transfer
-// 30,000 to the second: balances 70,000 and 30,000, and the vault holds the 100,000; 10,000 back from the
-// second (the account with the higher id, which a transfer locks second) leaves 80,000 and 20,000. The
-// deposit is a transaction of the deposit rules on the business date, with its actor and channel.
+// 30,000 to the second, which costs the first its GMF of 120 (FR-29): balances 69,880 and 30,000, and the vault
+// holds the 100,000; 10,000 back from the second (the account with the higher id, which a transfer locks
+// second), with its GMF of 40, leaves 79,880 and 19,960. The deposit is a transaction of the deposit rules on
+// the business date, with its actor and channel.
 func TestMoneyMovesBetweenAccounts(t *testing.T) {
 	w := newWorld(t)
 	vault := w.vault(t)
@@ -175,13 +181,13 @@ func TestMoneyMovesBetweenAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if w.balance(t, first) != 7000000 || w.balance(t, second) != 3000000 || w.posted(t, vault) != 10000000 {
-		t.Fatalf("balances = %d and %d, vault %d; want 7000000, 3000000 and 10000000",
+	if w.balance(t, first) != 6988000 || w.balance(t, second) != 3000000 || w.posted(t, vault) != 10000000 {
+		t.Fatalf("balances = %d and %d, vault %d; want 6988000, 3000000 and 10000000",
 			w.balance(t, first), w.balance(t, second), w.posted(t, vault))
 	}
 	expectCashDeposit(t, deposited, vault, first.LedgerAccountID, 10000000)
-	if err := w.transfer(t, second.ID, first.ID, 1000000); err != nil || w.balance(t, first) != 8000000 || w.balance(t, second) != 2000000 {
-		t.Fatalf("transfer back = %v; balances %d and %d, want 8000000 and 2000000", err, w.balance(t, first), w.balance(t, second))
+	if err := w.transfer(t, second.ID, first.ID, 1000000); err != nil || w.balance(t, first) != 7988000 || w.balance(t, second) != 1996000 {
+		t.Fatalf("transfer back = %v; balances %d and %d, want 7988000 and 1996000", err, w.balance(t, first), w.balance(t, second))
 	}
 }
 
@@ -283,6 +289,7 @@ func TestAMovementIsChecked(t *testing.T) {
 		"negative amount":            {w.deposit(t, a.ID, -100), deposits.ErrInvalidMovement},
 		"transfer to itself":         {w.transfer(t, a.ID, a.ID, 100), deposits.ErrInvalidMovement},
 		"in dollars":                 {w.depositOf(t, w.cashIn(100, a.ID, usd)), ledger.ErrCurrencyMismatch},
+		"a withdrawal in dollars":    {w.withdrawOf(t, w.cashIn(100, a.ID, usd)), ledger.ErrCurrencyMismatch},
 		"another entity's account":   {w.deposit(t, theirs.ID, 100), deposits.ErrAccountNotFound},
 		"a product without its cash": {other.deposit(t, theirs.ID, 100), deposits.ErrProductAccountMissing},
 		"a cash in another currency": {dollars.deposit(t, inPesos.ID, 100), deposits.ErrProductAccountMissing},

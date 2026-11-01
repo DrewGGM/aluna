@@ -19,6 +19,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
 )
 
@@ -91,12 +92,13 @@ type Service struct {
 	parties  *party.Service
 	products *products.Service
 	calendar *calendar.Service
+	pricing  *pricing.Service
 	events   Events
 }
 
 // New creates the service.
-func New(l *ledger.Service, parties *party.Service, p *products.Service, c *calendar.Service, events Events) *Service {
-	return &Service{ledger: l, parties: parties, products: p, calendar: c, events: events}
+func New(l *ledger.Service, parties *party.Service, p *products.Service, c *calendar.Service, pr *pricing.Service, events Events) *Service {
+	return &Service{ledger: l, parties: parties, products: p, calendar: c, pricing: pr, events: events}
 }
 
 // Open opens, within tx, a deposit account for a party of the entity with the version in force of a
@@ -151,17 +153,19 @@ func (s *Service) Deposit(ctx context.Context, tx postgres.Tx, in CashInput) (le
 }
 
 // Withdraw posts, within tx, cash out of an active account of the entity to its product's cash account, as
-// Deposit; without funds it is ledger.ErrInsufficientFunds.
+// Deposit, with its fees and its GMF (FR-28, FR-29): those of quote in.QuoteID or, without one, those it costs
+// now. Without funds for all of them it is ledger.ErrInsufficientFunds; a quote that is not available for it,
+// pricing.ErrQuoteUnavailable; an exempt account without a UVT for the year, pricing.ErrUVTMissing.
 func (s *Service) Withdraw(ctx context.Context, tx postgres.Tx, in CashInput) (ledger.Transaction, error) {
 	m := s.movements(tx)
-	return atomically(ctx, tx, func() (ledger.Transaction, error) { return app.Withdraw(ctx, m, m, in) })
+	return atomically(ctx, tx, func() (ledger.Transaction, error) { return app.Withdraw(ctx, m, m, m, in) })
 }
 
 // Transfer moves, within tx, money between two active accounts of the entity, as Withdraw, within the limits
 // of both; a transfer to the same account is ErrInvalidMovement.
 func (s *Service) Transfer(ctx context.Context, tx postgres.Tx, in TransferInput) (ledger.Transaction, error) {
 	m := s.movements(tx)
-	return atomically(ctx, tx, func() (ledger.Transaction, error) { return app.Transfer(ctx, m, m, in) })
+	return atomically(ctx, tx, func() (ledger.Transaction, error) { return app.Transfer(ctx, m, m, m, in) })
 }
 
 // undoTimeout bounds undoing a failed movement, which runs even if the request was canceled.
@@ -255,9 +259,9 @@ func (s *Service) movements(tx postgres.Tx) movements {
 	return movements{Store: pg.NewStore(tx), s: s, tx: tx, versions: map[ids.ID]products.Version{}}
 }
 
-// movements is app.Movements and app.Limiting over tx, for one movement; the store gives LockAccount,
-// RecordActivity and Count. It reads each product version once: the cash account and the limits come from
-// the same one.
+// movements is app.Movements, app.Limiting and, in pricing.go, app.Charging over tx, for one movement; the
+// store gives LockAccount, RecordActivity and Count. It reads each product version once: the accounts and the
+// limits of a product come from the same one.
 type movements struct {
 	pg.Store
 	s        *Service
@@ -278,13 +282,19 @@ func (m movements) version(ctx context.Context, id ids.ID) (products.Version, er
 }
 
 // CashAccount reads the product and the ledger in the adapter, which keeps the port at five methods: the
-// cash account of the product of versionID, of the entity and in currency c.
-func (m movements) CashAccount(ctx context.Context, entity, versionID ids.ID, c money.Currency) (ids.ID, error) {
-	v, err := m.version(ctx, versionID)
+// cash account of a's product.
+func (m movements) CashAccount(ctx context.Context, a Account) (ids.ID, error) {
+	return m.productAccountOf(ctx, a, "cash", func(v products.Version) string { return v.Definition.Accounts.Cash })
+}
+
+// productAccountOf is the ledger account a's product names for role, the one that code reads from its
+// version, in a's currency.
+func (m movements) productAccountOf(ctx context.Context, a Account, role string, code func(products.Version) string) (ids.ID, error) {
+	v, err := m.version(ctx, a.ProductVersionID)
 	if err != nil {
 		return ids.ID{}, err
 	}
-	return m.s.productAccount(ctx, m.tx, entity, "cash", v.Definition.Accounts.Cash, c)
+	return m.s.productAccount(ctx, m.tx, a.LegalEntityID, role, code(v), a.Currency)
 }
 
 // productAccount is the entity's ledger account with the code a product names for role (its cash, its

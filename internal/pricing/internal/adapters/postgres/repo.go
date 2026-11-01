@@ -1,5 +1,5 @@
-// Package postgres stores the quotes in pricing.quotes. Their times are the database's, the system's only
-// clock (ADR-0006): the quote's expiry and its use are compared on the same one.
+// Package postgres stores the quotes in pricing.quotes and, in gmf.go, the GMF exemptions. Their times are the
+// database's, the system's only clock (ADR-0006): the quote's expiry and its use are compared on the same one.
 package postgres
 
 import (
@@ -55,10 +55,12 @@ func (s Store) InsertQuote(ctx context.Context, q app.Quote, ttl time.Duration) 
 	if err != nil {
 		return app.Quote{}, fmt.Errorf("quote fees: %w", err)
 	}
-	err = s.q.QueryRow(ctx, `INSERT INTO pricing.quotes (id, legal_entity_id, account_id, operation, currency, amount_units, fees, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, statement_timestamp() + $8::bigint * interval '1 microsecond')
+	err = s.q.QueryRow(ctx, `INSERT INTO pricing.quotes (id, legal_entity_id, account_id, operation, currency, amount_units, fees,
+			gmf_units, exempt_units, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, statement_timestamp() + $10::bigint * interval '1 microsecond')
 		RETURNING created_at, expires_at`,
-		q.ID, q.LegalEntityID, q.AccountID, q.Operation, q.Amount.Currency().Code(), q.Amount.Units(), document, ttl.Microseconds(),
+		q.ID, q.LegalEntityID, q.AccountID, q.Operation, q.Amount.Currency().Code(), q.Amount.Units(), document, q.GMF.Tax.Units(),
+		q.GMF.Exempt.Units(), ttl.Microseconds(),
 	).Scan(&q.CreatedAt, &q.ExpiresAt)
 	if err != nil {
 		return app.Quote{}, fmt.Errorf("store quote %s: %w", q.ID, err)
@@ -67,28 +69,32 @@ func (s Store) InsertQuote(ctx context.Context, q app.Quote, ttl time.Duration) 
 }
 
 // UseQuote marks as used the quote of the entity that u names, if it is of u's account, operation and amount,
-// is not used and has not expired by the database's now, and returns its fees; otherwise it is
+// is not used and has not expired by the database's now, and returns it; otherwise it is
 // app.ErrQuoteUnavailable.
-func (s Store) UseQuote(ctx context.Context, entity ids.ID, u app.QuoteUse) ([]domain.Fee, error) {
+func (s Store) UseQuote(ctx context.Context, entity ids.ID, u app.QuoteUse) (app.Quote, error) {
+	q := app.Quote{ID: u.QuoteID, LegalEntityID: entity, AccountID: u.AccountID, PartyID: u.PartyID, Operation: u.Operation, Amount: u.Amount}
+	c := u.Amount.Currency()
 	var document []byte
+	var gmf, exempt int64
 	err := s.q.QueryRow(ctx, `UPDATE pricing.quotes SET used_at = clock_timestamp()
 		WHERE id = $1 AND legal_entity_id = $2 AND account_id = $3 AND operation = $4 AND currency = $5 AND amount_units = $6
 			AND used_at IS NULL AND expires_at > clock_timestamp()
-		RETURNING fees`,
-		u.QuoteID, entity, u.AccountID, u.Operation, u.Amount.Currency().Code(), u.Amount.Units()).Scan(&document)
+		RETURNING fees, gmf_units, exempt_units, created_at, expires_at`,
+		u.QuoteID, entity, u.AccountID, u.Operation, c.Code(), u.Amount.Units()).Scan(&document, &gmf, &exempt, &q.CreatedAt, &q.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("%w: %s", app.ErrQuoteUnavailable, u.QuoteID)
+		return app.Quote{}, fmt.Errorf("%w: %s", app.ErrQuoteUnavailable, u.QuoteID)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("use quote %s: %w", u.QuoteID, err)
+		return app.Quote{}, fmt.Errorf("use quote %s: %w", u.QuoteID, err)
 	}
 	var stored []storedFee
 	if err := json.Unmarshal(document, &stored); err != nil {
-		return nil, fmt.Errorf("stored fees of quote %s: %w", u.QuoteID, err)
+		return app.Quote{}, fmt.Errorf("stored fees of quote %s: %w", u.QuoteID, err)
 	}
-	fees := make([]domain.Fee, len(stored))
+	q.Fees = make([]domain.Fee, len(stored))
 	for i, f := range stored {
-		fees[i] = domain.Fee{Code: f.Code, Amount: money.New(f.Units, u.Amount.Currency())}
+		q.Fees[i] = domain.Fee{Code: f.Code, Amount: money.New(f.Units, c)}
 	}
-	return fees, nil
+	q.GMF = domain.GMF{Exempt: money.New(exempt, c), Tax: money.New(gmf, c)}
+	return q, nil
 }

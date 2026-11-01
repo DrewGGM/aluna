@@ -21,18 +21,24 @@ import (
 // threeSMMLV is 3 times the minimum wage of 2026 that minimumWage loads (1,423,500 pesos), in COP minor units.
 const threeSMMLV = 427050000
 
-// minimumWage loads the minimum wage of 2026, 1,423,500 pesos, unless another test of the package's database
-// already did: the parameters are the tenant's.
+// minimumWage loads the minimum wage of 2026, 1,423,500 pesos.
 func (w world) minimumWage(t *testing.T) {
 	t.Helper()
-	wage, err := money.ParsePrecise("1423500")
+	w.marketParameter(t, products.SMMLV, "1423500")
+}
+
+// marketParameter loads a parameter of kind worth value for 2026, unless another test of the package's
+// database already did: the parameters are the tenant's.
+func (w world) marketParameter(t *testing.T, kind products.MarketKind, value string) {
+	t.Helper()
+	v, err := money.ParsePrecise(value)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = try(t, func(tx postgres.Tx) error {
 		return w.products.LoadMarketParameter(t.Context(), tx, products.MarketParameter{
-			Kind: products.SMMLV, ValidFrom: calendar.Date{Year: 2026, Month: time.January, Day: 1},
-			ValidTo: calendar.Date{Year: 2027, Month: time.January, Day: 1}, Value: wage,
+			Kind: kind, ValidFrom: calendar.Date{Year: 2026, Month: time.January, Day: 1},
+			ValidTo: calendar.Date{Year: 2027, Month: time.January, Day: 1}, Value: v,
 		})
 	})
 	if err != nil && !errors.Is(err, products.ErrMarketParameterOverlap) {

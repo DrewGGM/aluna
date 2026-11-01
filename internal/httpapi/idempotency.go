@@ -119,6 +119,11 @@ func (r storedResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) err
 // VisitCreateQuoteResponse writes the response of POST /v1/quotes.
 func (r storedResponse) VisitCreateQuoteResponse(w http.ResponseWriter) error { return r.write(w) }
 
+// VisitCreateGMFExemptionResponse writes the response of POST /v1/deposit-accounts/{id}/gmf-exemption.
+func (r storedResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitCreateTransferResponse writes the stored response of POST /v1/transfers.
 func (r storedResponse) VisitCreateTransferResponse(w http.ResponseWriter) error { return r.write(w) }
 

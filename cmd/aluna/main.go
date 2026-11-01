@@ -52,10 +52,13 @@ commands:
   api                        serves the HTTP API on ALUNA_HTTP_ADDR (default :8080); requires
                              ALUNA_DATABASE_URL, ALUNA_OIDC_ISSUER (the token issuer) and
                              ALUNA_OIDC_AUDIENCE (the audience tokens must carry); with
-                             OTEL_EXPORTER_OTLP_ENDPOINT it exports traces and metrics over OTLP
+                             OTEL_EXPORTER_OTLP_ENDPOINT it exports traces and metrics over OTLP;
+                             ALUNA_GMF_MODALITY is the GMF exemption's modality, single_account
+                             (the default) or split_accounts
   worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing)
                              on ALUNA_DATABASE_URL, anchoring blocks in ALUNA_AUDIT_ANCHOR_DIR;
-                             multiple workers elect a leader for the periodic jobs
+                             multiple workers elect a leader for the periodic jobs; it reads
+                             ALUNA_GMF_MODALITY as api does
   audit verify --from N --to M
                              recomputes the audit chain of blocks N to M and checks it against
                              their anchors in ALUNA_AUDIT_ANCHOR_DIR
@@ -205,6 +208,7 @@ func flushTelemetry(ctx context.Context, shutdown telemetry.Shutdown, log *slog.
 type apiConfig struct {
 	addr, dsn        string
 	issuer, audience string
+	gmf              pricing.Modality
 }
 
 func apiConfigFromEnv() (apiConfig, error) {
@@ -212,6 +216,11 @@ func apiConfigFromEnv() (apiConfig, error) {
 	if cfg.dsn == "" {
 		return apiConfig{}, errNoDatabaseURL
 	}
+	gmf, err := gmfModalityFromEnv()
+	if err != nil {
+		return apiConfig{}, err
+	}
+	cfg.gmf = gmf
 	cfg.issuer, cfg.audience = os.Getenv("ALUNA_OIDC_ISSUER"), os.Getenv("ALUNA_OIDC_AUDIENCE")
 	if cfg.issuer == "" {
 		return apiConfig{}, fmt.Errorf("%w: missing ALUNA_OIDC_ISSUER", errNoOIDC)
@@ -220,6 +229,12 @@ func apiConfigFromEnv() (apiConfig, error) {
 		return apiConfig{}, fmt.Errorf("%w: missing ALUNA_OIDC_AUDIENCE", errNoOIDC)
 	}
 	return cfg, nil
+}
+
+// gmfModalityFromEnv is the entity's modality of the GMF exemption, ALUNA_GMF_MODALITY: single_account
+// unless it says otherwise.
+func gmfModalityFromEnv() (pricing.Modality, error) {
+	return pricing.ModalityOf(envOr("ALUNA_GMF_MODALITY", string(pricing.SingleAccount)))
 }
 
 var (
@@ -267,7 +282,8 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	ledgerSvc := ledger.New(calendarSvc, events)
 	partySvc := party.New(events)
 	productSvc := products.New(events)
-	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, events)
+	pricingSvc := pricing.New(productSvc, calendarSvc, cfg.gmf)
+	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
 	requests := approvals.New(authz.policy)
 	api := httpapi.API{
 		LedgerHandlers:   httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
@@ -275,7 +291,7 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 		PartyHandlers:    httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
 		ProductHandlers:  httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
 		DepositHandlers:  httpapi.NewDepositHandlers(depositSvc, uow, keys, pool),
-		PricingHandlers:  httpapi.NewPricingHandlers(pricing.New(productSvc), depositSvc, partySvc, ledgerSvc, uow),
+		PricingHandlers:  httpapi.NewPricingHandlers(pricingSvc, depositSvc, uow),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)
@@ -332,7 +348,12 @@ func workerCommand(ctx context.Context, stdout io.Writer) int {
 		log.Error("worker configuration", "error", err)
 		return 1
 	}
-	return runWorker(ctx, dsn, records, log)
+	gmf, err := gmfModalityFromEnv()
+	if err != nil {
+		log.Error("worker configuration", "error", err)
+		return 1
+	}
+	return runWorker(ctx, dsn, records, gmf, log)
 }
 
 var errNoAnchorDir = errors.New("missing ALUNA_AUDIT_ANCHOR_DIR")
@@ -349,7 +370,7 @@ func auditFromEnv() (*audit.Service, error) {
 
 // runWorker connects to the database, wires the jobs by hand and runs River until ctx is canceled. It then
 // stops taking jobs and waits up to shutdownTimeout for the running ones before canceling them.
-func runWorker(ctx context.Context, dsn string, records *audit.Service, log *slog.Logger) int {
+func runWorker(ctx context.Context, dsn string, records *audit.Service, gmf pricing.Modality, log *slog.Logger) int {
 	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	pool, err := postgres.Open(openCtx, dsn)
@@ -358,7 +379,7 @@ func runWorker(ctx context.Context, dsn string, records *audit.Service, log *slo
 		return 1
 	}
 	defer pool.Close()
-	client, err := newWorker(pool, records, log)
+	client, err := newWorker(pool, records, gmf, log)
 	if err != nil {
 		log.Error("configure the worker", "error", err)
 		return 1
@@ -373,17 +394,20 @@ func runWorker(ctx context.Context, dsn string, records *audit.Service, log *slo
 	return 0
 }
 
-// newWorker builds the worker's River client from the jobs configuration, wired by hand.
-func newWorker(pool *pgxpool.Pool, records *audit.Service, log *slog.Logger) (*river.Client[pgx.Tx], error) {
+// newWorker builds the worker's River client from the jobs configuration, wired by hand; gmf is the entity's
+// modality of the GMF exemption.
+func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	events, err := outbox.New(pool)
 	if err != nil {
 		return nil, err
 	}
 	calendarSvc := calendar.New()
 	ledgerSvc := ledger.New(calendarSvc, events)
+	productSvc := products.New(events)
+	depositSvc := deposits.New(ledgerSvc, party.New(events), productSvc, calendarSvc, pricing.New(productSvc, calendarSvc, gmf), events)
 	cfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
-		Audit: records, Deposits: deposits.New(ledgerSvc, party.New(events), products.New(events), calendarSvc, events),
+		Audit: records, Deposits: depositSvc,
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)

@@ -181,7 +181,9 @@ var problems = []struct {
 	{deposits.ErrLimitExceeded, unprocessable("limit_exceeded", "The movement exceeds a limit of the product")},
 	// pricing
 	{pricing.ErrInvalidQuote, unprocessable("invalid_quote", "The operation is not priced, or the amount is not positive or not in the account's currency")},
-	{pricing.ErrQuoteUnavailable, conflict("quote_unavailable", "The quote does not exist for this operation, or was already used or expired")},
+	{pricing.ErrQuoteUnavailable, conflict("quote_unavailable", "The quote does not exist for this operation, was already used or expired, or its GMF exemption was used meanwhile")},
+	{pricing.ErrGMFNotEligible, unprocessable("gmf_not_eligible", "The account cannot be exempt from GMF")},
+	{pricing.ErrGMFExemptionTaken, conflict("gmf_exemption_taken", "The GMF exemption is already on an account of the party")},
 	// approvals
 	{approvals.ErrSelfApproval, Problem{
 		Status: http.StatusForbidden, Code: "self_approval_forbidden", Title: "The requester cannot decide their own request",

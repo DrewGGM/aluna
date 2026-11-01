@@ -307,10 +307,12 @@ paths:
       operationId: registerParty
       summary: Register a party
       description: >-
-        Registers the reference data of a natural or legal person (FR-16) with its first version, in KYC
-        `pending`: the KYC status only changes through maker-checker. The core keeps no names or
-        documents: `external_ref` points to the onboarding system and is unique within the entity (409
-        `party_already_registered`).
+        Registers the reference data of a natural or legal person (FR-16) with its first version, after
+        screening it against the sanction lists (FR-42): in KYC `pending` if screening cleared it, and in
+        `pending_screening` if it may match or the vendor did not answer, until compliance resolves its case at
+        `POST /v1/screening-cases/{id}/resolution`. After that, the KYC status only changes through
+        maker-checker. The core keeps no names or documents: `external_ref` points to the onboarding system and
+        is unique within the entity (409 `party_already_registered`).
       x-aluna-permission: party.parties.create
       requestBody:
         required: true
@@ -374,6 +376,37 @@ paths:
         "404": {$ref: "#/components/responses/Problem"}
         "409": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/screening-cases/{id}/resolution:
+    post:
+      operationId: resolveScreeningCase
+      summary: Request the resolution of a screening case
+      description: >-
+        Creates a `compliance.screening_resolution` maker-checker request and answers 202 with it (FR-42). The
+        case is resolved when someone else with `compliance.screening.resolve` approves it at
+        `POST /v1/approvals/{id}/approval`: `cleared` (not a match) leaves a party in KYC `pending`, and
+        `confirmed` leaves it `rejected`. The case id comes in the `aluna.compliance.screening.pending.v1`
+        event. A case that is no longer pending is 409 `case_already_resolved` when requesting; when
+        approving, it leaves the request `failed`, as does a party that is no longer `pending_screening`.
+        Idempotent by `Idempotency-Key`.
+      x-aluna-permission: compliance.screening.resolve
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ResolveScreeningCase"}
+      responses:
+        "202":
+          description: Resolution request created, pending approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
   /v1/products:
     post:
@@ -975,7 +1008,7 @@ components:
       description: Natural or legal person.
     KYCStatus:
       type: string
-      enum: [pending, approved, rejected, suspended]
+      enum: [pending, approved, rejected, suspended, pending_screening]
     RiskLevel:
       type: string
       enum: [low, medium, high]
@@ -1182,6 +1215,14 @@ components:
         account_id: {type: string, format: uuid}
         party_id: {type: string, format: uuid}
         marked_at: {type: string, format: date-time}
+    ResolveScreeningCase:
+      type: object
+      required: [resolution]
+      properties:
+        resolution:
+          type: string
+          enum: [cleared, confirmed]
+          description: "`cleared` if the subject is not on the lists, `confirmed` if the match is real"
     RequestKYCStatusChange:
       type: object
       required: [kyc_status]

@@ -25,6 +25,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
@@ -77,18 +78,21 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	}
 	calendarSvc := calendar.New()
 	ledgerSvc := ledger.New(calendarSvc, events)
-	partySvc := party.New(events)
+	complianceSvc := compliance.New(events)
+	partySvc := party.New(events, complianceSvc.PartyScreener())
+	complianceSvc.OnResolved(compliance.CaseParty, compliance.ResolvingParties(partySvc))
 	productSvc := products.New(events)
 	pricingSvc := pricing.New(productSvc, calendarSvc, pricing.SingleAccount)
 	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
 	requests := approvals.New(policy)
 	api := API{
-		LedgerHandlers:   NewLedgerHandlers(ledgerSvc, requests, uow, keys, testPool),
-		ApprovalHandlers: NewApprovalHandlers(requests, uow, keys, testPool),
-		PartyHandlers:    NewPartyHandlers(partySvc, requests, uow, keys, testPool),
-		ProductHandlers:  NewProductHandlers(productSvc, requests, uow, keys, testPool),
-		DepositHandlers:  NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, testPool),
-		PricingHandlers:  NewPricingHandlers(pricingSvc, depositSvc, uow),
+		LedgerHandlers:     NewLedgerHandlers(ledgerSvc, requests, uow, keys, testPool),
+		ApprovalHandlers:   NewApprovalHandlers(requests, uow, keys, testPool),
+		PartyHandlers:      NewPartyHandlers(partySvc, requests, uow, keys, testPool),
+		ProductHandlers:    NewProductHandlers(productSvc, requests, uow, keys, testPool),
+		DepositHandlers:    NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, testPool),
+		PricingHandlers:    NewPricingHandlers(pricingSvc, depositSvc, uow),
+		ComplianceHandlers: NewComplianceHandlers(complianceSvc, requests, uow, keys),
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},

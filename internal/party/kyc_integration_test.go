@@ -39,7 +39,7 @@ func changeKYCAt(t *testing.T, svc *party.Service, p party.Party, seen int, to p
 // TestChangeKYCRecordsANewVersion (FR-16): a valid change records version 2 with the new KYC status and the
 // rest of the state unchanged; Get returns it as current.
 func TestChangeKYCRecordsANewVersion(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	p, err := register(t, svc, input(ids.New()))
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestChangeKYCRecordsANewVersion(t *testing.T) {
 // TestKYCChangesFollowTheTransitions: pending → approved → suspended → approved is valid; from rejected, or
 // back to pending, it is ErrInvalidKYCTransition and no version is recorded.
 func TestKYCChangesFollowTheTransitions(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	p, err := register(t, svc, input(ids.New()))
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestKYCChangesFollowTheTransitions(t *testing.T) {
 // TestConcurrentKYCChangesAreSerialized: while a change of a party is uncommitted, a second one requested
 // against the same version waits for it and is then stale, instead of also writing version 2.
 func TestConcurrentKYCChangesAreSerialized(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	p, err := register(t, svc, input(ids.New()))
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func waitForAdvisoryLockWait(t *testing.T) {
 // TestAStaleKYCChangeIsRejected: a change requested at one version is stale once the party moved on, even
 // if its status came back to the same value (suspended, approved, suspended again).
 func TestAStaleKYCChangeIsRejected(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	p, err := register(t, svc, input(ids.New()))
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestAStaleKYCChangeIsRejected(t *testing.T) {
 // TestCheckKYCChange: a change is checked against the current status before it waits for approval, and
 // returns the version it was checked against; another entity's party does not exist.
 func TestCheckKYCChange(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	p, err := register(t, svc, input(ids.New()))
 	if err != nil {
 		t.Fatal(err)

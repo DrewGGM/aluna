@@ -72,27 +72,31 @@ func NewScreener(port ScreeningPort, now func() time.Time) *Screener {
 	return &Screener{port: port, now: now, transitions: transitions, state: circuitClosed}
 }
 
-// Screen is OutcomeClear if the vendor clears subject, and OutcomePending otherwise (FR-42). A caller whose ctx
-// ends is OutcomePending too, but that is not the vendor failing: it does not count towards opening the
-// circuit, and a caller that has already given up does not call the vendor.
-func (s *Screener) Screen(ctx context.Context, subject Subject) Outcome {
+// Screen is OutcomeClear if the vendor clears subject, and OutcomePending otherwise (FR-42), with the vendor's
+// reference to its check when it answered. A caller whose ctx ends is OutcomePending too, but that is not the
+// vendor failing: it does not count towards opening the circuit, and a caller that has already given up does
+// not call the vendor.
+func (s *Screener) Screen(ctx context.Context, subject Subject) (o Outcome, vendorRef string) {
 	if ctx.Err() != nil {
-		return OutcomePending
+		return OutcomePending, ""
 	}
 	a, ok := s.admit(ctx)
 	if !ok {
-		return OutcomePending
+		return OutcomePending, ""
 	}
 	r, err := s.call(ctx, subject)
 	if err != nil && ctx.Err() != nil {
 		s.release(a)
-		return OutcomePending
+		return OutcomePending, ""
 	}
 	s.record(ctx, a, err == nil)
-	if err != nil || r.Status != StatusClear {
-		return OutcomePending
+	switch {
+	case err != nil:
+		return OutcomePending, ""
+	case r.Status != StatusClear:
+		return OutcomePending, r.Ref
 	}
-	return OutcomeClear
+	return OutcomeClear, r.Ref
 }
 
 // call asks the vendor, for up to screenTimeout even if the vendor ignores its context.

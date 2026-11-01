@@ -30,12 +30,14 @@ func (k Kind) Valid() bool { return k == KindNatural || k == KindLegal }
 // KYCStatus is the know-your-customer status.
 type KYCStatus string
 
-// KYC statuses.
+// KYC statuses. A party that screening did not clear is pending_screening until compliance resolves its
+// case (FR-42).
 const (
-	KYCPending   KYCStatus = "pending"
-	KYCApproved  KYCStatus = "approved"
-	KYCRejected  KYCStatus = "rejected"
-	KYCSuspended KYCStatus = "suspended"
+	KYCPending          KYCStatus = "pending"
+	KYCApproved         KYCStatus = "approved"
+	KYCRejected         KYCStatus = "rejected"
+	KYCSuspended        KYCStatus = "suspended"
+	KYCPendingScreening KYCStatus = "pending_screening"
 )
 
 // RiskLevel is the SARLAFT risk level assigned by onboarding.
@@ -53,11 +55,31 @@ func (r RiskLevel) Valid() bool { return r == RiskLow || r == RiskMedium || r ==
 
 // kycTransitions are the KYC changes onboarding and compliance may make (FR-16): a pending party is approved
 // or rejected, an approved one is suspended, and a suspended one is approved again. A rejected party stays
-// rejected: onboarding registers it again if it comes back.
+// rejected: onboarding registers it again if it comes back. A party pending screening only leaves that status
+// when its case is resolved (ResolveScreening).
 var kycTransitions = map[KYCStatus][]KYCStatus{
 	KYCPending:   {KYCApproved, KYCRejected},
 	KYCApproved:  {KYCSuspended},
 	KYCSuspended: {KYCApproved},
+}
+
+// HeldForScreening is p, not stored yet, in KYC pending_screening: screening did not clear it (FR-42).
+func (p Party) HeldForScreening() Party {
+	p.Current.KYCStatus = KYCPendingScreening
+	return p
+}
+
+// ResolveScreening is the KYC status of a party in status from once its screening case is resolved (FR-42):
+// pending if it was cleared, so onboarding goes on, and rejected if the match was confirmed. A party that is
+// not pending screening is ErrNotPendingScreening.
+func ResolveScreening(from KYCStatus, cleared bool) (KYCStatus, error) {
+	switch {
+	case from != KYCPendingScreening:
+		return "", fmt.Errorf("%w: it is %s", ErrNotPendingScreening, from)
+	case cleared:
+		return KYCPending, nil
+	}
+	return KYCRejected, nil
 }
 
 // CheckKYCTransition reports whether the KYC status may move from from to to.
@@ -89,6 +111,8 @@ var (
 	// ErrStaleKYCChange means the party changed after the KYC change was requested: the change was decided
 	// against another situation.
 	ErrStaleKYCChange = errors.New("the party changed after the KYC change was requested")
+	// ErrNotPendingScreening means the party has no screening to resolve.
+	ErrNotPendingScreening = errors.New("the party is not pending screening")
 )
 
 // Party is the reference data of one of the entity's customers, with its current version.
@@ -121,7 +145,8 @@ type Registration struct {
 }
 
 // NewParty builds party id from its registration: its first version is always KYC pending, because the KYC
-// status only changes through maker-checker. The external_ref is trimmed, and no consents is an empty set.
+// status only changes through maker-checker, or screening before it is stored (HeldForScreening). The
+// external_ref is trimmed, and no consents is an empty set.
 func NewParty(id ids.ID, in Registration) (Party, error) {
 	externalRef := strings.TrimSpace(in.ExternalRef)
 	switch {

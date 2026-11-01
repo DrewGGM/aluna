@@ -58,13 +58,14 @@ finance:
     - ledger.transactions.read
     - ledger.transactions.reverse
 
-# Compliance: queries, KYC changes and deciding requests.
+# Compliance: queries, KYC changes, screening resolutions and deciding requests.
 compliance:
   all:
     - approvals.read
     - approvals.decide
     - party.parties.read
     - party.kyc.change
+    - compliance.screening.resolve
     - products.versions.read
     - products.market_parameters.read
     - deposits.accounts.read

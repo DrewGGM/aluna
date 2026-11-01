@@ -12,6 +12,7 @@ import (
 
 	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/approvals"
+	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
@@ -123,6 +124,7 @@ var problems = []struct {
 	{errInvalidIdempotencyKey, invalidRequest("Invalid Idempotency-Key",
 		fmt.Sprintf("The key must be UTF-8 text of up to %d characters.", maxIdempotencyKey))},
 	{errReversalOfReversal, conflict("reversal_of_reversal", "The transaction is already a reversal")},
+	{errInvalidResolution, invalidRequest("Unknown resolution", "resolution is cleared or confirmed.")},
 	{errInvalidApprovalStatus, invalidRequest("Unknown request status", "status is pending, approved, rejected, failed or expired.")},
 	// idempotency
 	{idempotency.ErrKeyReused, unprocessable("idempotency_key_reused", "The Idempotency-Key was already used with another payload")},
@@ -158,6 +160,7 @@ var problems = []struct {
 	{party.ErrNotFound, notFound},
 	{party.ErrInvalidKYCTransition, unprocessable("invalid_kyc_transition", "The KYC status cannot change that way")},
 	{party.ErrStaleKYCChange, conflict("kyc_change_stale", "The party changed after the KYC change was requested")},
+	{party.ErrNotPendingScreening, conflict("not_pending_screening", "The party is not pending screening")},
 	// products
 	{products.ErrInvalidDefinition, unprocessable("invalid_product_definition", "The definition does not follow deposit-product.v1.json")},
 	{products.ErrInvalidProduct, unprocessable("invalid_product", "Invalid product code or name")},
@@ -181,6 +184,9 @@ var problems = []struct {
 	{deposits.ErrKYCNotSatisfied, unprocessable("kyc_not_satisfied", "The party's KYC status does not allow the product")},
 	{deposits.ErrInvalidMovement, unprocessable("invalid_movement", "The amount must be positive and the accounts different")},
 	{deposits.ErrLimitExceeded, unprocessable("limit_exceeded", "The movement exceeds a limit of the product")},
+	// compliance
+	{compliance.ErrCaseNotFound, notFound},
+	{compliance.ErrCaseResolved, conflict("case_already_resolved", "The screening case is already resolved")},
 	// pricing
 	{pricing.ErrInvalidQuote, unprocessable("invalid_quote", "The operation is not priced, or the amount is not positive or not in the account's currency")},
 	{pricing.ErrQuoteUnavailable, conflict("quote_unavailable", "The quote does not exist for this operation, was already used or expired, or its GMF exemption was used meanwhile")},

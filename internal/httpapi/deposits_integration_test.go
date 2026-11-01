@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -52,7 +53,10 @@ func newDepositWorld(t *testing.T) depositWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := depositWorld{ts: apiServerWith(t, entity, events), entity: entity, parties: party.New(events), products: products.New(events)}
+	w := depositWorld{
+		ts: apiServerWith(t, entity, events), entity: entity, parties: party.New(events, compliance.New(events).PartyScreener()),
+		products: products.New(events),
+	}
 	w.deposits = deposits.New(ledger.New(calendar.New(), events), w.parties, w.products, calendar.New(),
 		pricing.New(w.products, calendar.New(), pricing.SingleAccount), events)
 	var vault gen.LedgerAccount

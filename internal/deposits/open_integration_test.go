@@ -59,6 +59,13 @@ func newWorld(t *testing.T) world {
 	return newWorldOn(t, "2026-03-02")
 }
 
+// screenedClear screens every party clear: these tests are not about screening.
+type screenedClear struct{}
+
+func (screenedClear) ScreenParty(context.Context, postgres.Tx, party.Party) (bool, error) {
+	return true, nil
+}
+
 // newWorldOn is a world whose business date is day.
 func newWorldOn(t *testing.T, day string) world {
 	t.Helper()
@@ -68,7 +75,7 @@ func newWorldOn(t *testing.T, day string) world {
 			VALUES ($1, 'Entity', $2, 'COP')`, w.entity, day)
 		return err
 	})
-	w.ledger, w.parties, w.products = ledger.New(calendar.New(), w.events), party.New(w.events), products.New(w.events)
+	w.ledger, w.parties, w.products = ledger.New(calendar.New(), w.events), party.New(w.events, screenedClear{}), products.New(w.events)
 	w.pricing = pricing.New(w.products, calendar.New(), pricing.SingleAccount)
 	w.deposits = deposits.New(w.ledger, w.parties, w.products, calendar.New(), w.pricing, w.events)
 	return w

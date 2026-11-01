@@ -78,8 +78,14 @@ func screener(t *testing.T) (*app.Screener, *counting, *clock) {
 func openCircuit(t *testing.T, s *app.Screener) {
 	t.Helper()
 	for range 5 {
-		s.Screen(t.Context(), subject(failing))
+		outcomeOf(t.Context(), s, subject(failing))
 	}
+}
+
+// outcomeOf is what s decides about subject, without the vendor's reference.
+func outcomeOf(ctx context.Context, s *app.Screener, subject app.Subject) app.Outcome {
+	o, _ := s.Screen(ctx, subject)
+	return o
 }
 
 // within waits for done, or fails the test after 5 seconds instead of hanging it.
@@ -150,9 +156,25 @@ func TestTheVendorDecides(t *testing.T) {
 		},
 	}
 	for name, tc := range cases {
-		if got := tc.screener.Screen(t.Context(), tc.subject); got != tc.want {
+		if got := outcomeOf(t.Context(), tc.screener, tc.subject); got != tc.want {
 			t.Errorf("%s = %s, want %s", name, got, tc.want)
 		}
+	}
+}
+
+// TestTheVendorsReferenceComesBack (FR-42): the vendor's reference to its check comes back with what it
+// answered, a clear or a possible match, and there is none without an answer.
+func TestTheVendorsReferenceComesBack(t *testing.T) {
+	s, _, _ := screener(t)
+	cleared, matched, failed := subject(onNoList), subject(match), subject(failing)
+
+	_, clearRef := s.Screen(t.Context(), cleared)
+	_, matchRef := s.Screen(t.Context(), matched)
+	_, failedRef := s.Screen(t.Context(), failed)
+
+	if clearRef != "fake-"+cleared.ID.String() || matchRef != "fake-"+matched.ID.String() || failedRef != "" {
+		t.Fatalf("references = %q, %q and %q, want the vendor's for a clear and a match, and none for a failure",
+			clearRef, matchRef, failedRef)
 	}
 }
 
@@ -171,7 +193,7 @@ func TestAVendorThatDoesNotAnswerIsPending(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			start := time.Now()
-			got := tc.screener.Screen(t.Context(), tc.subject)
+			got := outcomeOf(t.Context(), tc.screener, tc.subject)
 			if elapsed := time.Since(start); got != app.OutcomePending || elapsed < 2*time.Second || elapsed > 2500*time.Millisecond {
 				t.Fatalf("= %s after %s, want pending after about 2 s", got, elapsed)
 			}
@@ -190,7 +212,7 @@ func TestACallerThatGaveUpDoesNotCallTheVendor(t *testing.T) {
 	gone, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	got := s.Screen(gone, subject(onNoList))
+	got := outcomeOf(gone, s, subject(onNoList))
 
 	select {
 	case <-called:
@@ -207,7 +229,7 @@ func screenAndGiveUp(t *testing.T, s *app.Screener, entered <-chan struct{}) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan app.Outcome, 1)
-	go func() { done <- s.Screen(ctx, named("held")) }()
+	go func() { done <- outcomeOf(ctx, s, named("held")) }()
 	within(t, entered)
 	cancel()
 	if got := outcomeWithin(t, done); got != app.OutcomePending {
@@ -221,12 +243,12 @@ func TestACallerThatGivesUpIsNotAFailure(t *testing.T) {
 	vendor, entered := heldVendor(t, false)
 	s := app.NewScreener(vendor, newClock().Now)
 	for range 4 {
-		s.Screen(t.Context(), subject(failing))
+		outcomeOf(t.Context(), s, subject(failing))
 	}
 
 	screenAndGiveUp(t, s, entered)
 
-	if got := s.Screen(t.Context(), named("clear")); got != app.OutcomeClear {
+	if got := outcomeOf(t.Context(), s, named("clear")); got != app.OutcomeClear {
 		t.Fatalf("after 4 failures and a caller that gave up, a clear subject = %s, want clear", got)
 	}
 }
@@ -242,7 +264,7 @@ func TestAProbeWhoseCallerGivesUpLetsAnotherProbe(t *testing.T) {
 
 	screenAndGiveUp(t, s, entered)
 
-	if got := s.Screen(t.Context(), named("clear")); got != app.OutcomeClear {
+	if got := outcomeOf(t.Context(), s, named("clear")); got != app.OutcomeClear {
 		t.Fatalf("after an abandoned probe, the next call = %s, want clear", got)
 	}
 }
@@ -252,20 +274,20 @@ func TestAProbeWhoseCallerGivesUpLetsAnotherProbe(t *testing.T) {
 func TestFiveFailuresOpenTheCircuit(t *testing.T) {
 	s, vendor, c := screener(t)
 	for range 4 {
-		s.Screen(t.Context(), subject(failing))
+		outcomeOf(t.Context(), s, subject(failing))
 	}
-	s.Screen(t.Context(), subject(onNoList)) // the count starts again
+	outcomeOf(t.Context(), s, subject(onNoList)) // the count starts again
 	for range 4 {
-		s.Screen(t.Context(), subject(failing))
+		outcomeOf(t.Context(), s, subject(failing))
 	}
-	if got := s.Screen(t.Context(), subject(onNoList)); got != app.OutcomeClear {
+	if got := outcomeOf(t.Context(), s, subject(onNoList)); got != app.OutcomeClear {
 		t.Fatalf("after 4 failures, a success and 4 more failures, a clear subject = %s, want clear", got)
 	}
 	openCircuit(t, s)
 	calls := vendor.calls.Load()
 
 	c.advance(30*time.Second - time.Nanosecond)
-	open := s.Screen(t.Context(), subject(onNoList))
+	open := outcomeOf(t.Context(), s, subject(onNoList))
 
 	if open != app.OutcomePending || vendor.calls.Load() != calls {
 		t.Fatalf("with the circuit open, a clear subject = %s after %d calls of the vendor, want pending without calling it",
@@ -281,21 +303,21 @@ func TestAfter30SecondsOneCallProbesTheVendor(t *testing.T) {
 	openCircuit(t, s)
 	c.advance(30 * time.Second)
 
-	if got := s.Screen(t.Context(), subject(failing)); got != app.OutcomePending {
+	if got := outcomeOf(t.Context(), s, subject(failing)); got != app.OutcomePending {
 		t.Fatalf("a failing probe = %s, want pending", got)
 	}
 	calls := vendor.calls.Load()
 	c.advance(30*time.Second - time.Nanosecond)
-	if got := s.Screen(t.Context(), subject(onNoList)); got != app.OutcomePending || vendor.calls.Load() != calls {
+	if got := outcomeOf(t.Context(), s, subject(onNoList)); got != app.OutcomePending || vendor.calls.Load() != calls {
 		t.Fatalf("29.9 s after a failing probe, a clear subject = %s with %d calls, want pending without calling", got,
 			vendor.calls.Load()-calls)
 	}
 	c.advance(time.Nanosecond)
-	if got := s.Screen(t.Context(), subject(onNoList)); got != app.OutcomeClear {
+	if got := outcomeOf(t.Context(), s, subject(onNoList)); got != app.OutcomeClear {
 		t.Fatalf("a probe that succeeds = %s, want clear", got)
 	}
-	s.Screen(t.Context(), subject(failing))
-	if got := s.Screen(t.Context(), subject(onNoList)); got != app.OutcomeClear || vendor.calls.Load() != calls+3 {
+	outcomeOf(t.Context(), s, subject(failing))
+	if got := outcomeOf(t.Context(), s, subject(onNoList)); got != app.OutcomeClear || vendor.calls.Load() != calls+3 {
 		t.Fatalf("after a probe that succeeds and one failure, a clear subject = %s with %d calls, want clear with 3",
 			got, vendor.calls.Load()-calls)
 	}
@@ -315,10 +337,10 @@ func TestOnlyOneProbeAtATime(t *testing.T) {
 	c.advance(30 * time.Second)
 	probing, endProbe := context.WithCancel(t.Context())
 	probed := make(chan app.Outcome, 1)
-	go func() { probed <- s.Screen(probing, named("held")) }()
+	go func() { probed <- outcomeOf(probing, s, named("held")) }()
 	within(t, entered)
 
-	other := s.Screen(t.Context(), named("clear"))
+	other := outcomeOf(t.Context(), s, named("clear"))
 	endProbe()
 	outcomeWithin(t, probed)
 
@@ -346,16 +368,16 @@ func TestACallFromBeforeTheProbeDoesNotFreeIt(t *testing.T) {
 	before, giveUp := context.WithCancel(t.Context())
 	probing, endProbe := context.WithCancel(t.Context())
 	gaveUp, probed := make(chan struct{}), make(chan app.Outcome, 1)
-	go func() { s.Screen(before, named("before")); close(gaveUp) }()
+	go func() { outcomeOf(before, s, named("before")); close(gaveUp) }()
 	within(t, entered["before"])
 	openCircuit(t, s)
 	c.advance(30 * time.Second)
-	go func() { probed <- s.Screen(probing, named("probe")) }()
+	go func() { probed <- outcomeOf(probing, s, named("probe")) }()
 	within(t, entered["probe"])
 	giveUp()
 	within(t, gaveUp)
 
-	got := s.Screen(t.Context(), named("clear"))
+	got := outcomeOf(t.Context(), s, named("clear"))
 	endProbe()
 	outcomeWithin(t, probed)
 
@@ -383,7 +405,7 @@ func TestLateFailuresDoNotReopenTheCircuit(t *testing.T) {
 	late := make(chan app.Outcome, 5)
 	held.Add(5)
 	for range 5 {
-		go func() { late <- s.Screen(t.Context(), named("held")) }()
+		go func() { late <- outcomeOf(t.Context(), s, named("held")) }()
 	}
 	allHeld := make(chan struct{})
 	go func() { held.Wait(); close(allHeld) }()
@@ -395,7 +417,7 @@ func TestLateFailuresDoNotReopenTheCircuit(t *testing.T) {
 	}
 	c.advance(10 * time.Second)
 
-	if got := s.Screen(t.Context(), named("clear")); got != app.OutcomeClear {
+	if got := outcomeOf(t.Context(), s, named("clear")); got != app.OutcomeClear {
 		t.Fatalf("30 s after the circuit opened, with late failures in between, the probe = %s, want clear", got)
 	}
 }
@@ -411,9 +433,9 @@ func TestEveryChangeOfTheCircuitIsMeasured(t *testing.T) {
 
 	openCircuit(t, s) // closed → open
 	c.advance(30 * time.Second)
-	s.Screen(t.Context(), subject(failing)) // → half_open → open
+	outcomeOf(t.Context(), s, subject(failing)) // → half_open → open
 	c.advance(30 * time.Second)
-	s.Screen(t.Context(), subject(onNoList)) // → half_open → closed
+	outcomeOf(t.Context(), s, subject(onNoList)) // → half_open → closed
 
 	if got, want := transitions(t, reader), map[string]int64{"open": 2, "half_open": 2, "closed": 1}; !maps.Equal(got, want) {
 		t.Fatalf("transitions = %v, want %v", got, want)

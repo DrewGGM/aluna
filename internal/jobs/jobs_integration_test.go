@@ -33,6 +33,13 @@ import (
 
 var testPool *pgxpool.Pool
 
+// screenedClear screens every party clear: these tests are not about screening.
+type screenedClear struct{}
+
+func (screenedClear) ScreenParty(context.Context, postgres.Tx, party.Party) (bool, error) {
+	return true, nil
+}
+
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
 func newDeps(t *testing.T) jobs.Deps {
@@ -51,7 +58,7 @@ func newDeps(t *testing.T) jobs.Deps {
 	return jobs.Deps{
 		Audit:      records,
 		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(testPool), Outbox: events,
-		Deposits: deposits.New(ledgerSvc, party.New(events), productSvc, calendarSvc, pricing.New(productSvc, calendarSvc, pricing.SingleAccount), events),
+		Deposits: deposits.New(ledgerSvc, party.New(events, screenedClear{}), productSvc, calendarSvc, pricing.New(productSvc, calendarSvc, pricing.SingleAccount), events),
 	}
 }
 

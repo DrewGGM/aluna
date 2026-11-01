@@ -35,6 +35,18 @@ func (r *recorder) Emit(_ context.Context, _ postgres.Tx, e outbox.Event) error 
 	return nil
 }
 
+// screener clears every party unless it holds them, and keeps the parties it screened.
+type screener struct {
+	holds    bool
+	err      error
+	screened []party.Party
+}
+
+func (s *screener) ScreenParty(_ context.Context, _ postgres.Tx, p party.Party) (bool, error) {
+	s.screened = append(s.screened, p)
+	return !s.holds, s.err
+}
+
 func input(entity ids.ID) party.RegisterInput {
 	return party.RegisterInput{
 		LegalEntityID: entity, Kind: party.KindNatural, ExternalRef: "onboarding-" + ids.New().String(),
@@ -56,7 +68,7 @@ func register(t *testing.T, svc *party.Service, in party.RegisterInput) (party.P
 // TestRegisterStoresTheReferenceAndAFirstVersion (FR-16): a new party keeps its kind, its onboarding
 // reference and a version 1 in KYC pending with risk, PEP and consents; Get returns it unchanged.
 func TestRegisterStoresTheReferenceAndAFirstVersion(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	in := input(ids.New())
 
 	p, err := register(t, svc, in)
@@ -82,7 +94,7 @@ func TestRegisterStoresTheReferenceAndAFirstVersion(t *testing.T) {
 
 // TestRegisterWithoutConsents: a party registered without consents stores and returns an empty set.
 func TestRegisterWithoutConsents(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	in := input(ids.New())
 	in.Consents = nil
 
@@ -99,7 +111,7 @@ func TestRegisterWithoutConsents(t *testing.T) {
 
 // TestGetReturnsTheLatestVersion: with several versions, Get returns the highest one.
 func TestGetReturnsTheLatestVersion(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	p, err := register(t, svc, input(ids.New()))
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +135,7 @@ func TestRegistrationEmitsAnEventWithoutPersonalData(t *testing.T) {
 	events := &recorder{}
 	in := input(ids.New())
 
-	p, err := register(t, party.New(events), in)
+	p, err := register(t, party.New(events, &screener{}), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +157,7 @@ func TestRegistrationEmitsAnEventWithoutPersonalData(t *testing.T) {
 // TestAnExternalRefIsRegisteredOnce: an entity does not register the same external_ref twice; another
 // entity may use it.
 func TestAnExternalRefIsRegisteredOnce(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	in := input(ids.New())
 	if _, err := register(t, svc, in); err != nil {
 		t.Fatal(err)
@@ -164,7 +176,7 @@ func TestAnExternalRefIsRegisteredOnce(t *testing.T) {
 // TestRegisterRejectsInvalidData: kind, external_ref, risk level and consents are validated before
 // storing; what the database would reject (NUL, an index row too long) is a 422, not a 500.
 func TestRegisterRejectsInvalidData(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	tooMany := map[string]bool{}
 	for i := range 33 {
 		tooMany[fmt.Sprintf("consent_%d", i)] = true
@@ -193,7 +205,7 @@ func TestRegisterRejectsInvalidData(t *testing.T) {
 // TestAnotherEntitysPartyDoesNotExist: Get only sees the parties of the entity it is given; another entity's
 // party is ErrNotFound.
 func TestAnotherEntitysPartyDoesNotExist(t *testing.T) {
-	svc := party.New(&recorder{})
+	svc := party.New(&recorder{}, &screener{})
 	p, err := register(t, svc, input(ids.New()))
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +222,7 @@ func TestAnotherEntitysPartyDoesNotExist(t *testing.T) {
 // TestPartiesAndVersionsAreImmutable: neither a party nor a version is updated, deleted or truncated, not
 // even by the table owner: a change is a new version.
 func TestPartiesAndVersionsAreImmutable(t *testing.T) {
-	p, err := register(t, party.New(&recorder{}), input(ids.New()))
+	p, err := register(t, party.New(&recorder{}, &screener{}), input(ids.New()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,4 +263,99 @@ func pgCode(err error) string {
 		return pgErr.Code
 	}
 	return ""
+}
+
+// TestAFailingScreeningRegistersNothing (FR-42): if screening fails, nothing is registered.
+func TestAFailingScreeningRegistersNothing(t *testing.T) {
+	failed := &screener{err: errors.New("cases unavailable")}
+	svc, in := party.New(&recorder{}, failed), input(ids.New())
+
+	_, failure := register(t, svc, in)
+
+	if len(failed.screened) != 1 {
+		t.Fatalf("screened %+v, want the party", failed.screened)
+	}
+	if _, err := svc.Get(t.Context(), testPool, in.LegalEntityID, failed.screened[0].ID); !errors.Is(failure, failed.err) || !errors.Is(err, party.ErrNotFound) {
+		t.Fatalf("a failing screening = %v and then the party = %v, want its error and nothing registered", failure, err)
+	}
+}
+
+// TestAPartyScreeningDoesNotClearWaitsForIt (FR-42): a party screened before it is stored, with its id and
+// reference, and not cleared, is registered in KYC pending_screening, and its event says so.
+func TestAPartyScreeningDoesNotClearWaitsForIt(t *testing.T) {
+	events, holding := &recorder{}, &screener{holds: true}
+	in := input(ids.New())
+
+	p, err := register(t, party.New(events, holding), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if p.Current.KYCStatus != party.KYCPendingScreening || p.Current.Number != 1 {
+		t.Fatalf("a party screening did not clear = %+v, want version 1 pending_screening", p.Current)
+	}
+	if len(holding.screened) != 1 || holding.screened[0].ID != p.ID || holding.screened[0].ExternalRef != in.ExternalRef {
+		t.Fatalf("screened %+v, want the party %s before it was stored", holding.screened, p.ID)
+	}
+	var payload struct {
+		KYCStatus string `json:"kyc_status"`
+	}
+	if b, err := json.Marshal(events.events[0].Data); err != nil || json.Unmarshal(b, &payload) != nil || payload.KYCStatus != "pending_screening" {
+		t.Fatalf("registered event = %+v, want kyc_status pending_screening", events.events[0].Data)
+	}
+}
+
+// resolve resolves in its own transaction the screening of party id of entity.
+func resolve(t *testing.T, svc *party.Service, entity, id ids.ID, cleared bool) (party.Party, error) {
+	t.Helper()
+	var p party.Party
+	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
+		var err error
+		p, err = svc.ResolveScreening(t.Context(), tx, entity, id, cleared)
+		return err
+	})
+	return p, err
+}
+
+// registered registers a party of entity with svc.
+func registered(t *testing.T, svc *party.Service, entity ids.ID) party.Party {
+	t.Helper()
+	p, err := register(t, svc, input(entity))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestAResolvedScreeningMovesTheParty (FR-42): a cleared screening leaves the party in KYC pending and a
+// confirmed one in rejected, each as a new version; a party not pending screening has none to resolve.
+func TestAResolvedScreeningMovesTheParty(t *testing.T) {
+	svc := party.New(&recorder{}, &screener{holds: true})
+	entity := ids.New()
+	first, second := registered(t, svc, entity), registered(t, svc, entity)
+
+	cleared, clearErr := resolve(t, svc, entity, first.ID, true)
+	confirmed, confirmErr := resolve(t, svc, entity, second.ID, false)
+	_, again := resolve(t, svc, entity, first.ID, true)
+	_, elsewhere := resolve(t, svc, ids.New(), second.ID, true)
+
+	if clearErr != nil || cleared.Current.KYCStatus != party.KYCPending || cleared.Current.Number != 2 {
+		t.Fatalf("a cleared screening = %+v (%v), want version 2 pending", cleared.Current, clearErr)
+	}
+	if confirmErr != nil || confirmed.Current.KYCStatus != party.KYCRejected || confirmed.Current.Number != 2 {
+		t.Fatalf("a confirmed match = %+v (%v), want version 2 rejected", confirmed.Current, confirmErr)
+	}
+	if !errors.Is(again, party.ErrNotPendingScreening) || !errors.Is(elsewhere, party.ErrNotFound) {
+		t.Fatalf("resolving again = %v and in another entity = %v, want ErrNotPendingScreening and ErrNotFound", again, elsewhere)
+	}
+}
+
+// TestOnlyItsCaseTakesAPartyOutOfScreening (FR-42): a KYC change cannot take a party out of
+// pending_screening.
+func TestOnlyItsCaseTakesAPartyOutOfScreening(t *testing.T) {
+	svc := party.New(&recorder{}, &screener{holds: true})
+
+	if _, err := changeKYC(t, svc, registered(t, svc, ids.New()), party.KYCApproved); !errors.Is(err, party.ErrInvalidKYCTransition) {
+		t.Fatalf("approving the KYC of a party pending screening = %v, want ErrInvalidKYCTransition", err)
+	}
 }

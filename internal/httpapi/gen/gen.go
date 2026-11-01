@@ -143,10 +143,11 @@ func (e HoldStatus) Valid() bool {
 
 // Defines values for KYCStatus.
 const (
-	KYCStatusApproved  KYCStatus = "approved"
-	KYCStatusPending   KYCStatus = "pending"
-	KYCStatusRejected  KYCStatus = "rejected"
-	KYCStatusSuspended KYCStatus = "suspended"
+	KYCStatusApproved         KYCStatus = "approved"
+	KYCStatusPending          KYCStatus = "pending"
+	KYCStatusPendingScreening KYCStatus = "pending_screening"
+	KYCStatusRejected         KYCStatus = "rejected"
+	KYCStatusSuspended        KYCStatus = "suspended"
 )
 
 // Valid indicates whether the value is a known member of the KYCStatus enum.
@@ -155,6 +156,8 @@ func (e KYCStatus) Valid() bool {
 	case KYCStatusApproved:
 		return true
 	case KYCStatusPending:
+		return true
+	case KYCStatusPendingScreening:
 		return true
 	case KYCStatusRejected:
 		return true
@@ -246,6 +249,24 @@ func (e QuoteOperation) Valid() bool {
 	case Transfer:
 		return true
 	case Withdrawal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResolveScreeningCaseResolution.
+const (
+	Cleared   ResolveScreeningCaseResolution = "cleared"
+	Confirmed ResolveScreeningCaseResolution = "confirmed"
+)
+
+// Valid indicates whether the value is a known member of the ResolveScreeningCaseResolution enum.
+func (e ResolveScreeningCaseResolution) Valid() bool {
+	switch e {
+	case Cleared:
+		return true
+	case Confirmed:
 		return true
 	default:
 		return false
@@ -685,6 +706,15 @@ type RequestReversal struct {
 	Reason       string              `json:"reason"`
 }
 
+// ResolveScreeningCase defines model for ResolveScreeningCase.
+type ResolveScreeningCase struct {
+	// Resolution `cleared` if the subject is not on the lists, `confirmed` if the match is real
+	Resolution ResolveScreeningCaseResolution `json:"resolution"`
+}
+
+// ResolveScreeningCaseResolution `cleared` if the subject is not on the lists, `confirmed` if the match is real
+type ResolveScreeningCaseResolution string
+
 // RiskLevel defines model for RiskLevel.
 type RiskLevel string
 
@@ -793,6 +823,11 @@ type CreateProductVersionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ResolveScreeningCaseParams defines parameters for ResolveScreeningCase.
+type ResolveScreeningCaseParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // PostTransactionParams defines parameters for PostTransaction.
 type PostTransactionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -846,6 +881,9 @@ type CreateProductVersionJSONRequestBody = CreateProductVersion
 
 // CreateQuoteJSONRequestBody defines body for CreateQuote for application/json ContentType.
 type CreateQuoteJSONRequestBody = CreateQuote
+
+// ResolveScreeningCaseJSONRequestBody defines body for ResolveScreeningCase for application/json ContentType.
+type ResolveScreeningCaseJSONRequestBody = ResolveScreeningCase
 
 // PostTransactionJSONRequestBody defines body for PostTransaction for application/json ContentType.
 type PostTransactionJSONRequestBody = PostTransaction
@@ -933,6 +971,9 @@ type ServerInterface interface {
 	// CreateQuote Quote what an operation costs
 	// (POST /v1/quotes)
 	CreateQuote(w http.ResponseWriter, r *http.Request)
+	// ResolveScreeningCase Request the resolution of a screening case
+	// (POST /v1/screening-cases/{id}/resolution)
+	ResolveScreeningCase(w http.ResponseWriter, r *http.Request, id ID, params ResolveScreeningCaseParams)
 	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(w http.ResponseWriter, r *http.Request, params PostTransactionParams)
@@ -1937,6 +1978,60 @@ func (siw *ServerInterfaceWrapper) CreateQuote(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ResolveScreeningCase operation middleware
+func (siw *ServerInterfaceWrapper) ResolveScreeningCase(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ResolveScreeningCaseParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResolveScreeningCase(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PostTransaction operation middleware
 func (siw *ServerInterfaceWrapper) PostTransaction(w http.ResponseWriter, r *http.Request) {
 
@@ -2242,6 +2337,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/parties", wrapper.RegisterParty)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/parties/{id}", wrapper.GetParty)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/parties/{id}/kyc-status-changes", wrapper.RequestKYCStatusChange)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/screening-cases/{id}/resolution", wrapper.ResolveScreeningCase)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/products", wrapper.CreateProduct)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/products/{id}/versions", wrapper.CreateProductVersion)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/product-versions/{id}", wrapper.GetProductVersion)
@@ -4454,6 +4550,91 @@ func (response CreateQuotedefaultApplicationProblemPlusJSONResponse) VisitCreate
 	return err
 }
 
+type ResolveScreeningCaseRequestObject struct {
+	Id     ID `json:"id"`
+	Params ResolveScreeningCaseParams
+	Body   *ResolveScreeningCaseJSONRequestBody
+}
+
+type ResolveScreeningCaseResponseObject interface {
+	VisitResolveScreeningCaseResponse(w http.ResponseWriter) error
+}
+
+type ResolveScreeningCase202JSONResponse Approval
+
+func (response ResolveScreeningCase202JSONResponse) VisitResolveScreeningCaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveScreeningCase400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ResolveScreeningCase400ApplicationProblemPlusJSONResponse) VisitResolveScreeningCaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveScreeningCase404ApplicationProblemPlusJSONResponse Problem
+
+func (response ResolveScreeningCase404ApplicationProblemPlusJSONResponse) VisitResolveScreeningCaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveScreeningCase409ApplicationProblemPlusJSONResponse Problem
+
+func (response ResolveScreeningCase409ApplicationProblemPlusJSONResponse) VisitResolveScreeningCaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveScreeningCasedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ResolveScreeningCasedefaultApplicationProblemPlusJSONResponse) VisitResolveScreeningCaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PostTransactionRequestObject struct {
 	Params PostTransactionParams
 	Body   *PostTransactionJSONRequestBody
@@ -4923,6 +5104,9 @@ type StrictServerInterface interface {
 	// CreateQuote Quote what an operation costs
 	// (POST /v1/quotes)
 	CreateQuote(ctx context.Context, request CreateQuoteRequestObject) (CreateQuoteResponseObject, error)
+	// ResolveScreeningCase Request the resolution of a screening case
+	// (POST /v1/screening-cases/{id}/resolution)
+	ResolveScreeningCase(ctx context.Context, request ResolveScreeningCaseRequestObject) (ResolveScreeningCaseResponseObject, error)
 	// PostTransaction Post a balanced transaction
 	// (POST /v1/transactions)
 	PostTransaction(ctx context.Context, request PostTransactionRequestObject) (PostTransactionResponseObject, error)
@@ -5712,6 +5896,40 @@ func (sh *strictHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateQuoteResponseObject); ok {
 		if err := validResponse.VisitCreateQuoteResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResolveScreeningCase operation middleware
+func (sh *strictHandler) ResolveScreeningCase(w http.ResponseWriter, r *http.Request, id ID, params ResolveScreeningCaseParams) {
+	var request ResolveScreeningCaseRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body ResolveScreeningCaseJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResolveScreeningCase(ctx, request.(ResolveScreeningCaseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResolveScreeningCase")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResolveScreeningCaseResponseObject); ok {
+		if err := validResponse.VisitResolveScreeningCaseResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

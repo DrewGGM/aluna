@@ -27,6 +27,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi"
 	"github.com/DrewGGM/aluna/internal/idempotency"
@@ -280,18 +281,21 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	keys := idempotency.NewStore(pool)
 	calendarSvc := calendar.New()
 	ledgerSvc := ledger.New(calendarSvc, events)
-	partySvc := party.New(events)
+	complianceSvc := compliance.New(events)
+	partySvc := party.New(events, complianceSvc.PartyScreener())
+	complianceSvc.OnResolved(compliance.CaseParty, compliance.ResolvingParties(partySvc))
 	productSvc := products.New(events)
 	pricingSvc := pricing.New(productSvc, calendarSvc, cfg.gmf)
 	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
 	requests := approvals.New(authz.policy)
 	api := httpapi.API{
-		LedgerHandlers:   httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
-		ApprovalHandlers: httpapi.NewApprovalHandlers(requests, uow, keys, pool),
-		PartyHandlers:    httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
-		ProductHandlers:  httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
-		DepositHandlers:  httpapi.NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, pool),
-		PricingHandlers:  httpapi.NewPricingHandlers(pricingSvc, depositSvc, uow),
+		LedgerHandlers:     httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
+		ApprovalHandlers:   httpapi.NewApprovalHandlers(requests, uow, keys, pool),
+		PartyHandlers:      httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
+		ProductHandlers:    httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
+		DepositHandlers:    httpapi.NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, pool),
+		PricingHandlers:    httpapi.NewPricingHandlers(pricingSvc, depositSvc, uow),
+		ComplianceHandlers: httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)
@@ -404,7 +408,8 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality,
 	calendarSvc := calendar.New()
 	ledgerSvc := ledger.New(calendarSvc, events)
 	productSvc := products.New(events)
-	depositSvc := deposits.New(ledgerSvc, party.New(events), productSvc, calendarSvc, pricing.New(productSvc, calendarSvc, gmf), events)
+	parties := party.New(events, compliance.New(events).PartyScreener()) // the jobs read parties, never register them
+	depositSvc := deposits.New(ledgerSvc, parties, productSvc, calendarSvc, pricing.New(productSvc, calendarSvc, gmf), events)
 	cfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
 		Audit: records, Deposits: depositSvc,

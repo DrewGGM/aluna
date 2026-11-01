@@ -87,7 +87,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 		ApprovalHandlers: NewApprovalHandlers(requests, uow, keys, testPool),
 		PartyHandlers:    NewPartyHandlers(partySvc, requests, uow, keys, testPool),
 		ProductHandlers:  NewProductHandlers(productSvc, requests, uow, keys, testPool),
-		DepositHandlers:  NewDepositHandlers(depositSvc, uow, keys, testPool),
+		DepositHandlers:  NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, testPool),
 		PricingHandlers:  NewPricingHandlers(pricingSvc, depositSvc, uow),
 	}
 	cfg := ServerConfig{

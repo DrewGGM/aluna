@@ -107,6 +107,11 @@ func conflict(code, title string) Problem {
 	return Problem{Status: http.StatusConflict, Code: code, Title: title}
 }
 
+// invalidRequest is a 400 invalid_request whose detail says what a valid request carries.
+func invalidRequest(title, detail string) Problem {
+	return Problem{Status: http.StatusBadRequest, Code: "invalid_request", Title: title, Detail: detail}
+}
+
 // problems maps domain errors to the API, grouped by module. It is walked in order because an error can
 // wrap two sentinels; the first one in the list wins. Detail never carries the internal text of the
 // error.
@@ -115,15 +120,10 @@ var problems = []struct {
 	p   Problem
 }{
 	// httpapi
-	{errInvalidIdempotencyKey, Problem{
-		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Invalid Idempotency-Key",
-		Detail: fmt.Sprintf("The key must be UTF-8 text of up to %d characters.", maxIdempotencyKey),
-	}},
+	{errInvalidIdempotencyKey, invalidRequest("Invalid Idempotency-Key",
+		fmt.Sprintf("The key must be UTF-8 text of up to %d characters.", maxIdempotencyKey))},
 	{errReversalOfReversal, conflict("reversal_of_reversal", "The transaction is already a reversal")},
-	{errInvalidApprovalStatus, Problem{
-		Status: http.StatusBadRequest, Code: "invalid_request", Title: "Unknown request status",
-		Detail: "status is pending, approved, rejected, failed or expired.",
-	}},
+	{errInvalidApprovalStatus, invalidRequest("Unknown request status", "status is pending, approved, rejected, failed or expired.")},
 	// idempotency
 	{idempotency.ErrKeyReused, unprocessable("idempotency_key_reused", "The Idempotency-Key was already used with another payload")},
 	{idempotency.ErrInProgress, conflict("request_in_progress", "A request with the same Idempotency-Key is in progress")},
@@ -131,6 +131,8 @@ var problems = []struct {
 	{money.ErrUnknownCurrency, unprocessable("unknown_currency", "Unsupported currency")},
 	{money.ErrOverflow, unprocessable("amount_overflow", "The amount does not fit in the allowed range")},
 	// ledger
+	{ledger.ErrInvalidPage, invalidRequest("Invalid page",
+		fmt.Sprintf("limit is 1 to %d, and cursor is the next_cursor of a previous page.", ledger.MaxPageSize))},
 	{ledger.ErrDuplicateExternalRef, conflict("duplicate_external_ref", "The external reference was already posted")},
 	{ledger.ErrUnbalanced, unprocessable("unbalanced_transaction", "The transaction does not sum to zero in each currency")},
 	{ledger.ErrTooFewEntries, unprocessable("too_few_entries", "A transaction needs at least two entries")},

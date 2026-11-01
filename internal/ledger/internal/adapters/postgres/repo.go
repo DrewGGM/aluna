@@ -270,6 +270,30 @@ func (s *Store) PostedAsOf(ctx context.Context, accountID ids.ID, at app.Balance
 	return posted, nil
 }
 
+// EntriesBefore reads the first limit entries of the entity's account before p, newest first.
+func (s *Store) EntriesBefore(ctx context.Context, entity, accountID ids.ID, p app.Position, limit int) ([]app.HistoryEntry, error) {
+	arg := sqlcgen.EntriesBeforeParams{AccountID: accountID, LegalEntityID: entity, Page: int64(limit)}
+	if !p.PostedAt.IsZero() {
+		arg.PostedAt, arg.EntryID = pgtype.Timestamptz{Time: p.PostedAt, Valid: true}, pgtype.Int8{Int64: p.EntryID, Valid: true}
+	}
+	rows, err := s.q.EntriesBefore(ctx, arg)
+	if err != nil {
+		return nil, fmt.Errorf("read history: %w", err)
+	}
+	entries := make([]app.HistoryEntry, len(rows))
+	for i, r := range rows {
+		cur, err := money.CurrencyOf(r.Currency)
+		if err != nil {
+			return nil, fmt.Errorf("entry %d: %w", r.ID, err)
+		}
+		entries[i] = app.HistoryEntry{
+			EntryID: r.ID, TransactionID: r.TransactionID, Code: r.Code, Amount: money.New(r.Amount, cur),
+			ValueDate: r.ValueDate, PostedAt: r.PostedAt,
+		}
+	}
+	return entries, nil
+}
+
 func isUniqueViolation(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint

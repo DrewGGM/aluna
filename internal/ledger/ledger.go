@@ -48,7 +48,14 @@ type (
 	Balance = app.Balance
 	// BalanceAsOf is the bitemporal balance cut: value date and the moment it was known.
 	BalanceAsOf = app.BalanceAsOf
+	// HistoryEntry is an entry of an account's history, with its transaction.
+	HistoryEntry = app.HistoryEntry
+	// HistoryPage is a page of an account's history and the cursor of the next one.
+	HistoryPage = app.HistoryPage
 )
+
+// MaxPageSize is the most entries a page of history has.
+const MaxPageSize = app.MaxPageSize
 
 // Accounting kinds and balance modes.
 const (
@@ -79,6 +86,7 @@ var (
 	ErrDuplicateExternalRef = app.ErrDuplicateExternalRef
 	ErrAlreadyReversed      = app.ErrAlreadyReversed
 	ErrHoldNotFound         = app.ErrHoldNotFound
+	ErrInvalidPage          = app.ErrInvalidPage
 	ErrInvalidHold          = domain.ErrInvalidHold
 	ErrHoldNotPending       = domain.ErrHoldNotPending
 	ErrAmountExceedsHold    = domain.ErrAmountExceedsHold
@@ -270,6 +278,14 @@ func (s *Service) Transaction(ctx context.Context, q postgres.Querier, entity, i
 // does. q can be the pool or a Tx.
 func (s *Service) PostedAsOf(ctx context.Context, q postgres.Querier, accountID ids.ID, at BalanceAsOf) (int64, error) {
 	return pg.NewStore(q).PostedAsOf(ctx, accountID, at)
+}
+
+// History reads the page of limit entries (up to MaxPageSize) of the history of the entity's account that
+// follows cursor, newest first by (posted_at, id), or its first page when cursor is empty (FR-44); a cursor
+// the ledger did not issue is ErrInvalidPage. An account that does not exist and another entity's both give
+// an empty page: Account tells them apart. q can be the pool or a Tx.
+func (s *Service) History(ctx context.Context, q postgres.Querier, entity, accountID ids.ID, cursor string, limit int) (HistoryPage, error) {
+	return app.History(ctx, pg.NewStore(q), entity, accountID, cursor, limit)
 }
 
 // Balance reads an account's materialized balance, without locking it. q can be the pool or a Tx.

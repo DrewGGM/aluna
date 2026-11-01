@@ -579,6 +579,39 @@ paths:
         "400": {$ref: "#/components/responses/Problem"}
         "404": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/deposit-accounts/{id}/transactions:
+    get:
+      operationId: listDepositAccountTransactions
+      summary: Read a deposit account's history
+      description: >-
+        The entries of its `ledger_account_id`, newest first by posted_at and then by the order they were
+        posted (FR-44): a withdrawal shows its amount, its fees and its GMF as entries of one transaction.
+        `next_cursor` reads the next page and is absent on the last one. Paging never repeats an entry nor
+        skips one committed before the first page; one committed while paging shows up in a page not read
+        yet or not at all. A cursor this endpoint did not issue, or a `limit` outside 1 to 200, is 400
+        `invalid_request`.
+      x-aluna-permission: deposits.accounts.read
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` of the previous page; absent for the first one.
+          schema: {type: string}
+        - name: limit
+          in: query
+          required: false
+          description: Entries per page.
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+      responses:
+        "200":
+          description: A page of the history
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccountHistory"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/deposit-accounts/{id}/deposits:
     post:
       operationId: createDeposit
@@ -1074,6 +1107,25 @@ components:
         status: {$ref: "#/components/schemas/DepositAccountStatus"}
         opened_on: {type: string, format: date}
         last_customer_activity_on: {type: string, format: date, description: Business date of the customer's last movement}
+    AccountHistory:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items: {$ref: "#/components/schemas/HistoryEntry"}
+        next_cursor: {type: string, description: Cursor of the next page; absent on the last one}
+    HistoryEntry:
+      type: object
+      required: [transaction_id, code, amount, value_date, posted_at]
+      properties:
+        transaction_id: {type: string, format: uuid}
+        code: {type: string, description: Code of its transaction}
+        amount:
+          $ref: "#/components/schemas/Money"
+          description: Signed, debit positive and credit negative.
+        value_date: {type: string, format: date}
+        posted_at: {type: string, format: date-time}
     CashMovement:
       type: object
       required: [amount]

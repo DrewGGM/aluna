@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -326,5 +327,72 @@ func TestALimitIsAProblemThatNamesIt(t *testing.T) {
 	if err := json.Unmarshal(r.body, &p); err != nil || r.status != http.StatusUnprocessableEntity || p.Code != "limit_exceeded" ||
 		p.Detail != "The movement exceeds the product's per_operation limit of 1000 minor units." || w.natural(t, a) != 0 {
 		t.Fatalf("deposit over the limit = %d %s (%v), balance %d; want 422 limit_exceeded naming per_operation and 0", r.status, r.body, err, w.natural(t, a))
+	}
+}
+
+// historyPage reads the history page of query at path, which must be 200, and its entries' amounts.
+func historyPage(t *testing.T, ts *httptest.Server, path, query string) (gen.AccountHistory, []int64) {
+	t.Helper()
+	var page gen.AccountHistory
+	if status := call(t, ts, http.MethodGet, path+query, "", &page); status != http.StatusOK {
+		t.Fatalf("history %s = %d, want 200", query, status)
+	}
+	units := make([]int64, len(page.Entries))
+	for i, e := range page.Entries {
+		units[i] = e.Amount.Amount
+	}
+	return page, units
+}
+
+// TestTheHistoryPagesOverHTTP (FR-44): after a deposit of 100,000 and a withdrawal of 60,000 with its GMF of
+// 240, the account's history in pages of 2 is the GMF and the withdrawal, of one transaction, then the
+// deposit, with no cursor after it; without limit, or with one of 200, it is one page of the three.
+func TestTheHistoryPagesOverHTTP(t *testing.T) {
+	w := newDepositWorld(t)
+	a := w.opened(t, w.party(t, party.KYCApproved), w.savings(t, true))
+	expectCreated(t, "deposit", w.move(t, a.Id.String(), "deposits", amountBody(10000000)))
+	expectCreated(t, "withdrawal", w.move(t, a.Id.String(), "withdrawals", amountBody(6000000)))
+	path, all := "/v1/deposit-accounts/"+a.Id.String()+"/transactions", []int64{24000, 6000000, -10000000}
+
+	first, firstUnits := historyPage(t, w.ts, path, "?limit=2")
+	if first.NextCursor == nil {
+		t.Fatalf("first page = %+v, want a next cursor", first)
+	}
+	second, secondUnits := historyPage(t, w.ts, path, "?limit=2&cursor="+*first.NextCursor)
+	whole, wholeUnits := historyPage(t, w.ts, path, "")
+	_, largestUnits := historyPage(t, w.ts, path, "?limit=200")
+
+	if second.NextCursor != nil || !slices.Equal(append(firstUnits, secondUnits...), all) ||
+		first.Entries[0].TransactionId != first.Entries[1].TransactionId {
+		t.Fatalf("pages = %+v and %+v, want the withdrawal's GMF and amount, then the deposit, and no cursor after it", first, second)
+	}
+	if whole.NextCursor != nil || !slices.Equal(wholeUnits, all) || !slices.Equal(largestUnits, all) {
+		t.Fatalf("without limit = %+v and with 200 %v, want one page of the three", whole, largestUnits)
+	}
+}
+
+// TestAWrongPageIsAProblem (FR-44): a limit outside 1 to 200 or a cursor of nowhere is 400 invalid_request,
+// and the history of an account of nowhere is 404.
+func TestAWrongPageIsAProblem(t *testing.T) {
+	w := newDepositWorld(t)
+	a := w.opened(t, w.party(t, party.KYCApproved), w.savings(t, true))
+	path := "/v1/deposit-accounts/" + a.Id.String() + "/transactions"
+	cases := map[string]struct {
+		path   string
+		status int
+		code   string
+	}{
+		"limit 0":             {path + "?limit=0", http.StatusBadRequest, "invalid_request"},
+		"limit 201":           {path + "?limit=201", http.StatusBadRequest, "invalid_request"},
+		"a cursor of nowhere": {path + "?cursor=nowhere", http.StatusBadRequest, "invalid_request"},
+		// two varints, but posted 9,500 years before 1970: PostgreSQL could not even compare it
+		"a cursor out of time":  {path + "?cursor=___viaOa6KkIAg", http.StatusBadRequest, "invalid_request"},
+		"an account of nowhere": {"/v1/deposit-accounts/" + ids.New().String() + "/transactions", http.StatusNotFound, "not_found"},
+	}
+	for name, tc := range cases {
+		var problem Problem
+		if status := call(t, w.ts, http.MethodGet, tc.path, "", &problem); status != tc.status || problem.Code != tc.code {
+			t.Errorf("%s = %d %+v, want %d %s", name, status, problem, tc.status, tc.code)
+		}
 	}
 }

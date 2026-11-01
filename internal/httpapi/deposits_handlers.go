@@ -23,19 +23,23 @@ import (
 // the actor.
 const movementChannel = "api"
 
+// defaultPageSize is the page of history of a request without limit.
+const defaultPageSize = 50
+
 var openDepositAccount = operation{method: http.MethodPost, path: "/v1/deposit-accounts", success: http.StatusCreated}
 
 // DepositHandlers implements the contract's deposit account operations (api/openapi.yaml).
 type DepositHandlers struct {
 	deposits *deposits.Service
+	ledger   *ledger.Service
 	commands commands
 	reader   postgres.Querier
 }
 
-// NewDepositHandlers creates the deposit handlers. keys stores the responses of the commands with
-// Idempotency-Key; reader serves the reads outside a transaction.
-func NewDepositHandlers(d *deposits.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *DepositHandlers {
-	return &DepositHandlers{deposits: d, commands: commands{uow: uow, keys: keys}, reader: reader}
+// NewDepositHandlers creates the deposit handlers; l reads the accounts' history. keys stores the responses
+// of the commands with Idempotency-Key; reader serves the reads outside a transaction.
+func NewDepositHandlers(d *deposits.Service, l *ledger.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *DepositHandlers {
+	return &DepositHandlers{deposits: d, ledger: l, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
 // OpenDepositAccount opens an account of the token's entity, once per Idempotency-Key.
@@ -69,6 +73,45 @@ func (h *DepositHandlers) GetDepositAccount(ctx context.Context, req gen.GetDepo
 		return nil, err
 	}
 	return gen.GetDepositAccount200JSONResponse(toDepositAccountJSON(a)), nil
+}
+
+// ListDepositAccountTransactions reads a page of the history of an account of the token's entity.
+func (h *DepositHandlers) ListDepositAccountTransactions(ctx context.Context, req gen.ListDepositAccountTransactionsRequestObject) (gen.ListDepositAccountTransactionsResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	a, err := h.deposits.Account(ctx, h.reader, p.LegalEntityID, ids.ID(req.Id))
+	if err != nil {
+		return nil, err
+	}
+	cursor, limit := "", defaultPageSize
+	if req.Params.Cursor != nil {
+		cursor = *req.Params.Cursor
+	}
+	if req.Params.Limit != nil {
+		limit = *req.Params.Limit
+	}
+	page, err := h.ledger.History(ctx, h.reader, p.LegalEntityID, a.LedgerAccountID, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	return gen.ListDepositAccountTransactions200JSONResponse(toHistoryJSON(page)), nil
+}
+
+func toHistoryJSON(page ledger.HistoryPage) gen.AccountHistory {
+	entries := make([]gen.HistoryEntry, len(page.Entries))
+	for i, e := range page.Entries {
+		entries[i] = gen.HistoryEntry{
+			TransactionId: [16]byte(e.TransactionID), Code: e.Code, Amount: moneyJSON(e.Amount),
+			ValueDate: dateOf(e.ValueDate), PostedAt: e.PostedAt,
+		}
+	}
+	h := gen.AccountHistory{Entries: entries}
+	if page.Next != "" {
+		h.NextCursor = &page.Next
+	}
+	return h
 }
 
 // CreateDeposit posts cash into an account of the token's entity, once per Idempotency-Key.

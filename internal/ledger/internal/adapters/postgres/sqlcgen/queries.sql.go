@@ -252,6 +252,71 @@ func (q *Queries) DatabaseNow(ctx context.Context) (time.Time, error) {
 	return now, err
 }
 
+const entriesBefore = `-- name: EntriesBefore :many
+SELECT e.id, e.transaction_id, t.code, e.currency, e.amount, e.value_date, e.posted_at
+FROM ledger.entries e
+JOIN ledger.transactions t ON t.id = e.transaction_id
+WHERE e.account_id = $1 AND e.legal_entity_id = $2
+  AND (e.posted_at, e.id) < (coalesce($3::timestamptz, 'infinity'), coalesce($4::bigint, 0))
+ORDER BY e.posted_at DESC, e.id DESC
+LIMIT $5::bigint
+`
+
+type EntriesBeforeParams struct {
+	AccountID     ids.ID
+	LegalEntityID ids.ID
+	PostedAt      pgtype.Timestamptz
+	EntryID       pgtype.Int8
+	Page          int64
+}
+
+type EntriesBeforeRow struct {
+	ID            int64
+	TransactionID ids.ID
+	Code          string
+	Currency      string
+	Amount        int64
+	ValueDate     time.Time
+	PostedAt      time.Time
+}
+
+// An account's history (FR-44): its entries before the position (posted_at, entry_id), newest first,
+// walking entries_account_history_idx backwards; a null position is the newest one, that of the first page.
+// Another entity's account has no entries for it. Each entry reads its transaction's code by primary key.
+func (q *Queries) EntriesBefore(ctx context.Context, arg EntriesBeforeParams) ([]EntriesBeforeRow, error) {
+	rows, err := q.db.Query(ctx, entriesBefore,
+		arg.AccountID,
+		arg.LegalEntityID,
+		arg.PostedAt,
+		arg.EntryID,
+		arg.Page,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EntriesBeforeRow
+	for rows.Next() {
+		var i EntriesBeforeRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TransactionID,
+			&i.Code,
+			&i.Currency,
+			&i.Amount,
+			&i.ValueDate,
+			&i.PostedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const entriesOf = `-- name: EntriesOf :many
 SELECT account_id, currency, amount FROM ledger.entries WHERE transaction_id = $1 ORDER BY id
 `

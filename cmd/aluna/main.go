@@ -290,7 +290,7 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 		ApprovalHandlers: httpapi.NewApprovalHandlers(requests, uow, keys, pool),
 		PartyHandlers:    httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
 		ProductHandlers:  httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
-		DepositHandlers:  httpapi.NewDepositHandlers(depositSvc, uow, keys, pool),
+		DepositHandlers:  httpapi.NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, pool),
 		PricingHandlers:  httpapi.NewPricingHandlers(pricingSvc, depositSvc, uow),
 	}
 	ready := func(ctx context.Context) error {

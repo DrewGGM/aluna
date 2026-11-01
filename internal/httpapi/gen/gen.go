@@ -273,6 +273,14 @@ func (e RiskLevel) Valid() bool {
 	}
 }
 
+// AccountHistory defines model for AccountHistory.
+type AccountHistory struct {
+	Entries []HistoryEntry `json:"entries"`
+
+	// NextCursor Cursor of the next page; absent on the last one
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
 // AccountKind defines model for AccountKind.
 type AccountKind string
 
@@ -443,6 +451,18 @@ type GMFExemption struct {
 	AccountId openapi_types.UUID `json:"account_id"`
 	MarkedAt  time.Time          `json:"marked_at"`
 	PartyId   openapi_types.UUID `json:"party_id"`
+}
+
+// HistoryEntry defines model for HistoryEntry.
+type HistoryEntry struct {
+	// Amount Signed, debit positive and credit negative.
+	Amount Money `json:"amount"`
+
+	// Code Code of its transaction
+	Code          string             `json:"code"`
+	PostedAt      time.Time          `json:"posted_at"`
+	TransactionId openapi_types.UUID `json:"transaction_id"`
+	ValueDate     openapi_types.Date `json:"value_date"`
 }
 
 // Hold defines model for Hold.
@@ -706,6 +726,15 @@ type CreateDepositParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListDepositAccountTransactionsParams defines parameters for ListDepositAccountTransactions.
+type ListDepositAccountTransactionsParams struct {
+	// Cursor The `next_cursor` of the previous page; absent for the first one.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit Entries per page.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // CreateWithdrawalParams defines parameters for CreateWithdrawal.
 type CreateWithdrawalParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -850,6 +879,9 @@ type ServerInterface interface {
 	// CreateGMFExemption Exempt an account from GMF
 	// (POST /v1/deposit-accounts/{id}/gmf-exemption)
 	CreateGMFExemption(w http.ResponseWriter, r *http.Request, id ID)
+	// ListDepositAccountTransactions Read a deposit account's history
+	// (GET /v1/deposit-accounts/{id}/transactions)
+	ListDepositAccountTransactions(w http.ResponseWriter, r *http.Request, id ID, params ListDepositAccountTransactionsParams)
 	// CreateWithdrawal Withdraw cash from an account
 	// (POST /v1/deposit-accounts/{id}/withdrawals)
 	CreateWithdrawal(w http.ResponseWriter, r *http.Request, id ID, params CreateWithdrawalParams)
@@ -1179,6 +1211,61 @@ func (siw *ServerInterfaceWrapper) CreateGMFExemption(w http.ResponseWriter, r *
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateGMFExemption(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListDepositAccountTransactions operation middleware
+func (siw *ServerInterfaceWrapper) ListDepositAccountTransactions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDepositAccountTransactionsParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDepositAccountTransactions(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2163,6 +2250,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/market-parameters", wrapper.RequestMarketParameterLoad)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts", wrapper.OpenDepositAccount)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/deposit-accounts/{id}", wrapper.GetDepositAccount)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/deposit-accounts/{id}/transactions", wrapper.ListDepositAccountTransactions)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/deposits", wrapper.CreateDeposit)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/withdrawals", wrapper.CreateWithdrawal)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
@@ -2805,6 +2893,76 @@ type CreateGMFExemptiondefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response CreateGMFExemptiondefaultApplicationProblemPlusJSONResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDepositAccountTransactionsRequestObject struct {
+	Id     ID `json:"id"`
+	Params ListDepositAccountTransactionsParams
+}
+
+type ListDepositAccountTransactionsResponseObject interface {
+	VisitListDepositAccountTransactionsResponse(w http.ResponseWriter) error
+}
+
+type ListDepositAccountTransactions200JSONResponse AccountHistory
+
+func (response ListDepositAccountTransactions200JSONResponse) VisitListDepositAccountTransactionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDepositAccountTransactions400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListDepositAccountTransactions400ApplicationProblemPlusJSONResponse) VisitListDepositAccountTransactionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDepositAccountTransactions404ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDepositAccountTransactions404ApplicationProblemPlusJSONResponse) VisitListDepositAccountTransactionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDepositAccountTransactionsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListDepositAccountTransactionsdefaultApplicationProblemPlusJSONResponse) VisitListDepositAccountTransactionsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -4711,6 +4869,9 @@ type StrictServerInterface interface {
 	// CreateGMFExemption Exempt an account from GMF
 	// (POST /v1/deposit-accounts/{id}/gmf-exemption)
 	CreateGMFExemption(ctx context.Context, request CreateGMFExemptionRequestObject) (CreateGMFExemptionResponseObject, error)
+	// ListDepositAccountTransactions Read a deposit account's history
+	// (GET /v1/deposit-accounts/{id}/transactions)
+	ListDepositAccountTransactions(ctx context.Context, request ListDepositAccountTransactionsRequestObject) (ListDepositAccountTransactionsResponseObject, error)
 	// CreateWithdrawal Withdraw cash from an account
 	// (POST /v1/deposit-accounts/{id}/withdrawals)
 	CreateWithdrawal(ctx context.Context, request CreateWithdrawalRequestObject) (CreateWithdrawalResponseObject, error)
@@ -5013,6 +5174,33 @@ func (sh *strictHandler) CreateGMFExemption(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateGMFExemptionResponseObject); ok {
 		if err := validResponse.VisitCreateGMFExemptionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListDepositAccountTransactions operation middleware
+func (sh *strictHandler) ListDepositAccountTransactions(w http.ResponseWriter, r *http.Request, id ID, params ListDepositAccountTransactionsParams) {
+	var request ListDepositAccountTransactionsRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDepositAccountTransactions(ctx, request.(ListDepositAccountTransactionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDepositAccountTransactions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDepositAccountTransactionsResponseObject); ok {
+		if err := validResponse.VisitListDepositAccountTransactionsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -52,6 +52,18 @@ WHERE account_id = @account_id
   AND value_date <= coalesce(sqlc.narg(as_of_value_date)::date, 'infinity'::date)
   AND posted_at <= coalesce(sqlc.narg(as_known_at)::timestamptz, 'infinity'::timestamptz);
 
+-- An account's history (FR-44): its entries before the position (posted_at, entry_id), newest first,
+-- walking entries_account_history_idx backwards; a null position is the newest one, that of the first page.
+-- Another entity's account has no entries for it. Each entry reads its transaction's code by primary key.
+-- name: EntriesBefore :many
+SELECT e.id, e.transaction_id, t.code, e.currency, e.amount, e.value_date, e.posted_at
+FROM ledger.entries e
+JOIN ledger.transactions t ON t.id = e.transaction_id
+WHERE e.account_id = @account_id AND e.legal_entity_id = @legal_entity_id
+  AND (e.posted_at, e.id) < (coalesce(sqlc.narg(posted_at)::timestamptz, 'infinity'), coalesce(sqlc.narg(entry_id)::bigint, 0))
+ORDER BY e.posted_at DESC, e.id DESC
+LIMIT sqlc.arg(page)::bigint;
+
 -- Reads by ID filter by entity: another entity's rows look the same as missing ones.
 -- name: AccountOfEntity :one
 SELECT sqlc.embed(a) FROM ledger.accounts a WHERE a.id = @id AND a.legal_entity_id = @legal_entity_id;

@@ -96,14 +96,14 @@ func nothingFor(t *testing.T, got <-chan received, d time.Duration) {
 }
 
 // TestTheSignatureIsStandardWebhooks: the signature of the Standard Webhooks test vector is the one its spec
-// publishes.
+// publishes. Its key and id are the spec's, public, not secrets.
 func TestTheSignatureIsStandardWebhooks(t *testing.T) {
-	key, err := base64.StdEncoding.DecodeString("MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw")
+	key, err := base64.StdEncoding.DecodeString("MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw") // gitleaks:allow
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got := sign(key, "msg_p5jXN8AQM9LWM0D4loKWxJek", "1614265330", []byte(`{"test": 2432232314}`))
+	got := sign(key, "msg_p5jXN8AQM9LWM0D4loKWxJek", "1614265330", []byte(`{"test": 2432232314}`)) // gitleaks:allow
 
 	if want := "g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="; got != want {
 		t.Fatalf("signature = %q, want %q", got, want)

@@ -19,6 +19,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/party"
+	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
 )
@@ -184,6 +185,11 @@ var problems = []struct {
 	{deposits.ErrKYCNotSatisfied, unprocessable("kyc_not_satisfied", "The party's KYC status does not allow the product")},
 	{deposits.ErrInvalidMovement, unprocessable("invalid_movement", "The amount must be positive and the accounts different")},
 	{deposits.ErrLimitExceeded, unprocessable("limit_exceeded", "The movement exceeds a limit of the product")},
+	// payments; payments.ErrRailNotConfigured has no problem on purpose: an entity without the rail's clearing
+	// account is a 500, which is not stored with the Idempotency-Key, and the request can be retried once the
+	// account exists
+	{payments.ErrDuplicatePayment, conflict("duplicate_payment", "A payment with that reference was already made")},
+	{payments.ErrInvalidOrder, unprocessable("invalid_payment_order", "The payment is in another currency than its account, through an unknown rail, without a reference, or its beneficiary is not one account of up to 64 characters or one key of up to 128")},
 	// compliance
 	{compliance.ErrCaseNotFound, notFound},
 	{compliance.ErrCaseResolved, conflict("case_already_resolved", "The screening case is already resolved")},

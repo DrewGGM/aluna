@@ -33,6 +33,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/party"
+	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 	"github.com/DrewGGM/aluna/internal/pricing"
@@ -84,6 +85,10 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	productSvc := products.New(events)
 	pricingSvc := pricing.New(productSvc, calendarSvc, pricing.SingleAccount)
 	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	requests := approvals.New(policy)
 	api := API{
 		LedgerHandlers:     NewLedgerHandlers(ledgerSvc, requests, uow, keys, testPool),
@@ -93,6 +98,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 		DepositHandlers:    NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, testPool),
 		PricingHandlers:    NewPricingHandlers(pricingSvc, depositSvc, uow),
 		ComplianceHandlers: NewComplianceHandlers(complianceSvc, requests, uow, keys),
+		PaymentHandlers:    NewPaymentHandlers(paymentSvc, uow, keys),
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},

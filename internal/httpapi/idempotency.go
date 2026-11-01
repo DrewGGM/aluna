@@ -124,6 +124,11 @@ func (r storedResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) e
 	return r.write(w)
 }
 
+// VisitCreatePaymentOrderResponse writes the response of POST /v1/payment-orders.
+func (r storedResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitResolveScreeningCaseResponse writes the response of POST /v1/screening-cases/{id}/resolution.
 func (r storedResponse) VisitResolveScreeningCaseResponse(w http.ResponseWriter) error {
 	return r.write(w)

@@ -90,6 +90,21 @@ func (e BalanceMode) Valid() bool {
 	}
 }
 
+// Defines values for CreatePaymentOrderRail.
+const (
+	Simbreb CreatePaymentOrderRail = "simbreb"
+)
+
+// Valid indicates whether the value is a known member of the CreatePaymentOrderRail enum.
+func (e CreatePaymentOrderRail) Valid() bool {
+	switch e {
+	case Simbreb:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DepositAccountStatus.
 const (
 	DepositAccountStatusActive  DepositAccountStatus = "active"
@@ -207,6 +222,42 @@ func (e PartyKind) Valid() bool {
 	case Legal:
 		return true
 	case Natural:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PaymentOrderStatus.
+const (
+	PaymentOrderStatusHeld             PaymentOrderStatus = "held"
+	PaymentOrderStatusInitiated        PaymentOrderStatus = "initiated"
+	PaymentOrderStatusPendingScreening PaymentOrderStatus = "pending_screening"
+	PaymentOrderStatusRejected         PaymentOrderStatus = "rejected"
+	PaymentOrderStatusReturned         PaymentOrderStatus = "returned"
+	PaymentOrderStatusScreening        PaymentOrderStatus = "screening"
+	PaymentOrderStatusSent             PaymentOrderStatus = "sent"
+	PaymentOrderStatusSettled          PaymentOrderStatus = "settled"
+)
+
+// Valid indicates whether the value is a known member of the PaymentOrderStatus enum.
+func (e PaymentOrderStatus) Valid() bool {
+	switch e {
+	case PaymentOrderStatusHeld:
+		return true
+	case PaymentOrderStatusInitiated:
+		return true
+	case PaymentOrderStatusPendingScreening:
+		return true
+	case PaymentOrderStatusRejected:
+		return true
+	case PaymentOrderStatusReturned:
+		return true
+	case PaymentOrderStatusScreening:
+		return true
+	case PaymentOrderStatusSent:
+		return true
+	case PaymentOrderStatusSettled:
 		return true
 	default:
 		return false
@@ -400,6 +451,27 @@ type CreateLedgerAccount struct {
 	LowerLimit *int64 `json:"lower_limit,omitempty"`
 }
 
+// CreatePaymentOrder defines model for CreatePaymentOrder.
+type CreatePaymentOrder struct {
+	// AccountId Deposit account the payment leaves from
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// Amount Positive, in the account's currency
+	Amount Money `json:"amount"`
+
+	// Creditor A party at its bank, by account number or by key (a Bre-B "llave"), one of the two.
+	Creditor PaymentParty `json:"creditor"`
+
+	// QuoteId Quote of this payment (POST /v1/quotes, a transfer); without one it is priced as it is made
+	QuoteId *openapi_types.UUID `json:"quote_id,omitempty"`
+
+	// Rail The simulated Bre-B rail, the only one for now
+	Rail CreatePaymentOrderRail `json:"rail"`
+}
+
+// CreatePaymentOrderRail The simulated Bre-B rail, the only one for now
+type CreatePaymentOrderRail string
+
 // CreateProduct defines model for CreateProduct.
 type CreateProduct struct {
 	// Code Unique within the entity; lowercase letters, digits and underscores, starting with a letter.
@@ -582,6 +654,36 @@ type Party struct {
 
 // PartyKind Natural or legal person.
 type PartyKind string
+
+// PaymentOrder defines model for PaymentOrder.
+type PaymentOrder struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+	Amount    Money              `json:"amount"`
+
+	// EndToEndId ISO 20022 EndToEndId
+	EndToEndId string `json:"end_to_end_id"`
+
+	// Held What is held on the account: the amount, its fees and its GMF
+	Held *Money             `json:"held,omitempty"`
+	Id   openapi_types.UUID `json:"id"`
+
+	// InstrId ISO 20022 InstrId
+	InstrId string             `json:"instr_id"`
+	Rail    string             `json:"rail"`
+	Status  PaymentOrderStatus `json:"status"`
+
+	// TxId ISO 20022 TxId
+	TxId string `json:"tx_id"`
+}
+
+// PaymentOrderStatus defines model for PaymentOrder.Status.
+type PaymentOrderStatus string
+
+// PaymentParty A party at its bank, by account number or by key (a Bre-B "llave"), one of the two.
+type PaymentParty struct {
+	AccountNumber *string `json:"account_number,omitempty"`
+	Key           *string `json:"key,omitempty"`
+}
 
 // PlaceHold defines model for PlaceHold.
 type PlaceHold struct {
@@ -813,6 +915,11 @@ type RequestKYCStatusChangeParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// CreatePaymentOrderParams defines parameters for CreatePaymentOrder.
+type CreatePaymentOrderParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // RequestProductPublicationParams defines parameters for RequestProductPublication.
 type RequestProductPublicationParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -872,6 +979,9 @@ type RegisterPartyJSONRequestBody = RegisterParty
 
 // RequestKYCStatusChangeJSONRequestBody defines body for RequestKYCStatusChange for application/json ContentType.
 type RequestKYCStatusChangeJSONRequestBody = RequestKYCStatusChange
+
+// CreatePaymentOrderJSONRequestBody defines body for CreatePaymentOrder for application/json ContentType.
+type CreatePaymentOrderJSONRequestBody = CreatePaymentOrder
 
 // CreateProductJSONRequestBody defines body for CreateProduct for application/json ContentType.
 type CreateProductJSONRequestBody = CreateProduct
@@ -956,6 +1066,9 @@ type ServerInterface interface {
 	// RequestKYCStatusChange Request a KYC status change
 	// (POST /v1/parties/{id}/kyc-status-changes)
 	RequestKYCStatusChange(w http.ResponseWriter, r *http.Request, id ID, params RequestKYCStatusChangeParams)
+	// CreatePaymentOrder Initiate an outgoing payment
+	// (POST /v1/payment-orders)
+	CreatePaymentOrder(w http.ResponseWriter, r *http.Request, params CreatePaymentOrderParams)
 	// GetProductVersion Read a product version
 	// (GET /v1/product-versions/{id})
 	GetProductVersion(w http.ResponseWriter, r *http.Request, id ID)
@@ -1816,6 +1929,51 @@ func (siw *ServerInterfaceWrapper) RequestKYCStatusChange(w http.ResponseWriter,
 	handler.ServeHTTP(w, r)
 }
 
+// CreatePaymentOrder operation middleware
+func (siw *ServerInterfaceWrapper) CreatePaymentOrder(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreatePaymentOrderParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreatePaymentOrder(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetProductVersion operation middleware
 func (siw *ServerInterfaceWrapper) GetProductVersion(w http.ResponseWriter, r *http.Request) {
 
@@ -2350,6 +2508,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/deposits", wrapper.CreateDeposit)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/withdrawals", wrapper.CreateWithdrawal)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/payment-orders", wrapper.CreatePaymentOrder)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transfers", wrapper.CreateTransfer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/gmf-exemption", wrapper.CreateGMFExemption)
 
@@ -4118,6 +4277,118 @@ func (response RequestKYCStatusChangedefaultApplicationProblemPlusJSONResponse) 
 	return err
 }
 
+type CreatePaymentOrderRequestObject struct {
+	Params CreatePaymentOrderParams
+	Body   *CreatePaymentOrderJSONRequestBody
+}
+
+type CreatePaymentOrderResponseObject interface {
+	VisitCreatePaymentOrderResponse(w http.ResponseWriter) error
+}
+
+type CreatePaymentOrder202JSONResponse PaymentOrder
+
+func (response CreatePaymentOrder202JSONResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePaymentOrder400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreatePaymentOrder400ApplicationProblemPlusJSONResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePaymentOrder404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreatePaymentOrder404ApplicationProblemPlusJSONResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePaymentOrder409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreatePaymentOrder409ApplicationProblemPlusJSONResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePaymentOrder413ApplicationProblemPlusJSONResponse Problem
+
+func (response CreatePaymentOrder413ApplicationProblemPlusJSONResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePaymentOrder422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreatePaymentOrder422ApplicationProblemPlusJSONResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePaymentOrderdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreatePaymentOrderdefaultApplicationProblemPlusJSONResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetProductVersionRequestObject struct {
 	Id ID `json:"id"`
 }
@@ -5089,6 +5360,9 @@ type StrictServerInterface interface {
 	// RequestKYCStatusChange Request a KYC status change
 	// (POST /v1/parties/{id}/kyc-status-changes)
 	RequestKYCStatusChange(ctx context.Context, request RequestKYCStatusChangeRequestObject) (RequestKYCStatusChangeResponseObject, error)
+	// CreatePaymentOrder Initiate an outgoing payment
+	// (POST /v1/payment-orders)
+	CreatePaymentOrder(ctx context.Context, request CreatePaymentOrderRequestObject) (CreatePaymentOrderResponseObject, error)
 	// GetProductVersion Read a product version
 	// (GET /v1/product-versions/{id})
 	GetProductVersion(ctx context.Context, request GetProductVersionRequestObject) (GetProductVersionResponseObject, error)
@@ -5747,6 +6021,39 @@ func (sh *strictHandler) RequestKYCStatusChange(w http.ResponseWriter, r *http.R
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RequestKYCStatusChangeResponseObject); ok {
 		if err := validResponse.VisitRequestKYCStatusChangeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreatePaymentOrder operation middleware
+func (sh *strictHandler) CreatePaymentOrder(w http.ResponseWriter, r *http.Request, params CreatePaymentOrderParams) {
+	var request CreatePaymentOrderRequestObject
+
+	request.Params = params
+
+	var body CreatePaymentOrderJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreatePaymentOrder(ctx, request.(CreatePaymentOrderRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreatePaymentOrder")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreatePaymentOrderResponseObject); ok {
+		if err := validResponse.VisitCreatePaymentOrderResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

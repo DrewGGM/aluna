@@ -35,6 +35,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/party"
+	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
@@ -254,7 +255,7 @@ const telemetryFlushTimeout = 5 * time.Second
 const readyTimeout = 2 * time.Second
 
 // runAPI opens the port first (a busy port fails without touching the database), connects to the
-// database, wires the ledger by hand and serves until ctx is canceled.
+// database, wires the modules (newAPI) and serves until ctx is canceled.
 func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, authz authorization, log *slog.Logger) int {
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.addr)
 	if err != nil {
@@ -272,30 +273,11 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 		return 1
 	}
 	defer pool.Close()
-	events, err := outbox.New(pool)
-	if err != nil {
-		log.Error("configure the outbox", "error", err)
-		return 1
-	}
 	uow := postgres.NewUnitOfWork(pool)
-	keys := idempotency.NewStore(pool)
-	calendarSvc := calendar.New()
-	ledgerSvc := ledger.New(calendarSvc, events)
-	complianceSvc := compliance.New(events)
-	partySvc := party.New(events, complianceSvc.PartyScreener())
-	complianceSvc.OnResolved(compliance.CaseParty, compliance.ResolvingParties(partySvc))
-	productSvc := products.New(events)
-	pricingSvc := pricing.New(productSvc, calendarSvc, cfg.gmf)
-	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
-	requests := approvals.New(authz.policy)
-	api := httpapi.API{
-		LedgerHandlers:     httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
-		ApprovalHandlers:   httpapi.NewApprovalHandlers(requests, uow, keys, pool),
-		PartyHandlers:      httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
-		ProductHandlers:    httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
-		DepositHandlers:    httpapi.NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, pool),
-		PricingHandlers:    httpapi.NewPricingHandlers(pricingSvc, depositSvc, uow),
-		ComplianceHandlers: httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
+	api, err := newAPI(pool, uow, cfg.gmf, authz.policy)
+	if err != nil {
+		log.Error("wire the modules", "error", err)
+		return 1
 	}
 	ready := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, readyTimeout)
@@ -306,6 +288,39 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 		Ready: ready, Audit: &httpapi.CommandAudit{Records: audit.New(), UoW: uow}, Verifier: verifier, Authorizer: authz.authorizer,
 	}
 	return serveAPI(ctx, ln, httpapi.NewServer(serverCfg, httpapi.Routes(api, log), log), log)
+}
+
+// newAPI wires the modules by hand over pool, with the entity's GMF modality and the policy that says who
+// approves each maker-checker request.
+func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, policy *access.Policy) (httpapi.API, error) {
+	events, err := outbox.New(pool)
+	if err != nil {
+		return httpapi.API{}, fmt.Errorf("configure the outbox: %w", err)
+	}
+	keys := idempotency.NewStore(pool)
+	calendarSvc := calendar.New()
+	ledgerSvc := ledger.New(calendarSvc, events)
+	complianceSvc := compliance.New(events)
+	partySvc := party.New(events, complianceSvc.PartyScreener())
+	complianceSvc.OnResolved(compliance.CaseParty, compliance.ResolvingParties(partySvc))
+	productSvc := products.New(events)
+	pricingSvc := pricing.New(productSvc, calendarSvc, gmf)
+	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool)
+	if err != nil {
+		return httpapi.API{}, err
+	}
+	requests := approvals.New(policy)
+	return httpapi.API{
+		LedgerHandlers:     httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
+		ApprovalHandlers:   httpapi.NewApprovalHandlers(requests, uow, keys, pool),
+		PartyHandlers:      httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
+		ProductHandlers:    httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
+		DepositHandlers:    httpapi.NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, pool),
+		PricingHandlers:    httpapi.NewPricingHandlers(pricingSvc, depositSvc, uow),
+		ComplianceHandlers: httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
+		PaymentHandlers:    httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
+	}, nil
 }
 
 // serveAPI serves on ln until ctx is canceled and then waits up to shutdownTimeout for in-flight

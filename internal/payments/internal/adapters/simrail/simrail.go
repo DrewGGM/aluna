@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	name             = "simbreb"
+	name             = app.RailSimBreB
 	notificationPath = "/v1/rails/" + name + "/notifications"
 	slowTake         = 21 * time.Second // over 20 s: longer than the core waits (app.Send)
 	notifyTimeout    = 10 * time.Second

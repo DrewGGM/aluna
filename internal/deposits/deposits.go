@@ -199,6 +199,20 @@ func undo(ctx context.Context, tx postgres.Tx, err error) error {
 	return err
 }
 
+// LockActive locks deposit account id of the entity until tx ends, as every movement does, and returns it if it
+// is active: one that is not is ErrAccountNotActive, an unknown one ErrAccountNotFound. A module that moves
+// money out of an account (payments) locks it with this, so that the account does not close meanwhile.
+func (s *Service) LockActive(ctx context.Context, tx postgres.Tx, entity, id ids.ID) (Account, error) {
+	a, err := pg.NewStore(tx).LockAccount(ctx, entity, id)
+	if err != nil {
+		return Account{}, err
+	}
+	if a.Status != Active {
+		return Account{}, fmt.Errorf("%w: account %s is %s", ErrAccountNotActive, id, a.Status)
+	}
+	return a, nil
+}
+
 // Account returns deposit account id of the entity, or ErrAccountNotFound. q can be the pool or a Tx.
 func (s *Service) Account(ctx context.Context, q postgres.Querier, entity, id ids.ID) (Account, error) {
 	return pg.NewStore(q).Account(ctx, entity, id)

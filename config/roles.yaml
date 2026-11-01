@@ -29,6 +29,7 @@ operator:
     - deposits.deposits.post
     - deposits.withdrawals.post
     - deposits.transfers.post
+    - payments.orders.create
     - pricing.quotes.create
     - pricing.gmf_exemptions.create
     - ledger.accounts.create

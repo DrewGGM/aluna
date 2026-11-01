@@ -736,6 +736,41 @@ paths:
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/payment-orders:
+    post:
+      operationId: createPaymentOrder
+      summary: Initiate an outgoing payment
+      description: >-
+        Initiates a payment from a deposit account of the entity to a beneficiary at another bank, by account
+        number or by key, through a rail (FR-31), and answers 202 with the order. Its beneficiary is screened
+        first (FR-42): if screening does not clear it (a possible match, or no answer), the order is
+        `pending_screening` and nothing is held or charged until compliance resolves its case. If it does, the
+        amount and its charges (the fees and the GMF of a transfer, those of `quote_id` if it names one) are held
+        on the account and the order is `held`, to be sent. Without funds for all of it it is 422
+        `insufficient_funds` and nothing is stored; an account that is not active is 409 `account_not_active`.
+        The rail's clearing account (`L.CLEARING.SIMBREB`, in the account's currency) must exist in the entity's
+        ledger. Idempotent by `Idempotency-Key`; a retry with the same key after the key store forgot it is 409
+        `duplicate_payment`, not a second payment.
+      x-aluna-permission: payments.orders.create
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreatePaymentOrder"}
+      responses:
+        "202":
+          description: Order initiated, held or pending screening
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentOrder"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/transfers:
     post:
       operationId: createTransfer
@@ -962,6 +997,39 @@ components:
     ApprovalStatus:
       type: string
       enum: [pending, approved, rejected, failed, expired]
+    CreatePaymentOrder:
+      type: object
+      required: [account_id, amount, rail, creditor]
+      properties:
+        account_id: {type: string, format: uuid, description: Deposit account the payment leaves from}
+        amount: {$ref: "#/components/schemas/Money", description: "Positive, in the account's currency"}
+        rail:
+          type: string
+          enum: [simbreb]
+          description: The simulated Bre-B rail, the only one for now
+        creditor: {$ref: "#/components/schemas/PaymentParty"}
+        quote_id: {type: string, format: uuid, description: "Quote of this payment (POST /v1/quotes, a transfer); without one it is priced as it is made"}
+    PaymentParty:
+      type: object
+      description: A party at its bank, by account number or by key (a Bre-B "llave"), one of the two.
+      properties:
+        account_number: {type: string, minLength: 1, maxLength: 64}
+        key: {type: string, minLength: 1, maxLength: 128}
+    PaymentOrder:
+      type: object
+      required: [id, account_id, rail, amount, status, end_to_end_id, instr_id, tx_id]
+      properties:
+        id: {type: string, format: uuid}
+        account_id: {type: string, format: uuid}
+        rail: {type: string}
+        amount: {$ref: "#/components/schemas/Money"}
+        status:
+          type: string
+          enum: [initiated, screening, pending_screening, held, sent, settled, rejected, returned]
+        end_to_end_id: {type: string, description: ISO 20022 EndToEndId}
+        instr_id: {type: string, description: ISO 20022 InstrId}
+        tx_id: {type: string, description: ISO 20022 TxId}
+        held: {$ref: "#/components/schemas/Money", description: "What is held on the account: the amount, its fees and its GMF"}
     Approval:
       type: object
       required: [id, kind, status, payload, maker, created_at, expires_at]

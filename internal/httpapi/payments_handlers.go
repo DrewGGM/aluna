@@ -74,26 +74,43 @@ func toPaymentOrderJSON(o payments.Order) gen.PaymentOrder {
 	return j
 }
 
-// RailRoutes registers in mux the rails' notifications (TH-7): the outcomes of the simulated Bre-B rail, which
-// signs them instead of carrying a token, so they go on a server of their own, without the channels' tokens
-// and permissions. The signature is checked before the database is touched; log records the errors that are
-// not the rail's.
+// RailRoutes registers in mux the rails' notifications (TH-7): the outcomes of the simulated Bre-B rail and the
+// transfers other banks send through it, which it signs instead of carrying a token, so they go on a server of
+// their own, without the channels' tokens and permissions. The signature is checked before the database is
+// touched; log records the errors that are not the rail's.
 func RailRoutes(h *PaymentHandlers, log *slog.Logger) func(*http.ServeMux) {
 	answer := responseError(log)
 	return func(mux *http.ServeMux) {
-		mux.HandleFunc("POST /v1/rails/"+payments.RailSimBreB+"/notifications", func(w http.ResponseWriter, r *http.Request) {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				requestError(w, r, err) // a body over the limit is 413
-				return
-			}
-			if err := h.takeNotification(r.Context(), payments.Notification{Header: r.Header, Body: body}); err != nil {
-				answer(w, r, err)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-		})
+		mux.HandleFunc("POST /v1/rails/"+payments.RailSimBreB+"/notifications", signed(answer, h.takeNotification))
+		mux.HandleFunc("POST /v1/rails/"+payments.RailSimBreB+"/transfers", signed(answer, h.receiveTransfer))
 	}
+}
+
+// signed is the handler of a notification of the rail that take applies: 204 if it took it (or had taken it),
+// its problem otherwise.
+func signed(answer func(http.ResponseWriter, *http.Request, error), take func(context.Context, payments.Notification) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			requestError(w, r, err) // a body over the limit is 413
+			return
+		}
+		if err := take(r.Context(), payments.Notification{Header: r.Header, Body: body}); err != nil {
+			answer(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// receiveTransfer reads the transfer that n, a notification of the rail, carries and takes it in its own
+// transaction.
+func (h *PaymentHandlers) receiveTransfer(ctx context.Context, n payments.Notification) error {
+	in, err := h.payments.ReadTransfer(n)
+	if err != nil {
+		return err
+	}
+	return h.commands.uow.Do(ctx, func(tx postgres.Tx) error { return h.payments.ReceiveTransfer(ctx, tx, in) })
 }
 
 // takeNotification reads the outcome that n, a notification of the rail, carries and applies it in its own

@@ -4,6 +4,9 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -226,7 +229,13 @@ func (r railSide) next(t *testing.T) notification {
 // deliver posts n to the notifications path of ts.
 func deliver(t *testing.T, ts *httptest.Server, n notification) response {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/rails/simbreb/notifications", bytes.NewReader(n.body))
+	return deliverTo(t, ts, "notifications", n)
+}
+
+// deliverTo posts n to the rail's path of ts that ends in path.
+func deliverTo(t *testing.T, ts *httptest.Server, path string, n notification) response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/rails/simbreb/"+path, bytes.NewReader(n.body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,5 +288,45 @@ func TestARailNotificationOverHTTP(t *testing.T) {
 	}
 	if w.natural(t, a) != 100000000-30120000 {
 		t.Fatalf("the balance = %d, want 1,000,000 COP less the payment and its GMF", w.natural(t, a))
+	}
+}
+
+// signedTransfer is body as the rail signs it (Standard Webhooks: HMAC-SHA256 of id.timestamp.body), now.
+func signedTransfer(body string) notification {
+	id, timestamp := "SIMIN"+strconv.FormatInt(time.Now().UnixNano(), 10), strconv.FormatInt(time.Now().Unix(), 10)
+	mac := hmac.New(sha256.New, railSecret)
+	mac.Write([]byte(id + "." + timestamp + "." + body))
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	h.Set("webhook-id", id)
+	h.Set("webhook-timestamp", timestamp)
+	h.Set("webhook-signature", "v1,"+base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+	return notification{header: h, body: []byte(body)}
+}
+
+// TestATransferReceivedOverHTTP (FR-32, TH-7): the rails' server takes a transfer the rail signed for an active
+// account, 204, credits it, and takes it again without crediting it twice, 204; one changed after signing is
+// 401 and credits nothing.
+func TestATransferReceivedOverHTTP(t *testing.T) {
+	w, a := payingWorld(t)
+	if status := call(t, w.ts, http.MethodPost, "/v1/ledger-accounts",
+		`{"code":"L.SUSPENSE.SIMBREB","kind":"liability","currency":"COP","balance_mode":"async"}`, nil); status != http.StatusCreated {
+		t.Fatalf("create the suspense account = %d", status)
+	}
+	rails := newRailSide(t)
+	body := `{"creditor_agent":"` + w.entity.String() + `","end_to_end_id":"BANKX` + strconv.FormatInt(time.Now().UnixNano(), 10) +
+		`","instr_id":"INSTR1","tx_id":"TX1","rail_ref":"SIMIN1","debtor_agent":"BANKXCOBB","amount":30000000,"currency":"COP",` +
+		`"settlement_date":"2026-03-02","creditor":{"account_number":"` + a.Id.String() + `"}}`
+	n := signedTransfer(body)
+	forged := notification{header: n.header, body: bytes.Replace(n.body, []byte("30000000"), []byte("90000000"), 1)}
+
+	first, again := deliverTo(t, rails.ts, "transfers", n), deliverTo(t, rails.ts, "transfers", n)
+
+	if first.status != http.StatusNoContent || again.status != http.StatusNoContent {
+		t.Fatalf("the transfer = %d %s and again %d, want 204 and 204", first.status, first.body, again.status)
+	}
+	expectProblem(t, "a forged transfer", deliverTo(t, rails.ts, "transfers", forged), http.StatusUnauthorized, "invalid_signature")
+	if w.natural(t, a) != 130000000 {
+		t.Fatalf("the balance = %d, want 1,300,000 COP: the transfer once", w.natural(t, a))
 	}
 }

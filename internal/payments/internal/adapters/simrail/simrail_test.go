@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/payments/internal/app"
 )
@@ -320,4 +322,71 @@ func resign(n *app.Notification, id, timestamp string, body []byte) {
 	n.Header.Set("webhook-timestamp", timestamp)
 	n.Header.Set("webhook-signature", "v1,"+sign(secret, id, timestamp, body))
 	n.Body = body
+}
+
+// transferBody is a transfer of 300,000 COP from BANKXCOBB to account 0191..., for entity, as the rail sends it.
+func transferBody(entity string) string {
+	return `{"creditor_agent":"` + entity + `","end_to_end_id":"BANKX20260302000001","instr_id":"INSTR1","tx_id":"TX1",` +
+		`"rail_ref":"SIMIN1","debtor_agent":"BANKXCOBB","amount":30000000,"currency":"COP","settlement_date":"2026-03-02",` +
+		`"creditor":{"account_number":"0191e2a4-8c1d-7a3e-9b2f-4d5e6f708192"}}`
+}
+
+// signedTransfer is body signed by the rail at signedAt.
+func signedTransfer(body string) app.Notification {
+	n := app.Notification{Header: http.Header{}}
+	n.Header.Set("webhook-id", "SIMIN1")
+	resign(&n, "SIMIN1", strconv.FormatInt(signedAt.Unix(), 10), []byte(body))
+	return n
+}
+
+// TestTheCoreReadsATransferReceived (FR-32, TH-7): a transfer the rail signed carries its identifiers, the entity
+// it is for, its amount, its settlement date and its creditor.
+func TestTheCoreReadsATransferReceived(t *testing.T) {
+	rail := New("http://core", secret, http.DefaultClient, discard())
+	rail.now = func() time.Time { return signedAt }
+	entity := "0191e2a4-8c1d-7a3e-9b2f-4d5e6f700001"
+
+	in, err := rail.Transfer(signedTransfer(transferBody(entity)))
+
+	cop, cerr := money.CurrencyOf("COP")
+	if err != nil || cerr != nil {
+		t.Fatal(err, cerr)
+	}
+	want := app.InboundTransfer{
+		EndToEndID: "BANKX20260302000001", InstrID: "INSTR1", TxID: "TX1", RailRef: "SIMIN1", DebtorAgent: "BANKXCOBB",
+		Amount: money.New(30000000, cop), SettlementDate: time.Date(2026, time.March, 2, 0, 0, 0, 0, time.UTC),
+		Creditor: app.AccountRef{Number: "0191e2a4-8c1d-7a3e-9b2f-4d5e6f708192"},
+	}
+	if want.LegalEntityID, err = ids.Parse(entity); err != nil {
+		t.Fatal(err)
+	}
+	if in != want {
+		t.Fatalf("transfer = %+v, want %+v", in, want)
+	}
+}
+
+// TestATransferTheCoreCannotRead: one the rail did not sign is ErrUnverifiedNotification; a signed one whose
+// entity, currency or settlement date the core cannot read, or that is not a transfer, ErrInvalidNotification.
+func TestATransferTheCoreCannotRead(t *testing.T) {
+	rail := New("http://core", secret, http.DefaultClient, discard())
+	rail.now = func() time.Time { return signedAt }
+	good := transferBody("0191e2a4-8c1d-7a3e-9b2f-4d5e6f700001")
+	forged := signedTransfer(good)
+	forged.Body = []byte(strings.Replace(good, "30000000", "90000000", 1))
+	cases := map[string]struct {
+		n    app.Notification
+		want error
+	}{
+		"forged":            {forged, app.ErrUnverifiedNotification},
+		"an unknown entity": {signedTransfer(transferBody("BANK-OF-NOWHERE")), app.ErrInvalidNotification},
+		"an unknown money":  {signedTransfer(strings.Replace(good, `"COP"`, `"XXX"`, 1)), app.ErrInvalidNotification},
+		"a date of no day":  {signedTransfer(strings.Replace(good, "2026-03-02", "2026-02-30", 1)), app.ErrInvalidNotification},
+		"not a transfer":    {signedTransfer(`["accepted"]`), app.ErrInvalidNotification},
+		"an amount too big": {signedTransfer(strings.Replace(good, "30000000", "9223372036854775808", 1)), app.ErrInvalidNotification},
+	}
+	for name, tc := range cases {
+		if in, err := rail.Transfer(tc.n); !errors.Is(err, tc.want) || in != (app.InboundTransfer{}) {
+			t.Errorf("%s = %+v (%v), want %v", name, in, err, tc.want)
+		}
+	}
 }

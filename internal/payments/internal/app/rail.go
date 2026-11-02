@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/money"
 )
 
@@ -61,6 +62,19 @@ type RailOutcome struct {
 	Reason                    string
 }
 
+// InboundTransfer is a credit transfer another bank sent through the rail to a customer of the entity, a
+// pacs.008 received: its ISO 20022 identifiers, the rail's reference, DebtorAgent, the bank that sent it,
+// LegalEntityID, the entity it is for (its creditor agent), its interbank amount, its interbank settlement
+// date, and its creditor by account number or by key.
+type InboundTransfer struct {
+	LegalEntityID                      ids.ID
+	EndToEndID, InstrID, TxID, RailRef string
+	DebtorAgent                        string
+	Amount                             money.Amount
+	SettlementDate                     time.Time
+	Creditor                           AccountRef
+}
+
 // Notification is a rail's notification as it reached the core: its headers and its body.
 type Notification struct {
 	Header http.Header
@@ -69,11 +83,12 @@ type Notification struct {
 
 // RailPort is a payment rail (Bre-B, ACH): its adapter speaks its protocol, and the core speaks of messages
 // (architecture §3, anticorruption layer). Send should return when ctx ends, though app.Send does not rely on
-// it, and is ErrRailRefused, wrapped, if the rail did not take the message. Outcome is the outcome n carries if
-// the rail sent it, and ErrUnverifiedNotification, wrapped, otherwise.
+// it, and is ErrRailRefused, wrapped, if the rail did not take the message. Outcome is the outcome n carries,
+// and Transfer the transfer it carries, if the rail sent it, and ErrUnverifiedNotification, wrapped, otherwise.
 type RailPort interface {
 	Send(ctx context.Context, msg OutboundMessage) (SendAck, error)
 	Outcome(n Notification) (RailOutcome, error)
+	Transfer(n Notification) (InboundTransfer, error)
 	Name() string
 }
 

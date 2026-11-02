@@ -194,7 +194,7 @@ var problems = []struct {
 		Status: http.StatusUnauthorized, Code: "invalid_signature", Title: "The rail did not sign the notification in the last 5 minutes",
 	}},
 	{payments.ErrInvalidNotification, invalidRequest("Invalid notification",
-		"The notification carries an outcome, accepted or rejected with its reason, and its reference and reason are text of up to 255 characters.")},
+		"A notification of the rail carries an outcome, accepted or rejected with its reason, or a transfer with ISO 20022 identifiers, the code of the bank that sent it, a positive amount, its settlement date and its creditor by account or by key; references and reasons are text of up to 255 characters.")},
 	{payments.ErrOrderNotFound, notFound},
 	{payments.ErrOutcomeConflict, conflict("outcome_conflict", "The payment order already took another outcome")},
 	// compliance

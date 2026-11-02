@@ -33,6 +33,8 @@ func (d *deaf) Name() string { return "deaf" }
 
 func (d *deaf) Outcome(Notification) (RailOutcome, error) { return RailOutcome{}, nil }
 
+func (d *deaf) Transfer(Notification) (InboundTransfer, error) { return InboundTransfer{}, nil }
+
 func (d *deaf) Send(ctx context.Context, _ OutboundMessage) (SendAck, error) {
 	d.at, _ = ctx.Deadline()
 	if d.ended != nil {

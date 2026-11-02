@@ -2,8 +2,9 @@
 // valid message and decides by the whole part of its amount: ending in 13 it is rejected, ending in 99 the
 // rail takes over 20 seconds to take it, and anything else is accepted. The outcome comes as a notification
 // signed as Standard Webhooks says (HMAC-SHA256 of id.timestamp.body) to /v1/rails/simbreb/notifications,
-// where the core reads it back with Outcome. Notifications still waiting when the process stops are lost, as a
-// real rail's would be until it retried.
+// where the core reads it back with Outcome. The transfers other banks send to the entity's customers come
+// signed the same way to /v1/rails/simbreb/transfers, and the core reads them with Transfer. Notifications
+// still waiting when the process stops are lost, as a real rail's would be until it retried.
 package simrail
 
 import (
@@ -21,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/payments/internal/app"
 )
 
@@ -134,6 +137,53 @@ func (s *Simulator) Outcome(n app.Notification) (app.RailOutcome, error) {
 		return app.RailOutcome{}, fmt.Errorf("%w: %w", app.ErrInvalidNotification, err)
 	}
 	return app.RailOutcome(body), nil
+}
+
+// transfer is an app.InboundTransfer as the rail sends it: its creditor agent is the entity's id, its amount in
+// minor units of its currency, and its settlement date a calendar day.
+type transfer struct {
+	CreditorAgent  string `json:"creditor_agent"`
+	EndToEndID     string `json:"end_to_end_id"`
+	InstrID        string `json:"instr_id"`
+	TxID           string `json:"tx_id"`
+	RailRef        string `json:"rail_ref"`
+	DebtorAgent    string `json:"debtor_agent"`
+	Amount         int64  `json:"amount"`
+	Currency       string `json:"currency"`
+	SettlementDate string `json:"settlement_date"`
+	Creditor       struct {
+		AccountNumber string `json:"account_number"`
+		Key           string `json:"key"`
+	} `json:"creditor"`
+}
+
+// Transfer is the transfer received that n carries if the rail signed it, as Outcome checks it. A signed body
+// that is not a transfer, or whose entity, currency or settlement date the core cannot read, is
+// app.ErrInvalidNotification.
+func (s *Simulator) Transfer(n app.Notification) (app.InboundTransfer, error) {
+	if err := s.verify(n); err != nil {
+		return app.InboundTransfer{}, err
+	}
+	var t transfer
+	if err := json.Unmarshal(n.Body, &t); err != nil {
+		return app.InboundTransfer{}, fmt.Errorf("%w: %w", app.ErrInvalidNotification, err)
+	}
+	entity, err := ids.Parse(t.CreditorAgent)
+	if err != nil {
+		return app.InboundTransfer{}, fmt.Errorf("%w: creditor agent: %w", app.ErrInvalidNotification, err)
+	}
+	c, err := money.CurrencyOf(t.Currency)
+	if err != nil {
+		return app.InboundTransfer{}, fmt.Errorf("%w: %w", app.ErrInvalidNotification, err)
+	}
+	settled, err := time.Parse(time.DateOnly, t.SettlementDate)
+	if err != nil {
+		return app.InboundTransfer{}, fmt.Errorf("%w: settlement date: %w", app.ErrInvalidNotification, err)
+	}
+	return app.InboundTransfer{
+		LegalEntityID: entity, EndToEndID: t.EndToEndID, InstrID: t.InstrID, TxID: t.TxID, RailRef: t.RailRef, DebtorAgent: t.DebtorAgent,
+		Amount: money.New(t.Amount, c), SettlementDate: settled, Creditor: app.AccountRef{Number: t.Creditor.AccountNumber, Key: t.Creditor.Key},
+	}, nil
 }
 
 // verify is nil if the rail signed n within the replay window, comparing signatures in constant time.

@@ -1,5 +1,6 @@
 // Package domain models payment orders (FR-30): an order with its ISO 20022 identifiers and the state machine
-// an outgoing payment goes through, from screening to its settlement, rejection or return.
+// an outgoing payment goes through, from screening to its settlement, rejection or return, and the one of a
+// transfer received, credited or held in suspense (FR-32).
 package domain
 
 import (
@@ -26,7 +27,8 @@ const (
 // Status is where an order stands (architecture §5, outgoing payment order).
 type Status string
 
-// Statuses. An order ends settled, rejected or returned.
+// Statuses. An outgoing order ends settled, rejected or returned; an incoming one, settled (credited) or
+// suspended.
 const (
 	StatusInitiated        Status = "initiated"
 	StatusScreening        Status = "screening"
@@ -35,7 +37,8 @@ const (
 	StatusSent             Status = "sent"              // handed to the rail
 	StatusSettled          Status = "settled"
 	StatusRejected         Status = "rejected"
-	StatusReturned         Status = "returned" // settled and then returned by the beneficiary's bank
+	StatusReturned         Status = "returned"  // settled and then returned by the beneficiary's bank
+	StatusSuspended        Status = "suspended" // received for no account it can credit: held in the rail's suspense account
 )
 
 var (
@@ -45,14 +48,17 @@ var (
 	ErrIllegalTransition = errors.New("illegal payment order transition")
 )
 
-// Order is a payment of Amount from or to AccountID, a deposit account of LegalEntityID, through Rail.
-// EndToEndID, InstrID and TxID are its ISO 20022 identifiers; Reason is why it was rejected, if it was.
+// Order is a payment of Amount from or to AccountID, a deposit account of LegalEntityID, through Rail; an
+// incoming one for no account the core can credit has none. EndToEndID, InstrID and TxID are its ISO 20022
+// identifiers, and DebtorAgent, of an incoming one, the bank that sent it, whose EndToEndID it is. Reason is why
+// it was rejected or suspended, if it was.
 type Order struct {
 	ID, LegalEntityID, AccountID ids.ID
 	Direction                    Direction
 	Amount                       money.Amount
 	Rail                         string
 	EndToEndID, InstrID, TxID    string
+	DebtorAgent                  string
 	Status                       Status
 	Reason                       string
 }
@@ -76,11 +82,8 @@ func NewOutgoing(in OutgoingInput) (Order, error) {
 	case in.Rail == "":
 		return Order{}, fmt.Errorf("%w: missing rail", ErrInvalidOrder)
 	}
-	for _, id := range []struct{ name, value string }{{"EndToEndId", in.EndToEndID}, {"InstrId", in.InstrID}, {"TxId", in.TxID}} {
-		if !validISOID(id.value) {
-			return Order{}, fmt.Errorf("%w: %s must be 1 to 35 characters of the ISO 20022 restricted set, without a leading, trailing or double slash",
-				ErrInvalidOrder, id.name)
-		}
+	if err := checkISOIDs(isoField{"EndToEndId", in.EndToEndID}, isoField{"InstrId", in.InstrID}, isoField{"TxId", in.TxID}); err != nil {
+		return Order{}, err
 	}
 	return Order{
 		ID: in.ID, LegalEntityID: in.LegalEntityID, AccountID: in.AccountID, Direction: Outgoing, Amount: in.Amount,
@@ -88,21 +91,92 @@ func NewOutgoing(in OutgoingInput) (Order, error) {
 	}, nil
 }
 
-// StartScreening moves an initiated order to screening.
-func (o *Order) StartScreening() error { return o.move(StatusScreening, StatusInitiated) }
+// IncomingInput is a transfer received from DebtorAgent, the bank that sent it, for an account of LegalEntityID.
+type IncomingInput struct {
+	ID, LegalEntityID         ids.ID
+	Amount                    money.Amount
+	Rail                      string
+	EndToEndID, InstrID, TxID string
+	DebtorAgent               string
+}
+
+// agentCode is a bank's identifier as a rail names it, a BIC or a participant code: letters and digits only,
+// so that it and an end-to-end id joined by a slash are one pair.
+var agentCode = regexp.MustCompile(`^[0-9A-Za-z]{1,35}$`)
+
+// NewIncoming is a new incoming order, initiated and without an account until its creditor is resolved: it has
+// its own id and its entity's, its amount is positive, it names its rail, its identifiers are ISO 20022
+// (validISOID) and its debtor agent is a bank's code (agentCode).
+func NewIncoming(in IncomingInput) (Order, error) {
+	switch {
+	case in.ID == ids.ID{} || in.LegalEntityID == ids.ID{}:
+		return Order{}, fmt.Errorf("%w: missing the order or its entity", ErrInvalidOrder)
+	case in.Amount.Sign() <= 0:
+		return Order{}, fmt.Errorf("%w: the amount must be positive", ErrInvalidOrder)
+	case in.Rail == "":
+		return Order{}, fmt.Errorf("%w: missing rail", ErrInvalidOrder)
+	}
+	if err := checkISOIDs(isoField{"EndToEndId", in.EndToEndID}, isoField{"InstrId", in.InstrID}, isoField{"TxId", in.TxID}); err != nil {
+		return Order{}, err
+	}
+	if !agentCode.MatchString(in.DebtorAgent) {
+		return Order{}, fmt.Errorf("%w: DbtrAgt must be 1 to 35 letters and digits", ErrInvalidOrder)
+	}
+	return Order{
+		ID: in.ID, LegalEntityID: in.LegalEntityID, Direction: Incoming, Amount: in.Amount, Rail: in.Rail, EndToEndID: in.EndToEndID,
+		InstrID: in.InstrID, TxID: in.TxID, DebtorAgent: in.DebtorAgent, Status: StatusInitiated,
+	}, nil
+}
+
+// isoField is an identifier of an order and its ISO 20022 name.
+type isoField struct{ name, value string }
+
+// checkISOIDs is ErrInvalidOrder, naming the first, if one of fields is not an ISO 20022 identifier.
+func checkISOIDs(fields ...isoField) error {
+	for _, f := range fields {
+		if !validISOID(f.value) {
+			return fmt.Errorf("%w: %s must be 1 to 35 characters of the ISO 20022 restricted set, without a leading, trailing or double slash",
+				ErrInvalidOrder, f.name)
+		}
+	}
+	return nil
+}
+
+// StartScreening moves an initiated outgoing order to screening.
+func (o *Order) StartScreening() error { return o.move(Outgoing, StatusScreening, StatusInitiated) }
 
 // AwaitCompliance moves an order being screened to pending_screening: screening did not clear it.
-func (o *Order) AwaitCompliance() error { return o.move(StatusPendingScreening, StatusScreening) }
+func (o *Order) AwaitCompliance() error {
+	return o.move(Outgoing, StatusPendingScreening, StatusScreening)
+}
 
 // Hold moves to held an order that screening cleared, or compliance released: its funds are held next, and
 // if the ledger refuses them the order is rejected from held.
-func (o *Order) Hold() error { return o.move(StatusHeld, StatusScreening, StatusPendingScreening) }
+func (o *Order) Hold() error {
+	return o.move(Outgoing, StatusHeld, StatusScreening, StatusPendingScreening)
+}
 
 // Send moves a held order to sent: it was handed to the rail.
-func (o *Order) Send() error { return o.move(StatusSent, StatusHeld) }
+func (o *Order) Send() error { return o.move(Outgoing, StatusSent, StatusHeld) }
 
 // Settle moves a sent order to settled: the rail confirmed it.
-func (o *Order) Settle() error { return o.move(StatusSettled, StatusSent) }
+func (o *Order) Settle() error { return o.move(Outgoing, StatusSettled, StatusSent) }
+
+// Credit moves an initiated incoming order to settled: it credits its account.
+func (o *Order) Credit() error { return o.move(Incoming, StatusSettled, StatusInitiated) }
+
+// Suspend moves an initiated incoming order to suspended, for reason: it credits the rail's suspense account,
+// for no account of the entity can take it. A suspense says why: without a reason it is ErrInvalidOrder.
+func (o *Order) Suspend(reason string) error {
+	if reason == "" {
+		return fmt.Errorf("%w: a suspense needs its reason", ErrInvalidOrder)
+	}
+	if err := o.move(Incoming, StatusSuspended, StatusInitiated); err != nil {
+		return err
+	}
+	o.Reason = reason
+	return nil
+}
 
 // Reject moves to rejected, for reason, an order that compliance confirmed as a match, whose funds the ledger
 // would not hold (no funds, a limit) or that the rail rejected. A rejection says why: without a reason it is
@@ -111,7 +185,7 @@ func (o *Order) Reject(reason string) error {
 	if reason == "" {
 		return fmt.Errorf("%w: a rejection needs its reason", ErrInvalidOrder)
 	}
-	if err := o.move(StatusRejected, StatusPendingScreening, StatusHeld, StatusSent); err != nil {
+	if err := o.move(Outgoing, StatusRejected, StatusPendingScreening, StatusHeld, StatusSent); err != nil {
 		return err
 	}
 	o.Reason = reason
@@ -119,12 +193,13 @@ func (o *Order) Reject(reason string) error {
 }
 
 // Return moves a settled order to returned: the beneficiary's bank sent it back.
-func (o *Order) Return() error { return o.move(StatusReturned, StatusSettled) }
+func (o *Order) Return() error { return o.move(Outgoing, StatusReturned, StatusSettled) }
 
-// move takes the order to status to if it stands in one of from, and is ErrIllegalTransition otherwise.
-func (o *Order) move(to Status, from ...Status) error {
-	if !slices.Contains(from, o.Status) {
-		return fmt.Errorf("%w: %s to %s", ErrIllegalTransition, o.Status, to)
+// move takes an order of direction d to status to if it stands in one of from, and is ErrIllegalTransition
+// otherwise.
+func (o *Order) move(d Direction, to Status, from ...Status) error {
+	if o.Direction != d || !slices.Contains(from, o.Status) {
+		return fmt.Errorf("%w: %s %s to %s", ErrIllegalTransition, o.Direction, o.Status, to)
 	}
 	o.Status = to
 	return nil

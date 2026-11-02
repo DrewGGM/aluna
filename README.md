@@ -60,11 +60,18 @@ Cada request, salvo `/healthz` y `/readyz`, lleva un token OIDC del emisor confi
 vida de 15 min como mucho; la entidad legal con la que opera sale del claim `legal_entity_id` del token,
 nunca de un header.
 
-Las notificaciones de los rails (`POST /v1/rails/simbreb/notifications`) no van por ese puerto sino por
-`ALUNA_RAIL_ADDR`, que no se expone a los canales: el rail no trae token, firma cada notificación
-(Standard Webhooks, HMAC-SHA256 con `ALUNA_SIMBREB_SECRET`), y una con otra firma, o firmada hace más de
-5 min, responde 401. El worker envía los pagos por el rail simulado, que notifica a
+Las notificaciones de los rails no van por ese puerto sino por `ALUNA_RAIL_ADDR`, que no se expone a los
+canales: el resultado de un pago saliente (`POST /v1/rails/simbreb/notifications`) y la transferencia que
+otro banco manda a un cliente (`POST /v1/rails/simbreb/transfers`). El rail no trae token, firma cada
+notificación (Standard Webhooks, HMAC-SHA256 con `ALUNA_SIMBREB_SECRET`), y una con otra firma, o firmada
+hace más de 5 min, responde 401. El worker envía los pagos por el rail simulado, que notifica a
 `ALUNA_SIMBREB_NOTIFY_URL`.
+
+Una transferencia recibida se acredita a la cuenta de depósito que nombra su número (el id de la cuenta) si
+está activa y en su moneda; si no (o si llega por llave, porque el directorio de llaves aún no existe), va a
+la cuenta de suspense del rail (`L.SUSPENSE.SIMBREB`, que la entidad crea junto a `L.CLEARING.SIMBREB`) y
+su orden queda `suspended`, con la razón. Las dos cuentas del rail son pasivos `async`: una transferencia
+recibida debita la clearing, y una cuenta `sync` sin saldo la rechazaría.
 
 Cada operación del contrato declara el permiso que exige (`x-aluna-permission`), y
 [`config/roles.yaml`](config/roles.yaml) dice qué roles lo dan: `channel`, `operator`, `finance`,

@@ -36,7 +36,7 @@ var testPool *pgxpool.Pool
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
 // world is an entity with a savings account funded with 1,000,000 COP, the ledger accounts its product names
-// and the clearing account of the simulated rail, which notifies the test.
+// and the clearing and suspense accounts of the simulated rail, which notifies the test.
 type world struct {
 	entity   ids.ID
 	ledger   *ledger.Service
@@ -101,7 +101,8 @@ func worldOf(t *testing.T, file string, clearing bool) world {
 	return w
 }
 
-// accounts creates the ledger accounts the savings products name and, if clearing, the rail's.
+// accounts creates the ledger accounts the savings products name and, if clearing, the rail's clearing and
+// suspense accounts.
 func (w world) accounts(t *testing.T, clearing bool) {
 	t.Helper()
 	type account struct {
@@ -116,7 +117,8 @@ func (w world) accounts(t *testing.T, clearing bool) {
 		{"L.TAX.GMF", ledger.KindLiability, ledger.BalanceModeAsync},
 	}
 	if clearing {
-		all = append(all, account{"L.CLEARING.SIMBREB", ledger.KindLiability, ledger.BalanceModeAsync})
+		all = append(all, account{"L.CLEARING.SIMBREB", ledger.KindLiability, ledger.BalanceModeAsync},
+			account{"L.SUSPENSE.SIMBREB", ledger.KindLiability, ledger.BalanceModeAsync})
 	}
 	mustDo(t, func(tx postgres.Tx) error {
 		for _, a := range all {

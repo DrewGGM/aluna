@@ -99,6 +99,8 @@ var transitions = map[string]func(*Order) error{
 	"settle":           (*Order).Settle,
 	"reject":           func(o *Order) error { return o.Reject("insufficient_funds") },
 	"return":           (*Order).Return,
+	"credit":           (*Order).Credit,
+	"suspend":          func(o *Order) error { return o.Suspend("UNKNOWN_ACCOUNT") },
 }
 
 // TestTheStateMachine (FR-30): every move the diagram has takes the order where it says, and every other move
@@ -113,6 +115,7 @@ func TestTheStateMachine(t *testing.T) {
 		StatusSettled:          {"return": StatusReturned},
 		StatusRejected:         {},
 		StatusReturned:         {},
+		StatusSuspended:        {},
 	}
 	for from, moves := range legal {
 		for name, move := range transitions {
@@ -130,6 +133,100 @@ func TestTheStateMachine(t *testing.T) {
 				t.Errorf("%s from %s = %s (%v), want ErrIllegalTransition and the order still %s", name, from, o.Status, err, from)
 			}
 		}
+	}
+}
+
+func incoming(t *testing.T) IncomingInput {
+	t.Helper()
+	return IncomingInput{
+		ID: ids.New(), LegalEntityID: ids.New(), Amount: money.New(5000000, cop(t)), Rail: "breb",
+		EndToEndID: "BANKX20260302000001", InstrID: "INSTR-1", TxID: "TX-1", DebtorAgent: "BANKXCOBB",
+	}
+}
+
+// TestAnIncomingOrderStartsInitiated (FR-32): a transfer received keeps its identifiers, its amount, its rail and
+// the bank that sent it, and starts initiated, without an account until it is resolved.
+func TestAnIncomingOrderStartsInitiated(t *testing.T) {
+	in := incoming(t)
+
+	o, err := NewIncoming(in)
+
+	want := Order{
+		ID: in.ID, LegalEntityID: in.LegalEntityID, Direction: Incoming, Amount: in.Amount, Rail: in.Rail, EndToEndID: in.EndToEndID,
+		InstrID: in.InstrID, TxID: in.TxID, DebtorAgent: in.DebtorAgent, Status: StatusInitiated,
+	}
+	if err != nil || o != want {
+		t.Fatalf("new order = %+v (%v), want %+v", o, err, want)
+	}
+}
+
+// TestAnInvalidIncomingOrderIsNotCreated: without its id or its entity, with an amount that is not positive,
+// without its rail, with an identifier that is not ISO 20022 or a debtor agent that is not letters and digits,
+// it is ErrInvalidOrder.
+func TestAnInvalidIncomingOrderIsNotCreated(t *testing.T) {
+	cases := map[string]func(*IncomingInput){
+		"no id":                 func(in *IncomingInput) { in.ID = ids.ID{} },
+		"no entity":             func(in *IncomingInput) { in.LegalEntityID = ids.ID{} },
+		"zero amount":           func(in *IncomingInput) { in.Amount = money.New(0, cop(t)) },
+		"no rail":               func(in *IncomingInput) { in.Rail = "" },
+		"no end-to-end id":      func(in *IncomingInput) { in.EndToEndID = "" },
+		"an instr id too long":  func(in *IncomingInput) { in.InstrID = strings.Repeat("I", 36) },
+		"a tx id with a slash":  func(in *IncomingInput) { in.TxID = "/TX" },
+		"no debtor agent":       func(in *IncomingInput) { in.DebtorAgent = "" },
+		"a debtor agent of 36":  func(in *IncomingInput) { in.DebtorAgent = strings.Repeat("B", 36) },
+		"a debtor agent with /": func(in *IncomingInput) { in.DebtorAgent = "BANK/A" },
+		"a debtor agent with -": func(in *IncomingInput) { in.DebtorAgent = "BANK-A" },
+	}
+	for name, change := range cases {
+		in := incoming(t)
+		change(&in)
+		if o, err := NewIncoming(in); !errors.Is(err, ErrInvalidOrder) || o != (Order{}) {
+			t.Errorf("%s: %+v (%v), want ErrInvalidOrder", name, o, err)
+		}
+	}
+}
+
+// incomingMoves are the moves of an incoming order: from initiated only.
+var incomingMoves = map[Status]map[string]Status{StatusInitiated: {"credit": StatusSettled, "suspend": StatusSuspended}}
+
+// TestTheIncomingStateMachine (FR-32): a transfer received is credited (settled) or goes to suspense, from
+// initiated only; every other move from every status is ErrIllegalTransition, and so are those of an outgoing
+// order.
+func TestTheIncomingStateMachine(t *testing.T) {
+	for _, from := range []Status{
+		StatusInitiated, StatusScreening, StatusPendingScreening, StatusHeld, StatusSent, StatusSettled,
+		StatusRejected, StatusReturned, StatusSuspended,
+	} {
+		for name, move := range transitions {
+			o, err := NewIncoming(incoming(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			o.Status = from
+			err = move(&o)
+			want, ok := incomingMoves[from][name]
+			switch {
+			case ok && (err != nil || o.Status != want):
+				t.Errorf("%s from %s = %s (%v), want %s", name, from, o.Status, err, want)
+			case !ok && (!errors.Is(err, ErrIllegalTransition) || o.Status != from):
+				t.Errorf("%s from %s = %s (%v), want ErrIllegalTransition and the order still %s", name, from, o.Status, err, from)
+			}
+		}
+	}
+}
+
+// TestASuspenseKeepsItsReason (FR-32): an order goes to suspense saying why, and without a reason it does not.
+func TestASuspenseKeepsItsReason(t *testing.T) {
+	o, err := NewIncoming(incoming(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Suspend(""); !errors.Is(err, ErrInvalidOrder) || o.Status != StatusInitiated {
+		t.Fatalf("suspending without a reason = %v, the order %s, want ErrInvalidOrder and the order still initiated", err, o.Status)
+	}
+
+	if err := o.Suspend("ACCOUNT_NOT_ACTIVE"); err != nil || o.Reason != "ACCOUNT_NOT_ACTIVE" {
+		t.Fatalf("suspending = %v with reason %q, want ACCOUNT_NOT_ACTIVE", err, o.Reason)
 	}
 }
 

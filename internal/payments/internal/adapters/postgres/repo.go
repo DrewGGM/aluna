@@ -30,8 +30,9 @@ type fee struct {
 }
 
 // InsertOrder stores o; the database sets created_at. A beneficiary goes by account or by key: the other is
-// null, as is the hold of an order not held. A reference the entity already used is app.ErrDuplicatePayment,
-// and it leaves the transaction usable.
+// null, as are the hold of an order not held, the account of an incoming one for no account, its debtor agent
+// if it is outgoing, and the rail's reference until the rail gives it. A reference the entity already used is
+// app.ErrDuplicatePayment, and it leaves the transaction usable.
 func (s Store) InsertOrder(ctx context.Context, o app.Order) error {
 	fees := make([]fee, len(o.Fees))
 	for i, f := range o.Fees {
@@ -41,16 +42,15 @@ func (s Store) InsertOrder(ctx context.Context, o app.Order) error {
 	if err != nil {
 		return fmt.Errorf("fees of order %s: %w", o.ID, err)
 	}
-	var holdID *ids.ID
-	if o.HoldID != (ids.ID{}) {
-		holdID = &o.HoldID
-	}
 	tag, err := s.q.Exec(ctx, `INSERT INTO payments.orders (id, legal_entity_id, account_id, direction, rail, end_to_end_id, instr_id,
-		tx_id, currency, amount_units, creditor_number, creditor_key, status, reason, hold_id, held_units, fees, gmf_units, external_ref)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, ''), nullif($12, ''), $13, nullif($14, ''), $15, $16, $17, $18, $19)
+		tx_id, currency, amount_units, creditor_number, creditor_key, status, reason, hold_id, held_units, fees, gmf_units, external_ref,
+		debtor_agent, rail_ref)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, ''), nullif($12, ''), $13, nullif($14, ''), $15, $16, $17, $18, $19,
+		nullif($20, ''), nullif($21, ''))
 		ON CONFLICT ON CONSTRAINT orders_external_ref_unique DO NOTHING`,
-		o.ID, o.LegalEntityID, o.AccountID, o.Direction, o.Rail, o.EndToEndID, o.InstrID, o.TxID, o.Amount.Currency().Code(),
-		o.Amount.Units(), o.Creditor.Number, o.Creditor.Key, o.Status, o.Reason, holdID, o.Held.Units(), feesJSON, o.GMF.Units(), o.ExternalRef)
+		o.ID, o.LegalEntityID, orNull(o.AccountID), o.Direction, o.Rail, o.EndToEndID, o.InstrID, o.TxID, o.Amount.Currency().Code(),
+		o.Amount.Units(), o.Creditor.Number, o.Creditor.Key, o.Status, o.Reason, orNull(o.HoldID), o.Held.Units(), feesJSON, o.GMF.Units(),
+		o.ExternalRef, o.DebtorAgent, o.RailRef)
 	if err != nil {
 		return fmt.Errorf("insert payment order %s: %w", o.ID, err)
 	}
@@ -60,14 +60,22 @@ func (s Store) InsertOrder(ctx context.Context, o app.Order) error {
 	return nil
 }
 
-// The queries that lock an order, by id and by end-to-end id: a beneficiary, a reason and a rail reference the
-// order does not have are empty.
+// orNull is id, or null if it is zero.
+func orNull(id ids.ID) *ids.ID {
+	if id == (ids.ID{}) {
+		return nil
+	}
+	return &id
+}
+
+// The queries that lock an order, by id and an outgoing one by its end-to-end id: a beneficiary, a reason, a
+// rail reference and a debtor agent the order does not have are empty.
 const (
 	lockOrderSQL = `SELECT ` + orderColumns + ` FROM payments.orders WHERE id = $1 FOR UPDATE`
-	lockByE2ESQL = `SELECT ` + orderColumns + ` FROM payments.orders WHERE end_to_end_id = $1 FOR UPDATE`
+	lockByE2ESQL = `SELECT ` + orderColumns + ` FROM payments.orders WHERE direction = 'outgoing' AND end_to_end_id = $1 FOR UPDATE`
 	orderColumns = `id, legal_entity_id, account_id, direction, rail, end_to_end_id, instr_id, tx_id, currency, amount_units,
 		coalesce(creditor_number, ''), coalesce(creditor_key, ''), status, coalesce(reason, ''), coalesce(rail_ref, ''), external_ref,
-		hold_id, held_units, fees, gmf_units`
+		hold_id, held_units, fees, gmf_units, coalesce(debtor_agent, '')`
 )
 
 // LockOrder locks (FOR UPDATE) and returns order id, or app.ErrOrderNotFound.
@@ -75,7 +83,8 @@ func (s Store) LockOrder(ctx context.Context, id ids.ID) (app.Order, error) {
 	return s.lock(ctx, lockOrderSQL, id)
 }
 
-// LockByEndToEndID locks (FOR UPDATE) and returns the order with end-to-end id e2e, or app.ErrOrderNotFound.
+// LockByEndToEndID locks (FOR UPDATE) and returns the outgoing order with end-to-end id e2e, or
+// app.ErrOrderNotFound.
 func (s Store) LockByEndToEndID(ctx context.Context, e2e string) (app.Order, error) {
 	return s.lock(ctx, lockByE2ESQL, e2e)
 }
@@ -86,11 +95,11 @@ func (s Store) lock(ctx context.Context, query string, key any) (app.Order, erro
 		direction, status, currency string
 		amount, held, gmf           int64
 		feesJSON                    []byte
-		holdID                      *ids.ID // an order that holds nothing has none
+		holdID, accountID           *ids.ID // an order that holds nothing, or is for no account, has none
 	)
-	err := s.q.QueryRow(ctx, query, key).Scan(&o.ID, &o.LegalEntityID, &o.AccountID, &direction, &o.Rail, &o.EndToEndID, &o.InstrID,
+	err := s.q.QueryRow(ctx, query, key).Scan(&o.ID, &o.LegalEntityID, &accountID, &direction, &o.Rail, &o.EndToEndID, &o.InstrID,
 		&o.TxID, &currency, &amount, &o.Creditor.Number, &o.Creditor.Key, &status, &o.Reason, &o.RailRef, &o.ExternalRef, &holdID,
-		&held, &feesJSON, &gmf)
+		&held, &feesJSON, &gmf, &o.DebtorAgent)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.Order{}, fmt.Errorf("%w: %v", app.ErrOrderNotFound, key)
 	}
@@ -110,6 +119,9 @@ func (s Store) lock(ctx context.Context, query string, key any) (app.Order, erro
 	}
 	if holdID != nil {
 		o.HoldID = *holdID
+	}
+	if accountID != nil {
+		o.AccountID = *accountID
 	}
 	o.Direction, o.Status = domain.Direction(direction), domain.Status(status)
 	o.Amount, o.Held, o.GMF = money.New(amount, c), money.New(held, c), money.New(gmf, c)

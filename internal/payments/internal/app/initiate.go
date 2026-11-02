@@ -118,11 +118,9 @@ func newOrder(a deposits.Account, in InitiateInput) (Order, error) {
 	case in.Amount.Currency() != a.Currency:
 		return Order{}, fmt.Errorf("%w: the payment is in %s and the account in %s", domain.ErrInvalidOrder, in.Amount.Currency().Code(),
 			a.Currency.Code())
-	case (in.Creditor.Number == "") == (in.Creditor.Key == ""):
-		return Order{}, fmt.Errorf("%w: the beneficiary goes by account or by key", domain.ErrInvalidOrder)
-	case !validText(in.Creditor.Number, maxCreditorNumber) || !validText(in.Creditor.Key, maxCreditorKey):
-		return Order{}, fmt.Errorf("%w: the beneficiary's account is up to %d characters and its key up to %d, of text",
-			domain.ErrInvalidOrder, maxCreditorNumber, maxCreditorKey)
+	}
+	if err := checkCreditor(in.Creditor); err != nil {
+		return Order{}, err
 	}
 	id := ids.New()
 	o, err := domain.NewOutgoing(domain.OutgoingInput{
@@ -136,6 +134,19 @@ func newOrder(a deposits.Account, in InitiateInput) (Order, error) {
 	zero := money.New(0, in.Amount.Currency())
 	order := Order{Order: o, Creditor: in.Creditor, ExternalRef: in.ExternalRef, Held: zero, GMF: zero}
 	return order, order.StartScreening()
+}
+
+// checkCreditor is domain.ErrInvalidOrder unless c goes by one account of up to 64 characters or one key of up
+// to 128, of text.
+func checkCreditor(c AccountRef) error {
+	switch {
+	case (c.Number == "") == (c.Key == ""):
+		return fmt.Errorf("%w: the beneficiary goes by account or by key", domain.ErrInvalidOrder)
+	case !validText(c.Number, maxCreditorNumber) || !validText(c.Key, maxCreditorKey):
+		return fmt.Errorf("%w: the beneficiary's account is up to %d characters and its key up to %d, of text",
+			domain.ErrInvalidOrder, maxCreditorNumber, maxCreditorKey)
+	}
+	return nil
 }
 
 // validText reports whether s is valid UTF-8 of up to most characters without NUL, which PostgreSQL does not

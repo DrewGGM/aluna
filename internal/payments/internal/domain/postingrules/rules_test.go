@@ -52,7 +52,7 @@ func TestNoChargesAreNoEntries(t *testing.T) {
 }
 
 // TestAChargeTheRulesCannotPost: an amount that is not positive or has no currency, or a missing or repeated
-// account, is ErrInvalidCharge.
+// account, is ErrInvalidMovement.
 func TestAChargeTheRulesCannotPost(t *testing.T) {
 	customer, income := ids.New(), ids.New()
 	cases := map[string]struct {
@@ -69,8 +69,8 @@ func TestAChargeTheRulesCannotPost(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			entries, err := Charges(tc.account, []Charge{{Amount: cop(t, 1), Counter: ids.New()}, tc.charge})
-			if !errors.Is(err, ErrInvalidCharge) || entries != nil {
-				t.Fatalf("Charges = %+v, %v; want ErrInvalidCharge and no entries", entries, err)
+			if !errors.Is(err, ErrInvalidMovement) || entries != nil {
+				t.Fatalf("Charges = %+v, %v; want ErrInvalidMovement and no entries", entries, err)
 			}
 		})
 	}
@@ -105,4 +105,28 @@ func TestTheChargesBalance(t *testing.T) {
 			rt.Fatalf("entries %+v add up to %d and debit the customer %d, want 0 and %d", entries, sum, debited, total)
 		}
 	})
+}
+
+// TestATransferReceivedComesFromTheClearingAccount (FR-32): a credit and a suspense each debit the rail's
+// clearing account and credit the customer's account or the rail's suspense account.
+func TestATransferReceivedComesFromTheClearingAccount(t *testing.T) {
+	clearing, customer, suspense := ids.New(), ids.New(), ids.New()
+	cases := map[string]struct {
+		rule     func(money.Amount, ids.ID, ids.ID) ([]ledger.EntryInput, error)
+		credited ids.ID
+	}{"a credit": {InboundCredit, customer}, "a suspense": {InboundSuspense, suspense}}
+	for name, tc := range cases {
+		entries, err := tc.rule(cop(t, 30000000), clearing, tc.credited)
+
+		want := []ledger.EntryInput{{AccountID: clearing, Amount: cop(t, 30000000)}, {AccountID: tc.credited, Amount: cop(t, -30000000)}}
+		if err != nil || !slices.Equal(entries, want) {
+			t.Errorf("%s = %+v (%v), want %+v", name, entries, err, want)
+		}
+		if _, err := tc.rule(cop(t, 0), clearing, tc.credited); !errors.Is(err, ErrInvalidMovement) {
+			t.Errorf("%s of nothing = %v, want ErrInvalidMovement", name, err)
+		}
+		if _, err := tc.rule(cop(t, 1), clearing, clearing); !errors.Is(err, ErrInvalidMovement) {
+			t.Errorf("%s to the clearing account = %v, want ErrInvalidMovement", name, err)
+		}
+	}
 }

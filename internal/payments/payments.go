@@ -47,6 +47,7 @@ const (
 	StatusSent             = domain.StatusSent
 	StatusSettled          = domain.StatusSettled
 	StatusRejected         = domain.StatusRejected
+	StatusSuspended        = domain.StatusSuspended
 )
 
 // RailSimBreB is the simulated Bre-B rail, the only one for now.
@@ -57,9 +58,9 @@ var (
 	ErrInvalidOrder = domain.ErrInvalidOrder
 	// ErrDuplicatePayment means the entity already made a payment with that reference.
 	ErrDuplicatePayment = app.ErrDuplicatePayment
-	// ErrRailNotConfigured means the entity has no clearing account for the rail in the payment's currency: a
-	// payment through it cannot be held.
-	ErrRailNotConfigured = errors.New("the rail has no clearing account in the entity")
+	// ErrRailNotConfigured means the entity has no clearing or suspense account for the rail in the payment's
+	// currency: a payment through it cannot be held, nor a transfer received booked.
+	ErrRailNotConfigured = errors.New("the rail has no clearing or suspense account in the entity")
 )
 
 // holdLife is how long a payment's hold lasts: the rail's outcome comes much sooner, and an order without one
@@ -175,7 +176,7 @@ func (i initiation) Charges(ctx context.Context, a deposits.Account, amount mone
 }
 
 func (i initiation) Hold(ctx context.Context, a deposits.Account, rail string, amount money.Amount) (ids.ID, error) {
-	clearing, err := i.clearing(ctx, a, rail)
+	clearing, err := i.s.railAccount(ctx, i.tx, a.LegalEntityID, clearingAccount, rail, a.Currency)
 	if err != nil {
 		return ids.ID{}, err
 	}
@@ -189,20 +190,27 @@ func (i initiation) Hold(ctx context.Context, a deposits.Account, rail string, a
 	return h.ID(), nil
 }
 
-// clearing is rail's clearing account in a's entity and currency: L.CLEARING.SIMBREB for simbreb. One that is
-// missing or in another currency is ErrRailNotConfigured, the entity's misconfiguration and not the caller's.
-func (i initiation) clearing(ctx context.Context, a deposits.Account, rail string) (ids.ID, error) {
-	code := "L.CLEARING." + strings.ToUpper(rail)
-	clearing, err := i.s.ledger.AccountByCode(ctx, i.tx, a.LegalEntityID, code)
+// The accounts of a rail in an entity's ledger (railAccount).
+const (
+	clearingAccount = "CLEARING" // what the entity owes the rail, or the rail owes it, until they settle
+	suspenseAccount = "SUSPENSE" // transfers received for no account the entity can credit
+)
+
+// railAccount is rail's account of kind in the entity's ledger, in currency c: L.<KIND>.<RAIL>, as
+// L.CLEARING.SIMBREB for simbreb's clearing account. One that is missing or in another currency is
+// ErrRailNotConfigured, the entity's misconfiguration and not the caller's.
+func (s *Service) railAccount(ctx context.Context, tx postgres.Tx, entity ids.ID, kind, rail string, c money.Currency) (ids.ID, error) {
+	code := "L." + kind + "." + strings.ToUpper(rail)
+	account, err := s.ledger.AccountByCode(ctx, tx, entity, code)
 	switch {
 	case errors.Is(err, ledger.ErrAccountNotFound):
 		return ids.ID{}, fmt.Errorf("%w: %s", ErrRailNotConfigured, code)
 	case err != nil:
 		return ids.ID{}, err
-	case clearing.Currency != a.Currency:
-		return ids.ID{}, fmt.Errorf("%w: %s is in %s", ErrRailNotConfigured, code, clearing.Currency.Code())
+	case account.Currency != c:
+		return ids.ID{}, fmt.Errorf("%w: %s is in %s", ErrRailNotConfigured, code, account.Currency.Code())
 	}
-	return clearing.ID, nil
+	return account.ID, nil
 }
 
 func (i initiation) Record(ctx context.Context, o app.Order) error {
@@ -224,21 +232,23 @@ func (i initiation) Record(ctx context.Context, o app.Order) error {
 	return nil
 }
 
-// orderEvent is the data of an order's event: where it stands, nothing about its beneficiary.
+// orderEvent is the data of an order's event: where it stands, nothing about its beneficiary or its payer. A
+// transfer received for no account has none.
 type orderEvent struct {
-	OrderID    ids.ID `json:"order_id"`
-	AccountID  ids.ID `json:"account_id"`
-	Status     Status `json:"status"`
-	EndToEndID string `json:"end_to_end_id"`
-	Amount     int64  `json:"amount"`
-	Currency   string `json:"currency"`
+	OrderID    ids.ID           `json:"order_id"`
+	AccountID  ids.ID           `json:"account_id,omitzero"`
+	Direction  domain.Direction `json:"direction"`
+	Status     Status           `json:"status"`
+	EndToEndID string           `json:"end_to_end_id"`
+	Amount     int64            `json:"amount"`
+	Currency   string           `json:"currency"`
 }
 
 func (s *Service) emit(ctx context.Context, tx postgres.Tx, typ string, o Order) error {
 	return s.events.Emit(ctx, tx, outbox.Event{
 		Type: typ, Subject: "payment-orders/" + o.ID.String(), LegalEntityID: o.LegalEntityID, SchemaVersion: 1,
 		Data: orderEvent{
-			OrderID: o.ID, AccountID: o.AccountID, Status: o.Status, EndToEndID: o.EndToEndID, Amount: o.Amount.Units(),
+			OrderID: o.ID, AccountID: o.AccountID, Direction: o.Direction, Status: o.Status, EndToEndID: o.EndToEndID, Amount: o.Amount.Units(),
 			Currency: o.Amount.Currency().Code(),
 		},
 	})

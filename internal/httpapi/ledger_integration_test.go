@@ -38,6 +38,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
+	"github.com/DrewGGM/aluna/internal/reconciliation"
 )
 
 var testPool *pgxpool.Pool
@@ -92,14 +93,15 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	}
 	requests := approvals.New(policy)
 	api := API{
-		LedgerHandlers:     NewLedgerHandlers(ledgerSvc, requests, uow, keys, testPool),
-		ApprovalHandlers:   NewApprovalHandlers(requests, uow, keys, testPool),
-		PartyHandlers:      NewPartyHandlers(partySvc, requests, uow, keys, testPool),
-		ProductHandlers:    NewProductHandlers(productSvc, requests, uow, keys, testPool),
-		DepositHandlers:    NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, testPool),
-		PricingHandlers:    NewPricingHandlers(pricingSvc, depositSvc, uow),
-		ComplianceHandlers: NewComplianceHandlers(complianceSvc, requests, uow, keys),
-		PaymentHandlers:    NewPaymentHandlers(paymentSvc, uow, keys),
+		LedgerHandlers:         NewLedgerHandlers(ledgerSvc, requests, uow, keys, testPool),
+		ApprovalHandlers:       NewApprovalHandlers(requests, uow, keys, testPool),
+		PartyHandlers:          NewPartyHandlers(partySvc, requests, uow, keys, testPool),
+		ProductHandlers:        NewProductHandlers(productSvc, requests, uow, keys, testPool),
+		DepositHandlers:        NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, testPool),
+		PricingHandlers:        NewPricingHandlers(pricingSvc, depositSvc, uow),
+		ComplianceHandlers:     NewComplianceHandlers(complianceSvc, requests, uow, keys),
+		PaymentHandlers:        NewPaymentHandlers(paymentSvc, uow, keys),
+		ReconciliationHandlers: NewReconciliationHandlers(reconciliation.New(events), uow, keys, testPool),
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},

@@ -771,6 +771,96 @@ paths:
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/reconciliation/statements:
+    post:
+      operationId: importStatement
+      summary: Import a rail's statement
+      description: >-
+        Takes what a rail reports of one day, camt.053 simplified (FR-34), once per reference, and pairs each
+        line with its payment order by `end_to_end_id`, direction and amount. An exception opens a break owned by
+        who imported the statement: a line in another amount, a line without an order, a line of an order the
+        core did not settle and an order of the day the rail does not report. The answer counts the lines, the
+        matched and the exceptions. A statement already imported is 409 `duplicate_statement`, and every line must
+        be booked on the statement's date. Idempotent by `Idempotency-Key`.
+      x-aluna-permission: reconciliation.statements.import
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ImportStatement"}
+      responses:
+        "201":
+          description: Statement imported
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/StatementImport"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/reconciliation/breaks:
+    get:
+      operationId: listBreaks
+      summary: List the breaks
+      description: >-
+        The entity's breaks, newest first, those of `status` if it says one: the differences the continuous
+        controls (FR-33) and the statements (FR-34) found, with their owner and where they stand.
+      x-aluna-permission: reconciliation.breaks.read
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, resolved]
+        - name: cursor
+          in: query
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200}
+      responses:
+        "200":
+          description: A page of breaks
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BreakList"}
+        "400": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/reconciliation/breaks/{id}/resolution:
+    post:
+      operationId: resolveBreak
+      summary: Resolve a break
+      description: >-
+        Closes an open break with its cause, mandatory, and who resolved it (FR-34). A difference that is still
+        there opens another on the next run of its control. One already resolved is 409 `break_already_resolved`.
+        Idempotent by `Idempotency-Key`.
+      x-aluna-permission: reconciliation.breaks.resolve
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ResolveBreak"}
+      responses:
+        "200":
+          description: Break resolved
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Break"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/transfers:
     post:
       operationId: createTransfer
@@ -1283,6 +1373,75 @@ components:
         account_id: {type: string, format: uuid}
         party_id: {type: string, format: uuid}
         marked_at: {type: string, format: date-time}
+    ImportStatement:
+      type: object
+      required: [rail, statement_ref, statement_date, lines]
+      properties:
+        rail:
+          type: string
+          enum: [simbreb]
+          description: The simulated Bre-B rail, the only one for now
+        statement_ref: {type: string, maxLength: 35, description: "The statement's identification in the rail"}
+        statement_date: {type: string, format: date}
+        lines:
+          type: array
+          maxItems: 5000
+          items: {$ref: "#/components/schemas/StatementLine"}
+    StatementLine:
+      type: object
+      required: [end_to_end_id, direction, amount, booking_date]
+      properties:
+        end_to_end_id: {type: string, maxLength: 35}
+        direction:
+          type: string
+          enum: [incoming, outgoing]
+        amount: {$ref: "#/components/schemas/Money"}
+        booking_date: {type: string, format: date}
+    StatementImport:
+      type: object
+      required: [id, lines, matched, exceptions]
+      properties:
+        id: {type: string, format: uuid, description: "The statement's id, the `statement_id` of its breaks"}
+        lines: {type: integer}
+        matched: {type: integer}
+        exceptions: {type: integer}
+    Break:
+      type: object
+      required: [id, control, subject, difference, status, owner, opened_at]
+      properties:
+        id: {type: string, format: uuid}
+        control:
+          type: string
+          description: The control that found it, or `statement_match` for a statement
+        subject:
+          type: string
+          description: What does not square, a currency, a ledger account, or a direction and an end-to-end id
+        reason:
+          type: string
+          description: Why a statement opened it
+        statement_id: {type: string, format: uuid, description: "The statement that opened it"}
+        difference: {$ref: "#/components/schemas/Money"}
+        status:
+          type: string
+          enum: [open, resolved]
+        owner: {type: string}
+        cause: {type: string}
+        resolved_by: {type: string}
+        opened_at: {type: string, format: date-time}
+        resolved_at: {type: string, format: date-time}
+    BreakList:
+      type: object
+      required: [breaks]
+      properties:
+        breaks:
+          type: array
+          items: {$ref: "#/components/schemas/Break"}
+        next_cursor: {type: string}
+    ResolveBreak:
+      type: object
+      required: [cause]
+      properties:
+        cause: {type: string, description: "Why it happened, of 1 to 1000 characters"}
     ResolveScreeningCase:
       type: object
       required: [resolution]

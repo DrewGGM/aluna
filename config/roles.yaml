@@ -58,6 +58,9 @@ finance:
     - ledger.transactions.post
     - ledger.transactions.read
     - ledger.transactions.reverse
+    - reconciliation.statements.import
+    - reconciliation.breaks.read
+    - reconciliation.breaks.resolve
 
 # Compliance: queries, KYC changes, screening resolutions and deciding requests.
 compliance:
@@ -85,6 +88,7 @@ auditor:
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read
+    - reconciliation.breaks.read
 
 # Internal services (rails, jobs): move money with holds and entries.
 system:

@@ -90,15 +90,33 @@ func (e BalanceMode) Valid() bool {
 	}
 }
 
+// Defines values for BreakStatus.
+const (
+	BreakStatusOpen     BreakStatus = "open"
+	BreakStatusResolved BreakStatus = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the BreakStatus enum.
+func (e BreakStatus) Valid() bool {
+	switch e {
+	case BreakStatusOpen:
+		return true
+	case BreakStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreatePaymentOrderRail.
 const (
-	Simbreb CreatePaymentOrderRail = "simbreb"
+	CreatePaymentOrderRailSimbreb CreatePaymentOrderRail = "simbreb"
 )
 
 // Valid indicates whether the value is a known member of the CreatePaymentOrderRail enum.
 func (e CreatePaymentOrderRail) Valid() bool {
 	switch e {
-	case Simbreb:
+	case CreatePaymentOrderRailSimbreb:
 		return true
 	default:
 		return false
@@ -150,6 +168,21 @@ func (e HoldStatus) Valid() bool {
 	case HoldStatusPending:
 		return true
 	case HoldStatusReleased:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ImportStatementRail.
+const (
+	ImportStatementRailSimbreb ImportStatementRail = "simbreb"
+)
+
+// Valid indicates whether the value is a known member of the ImportStatementRail enum.
+func (e ImportStatementRail) Valid() bool {
+	switch e {
+	case ImportStatementRailSimbreb:
 		return true
 	default:
 		return false
@@ -345,6 +378,42 @@ func (e RiskLevel) Valid() bool {
 	}
 }
 
+// Defines values for StatementLineDirection.
+const (
+	Incoming StatementLineDirection = "incoming"
+	Outgoing StatementLineDirection = "outgoing"
+)
+
+// Valid indicates whether the value is a known member of the StatementLineDirection enum.
+func (e StatementLineDirection) Valid() bool {
+	switch e {
+	case Incoming:
+		return true
+	case Outgoing:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListBreaksParamsStatus.
+const (
+	ListBreaksParamsStatusOpen     ListBreaksParamsStatus = "open"
+	ListBreaksParamsStatusResolved ListBreaksParamsStatus = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the ListBreaksParamsStatus enum.
+func (e ListBreaksParamsStatus) Valid() bool {
+	switch e {
+	case ListBreaksParamsStatusOpen:
+		return true
+	case ListBreaksParamsStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // AccountHistory defines model for AccountHistory.
 type AccountHistory struct {
 	Entries []HistoryEntry `json:"entries"`
@@ -418,6 +487,39 @@ type Balance struct {
 
 // BalanceMode defines model for BalanceMode.
 type BalanceMode string
+
+// Break defines model for Break.
+type Break struct {
+	Cause *string `json:"cause,omitempty"`
+
+	// Control The control that found it, or `statement_match` for a statement
+	Control    string             `json:"control"`
+	Difference Money              `json:"difference"`
+	Id         openapi_types.UUID `json:"id"`
+	OpenedAt   time.Time          `json:"opened_at"`
+	Owner      string             `json:"owner"`
+
+	// Reason Why a statement opened it
+	Reason     *string    `json:"reason,omitempty"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	ResolvedBy *string    `json:"resolved_by,omitempty"`
+
+	// StatementId The statement that opened it
+	StatementId *openapi_types.UUID `json:"statement_id,omitempty"`
+	Status      BreakStatus         `json:"status"`
+
+	// Subject What does not square, a currency, a ledger account, or a direction and an end-to-end id
+	Subject string `json:"subject"`
+}
+
+// BreakStatus defines model for Break.Status.
+type BreakStatus string
+
+// BreakList defines model for BreakList.
+type BreakList struct {
+	Breaks     []Break `json:"breaks"`
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
 
 // CaptureHold defines model for CaptureHold.
 type CaptureHold struct {
@@ -577,6 +679,21 @@ type HoldCapture struct {
 
 // HoldStatus defines model for HoldStatus.
 type HoldStatus string
+
+// ImportStatement defines model for ImportStatement.
+type ImportStatement struct {
+	Lines []StatementLine `json:"lines"`
+
+	// Rail The simulated Bre-B rail, the only one for now
+	Rail          ImportStatementRail `json:"rail"`
+	StatementDate openapi_types.Date  `json:"statement_date"`
+
+	// StatementRef The statement's identification in the rail
+	StatementRef string `json:"statement_ref"`
+}
+
+// ImportStatementRail The simulated Bre-B rail, the only one for now
+type ImportStatementRail string
 
 // KYCStatus defines model for KYCStatus.
 type KYCStatus string
@@ -808,6 +925,12 @@ type RequestReversal struct {
 	Reason       string              `json:"reason"`
 }
 
+// ResolveBreak defines model for ResolveBreak.
+type ResolveBreak struct {
+	// Cause Why it happened, of 1 to 1000 characters
+	Cause string `json:"cause"`
+}
+
 // ResolveScreeningCase defines model for ResolveScreeningCase.
 type ResolveScreeningCase struct {
 	// Resolution `cleared` if the subject is not on the lists, `confirmed` if the match is real
@@ -819,6 +942,27 @@ type ResolveScreeningCaseResolution string
 
 // RiskLevel defines model for RiskLevel.
 type RiskLevel string
+
+// StatementImport defines model for StatementImport.
+type StatementImport struct {
+	Exceptions int `json:"exceptions"`
+
+	// Id The statement's id, the `statement_id` of its breaks
+	Id      openapi_types.UUID `json:"id"`
+	Lines   int                `json:"lines"`
+	Matched int                `json:"matched"`
+}
+
+// StatementLine defines model for StatementLine.
+type StatementLine struct {
+	Amount      Money                  `json:"amount"`
+	BookingDate openapi_types.Date     `json:"booking_date"`
+	Direction   StatementLineDirection `json:"direction"`
+	EndToEndId  string                 `json:"end_to_end_id"`
+}
+
+// StatementLineDirection defines model for StatementLine.Direction.
+type StatementLineDirection string
 
 // Transaction defines model for Transaction.
 type Transaction struct {
@@ -930,6 +1074,26 @@ type CreateProductVersionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListBreaksParams defines parameters for ListBreaks.
+type ListBreaksParams struct {
+	Status *ListBreaksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+	Cursor *string                 `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int                    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListBreaksParamsStatus defines parameters for ListBreaks.
+type ListBreaksParamsStatus string
+
+// ResolveBreakParams defines parameters for ResolveBreak.
+type ResolveBreakParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ImportStatementParams defines parameters for ImportStatement.
+type ImportStatementParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ResolveScreeningCaseParams defines parameters for ResolveScreeningCase.
 type ResolveScreeningCaseParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -991,6 +1155,12 @@ type CreateProductVersionJSONRequestBody = CreateProductVersion
 
 // CreateQuoteJSONRequestBody defines body for CreateQuote for application/json ContentType.
 type CreateQuoteJSONRequestBody = CreateQuote
+
+// ResolveBreakJSONRequestBody defines body for ResolveBreak for application/json ContentType.
+type ResolveBreakJSONRequestBody = ResolveBreak
+
+// ImportStatementJSONRequestBody defines body for ImportStatement for application/json ContentType.
+type ImportStatementJSONRequestBody = ImportStatement
 
 // ResolveScreeningCaseJSONRequestBody defines body for ResolveScreeningCase for application/json ContentType.
 type ResolveScreeningCaseJSONRequestBody = ResolveScreeningCase
@@ -1084,6 +1254,15 @@ type ServerInterface interface {
 	// CreateQuote Quote what an operation costs
 	// (POST /v1/quotes)
 	CreateQuote(w http.ResponseWriter, r *http.Request)
+	// ListBreaks List the breaks
+	// (GET /v1/reconciliation/breaks)
+	ListBreaks(w http.ResponseWriter, r *http.Request, params ListBreaksParams)
+	// ResolveBreak Resolve a break
+	// (POST /v1/reconciliation/breaks/{id}/resolution)
+	ResolveBreak(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, params ResolveBreakParams)
+	// ImportStatement Import a rail's statement
+	// (POST /v1/reconciliation/statements)
+	ImportStatement(w http.ResponseWriter, r *http.Request, params ImportStatementParams)
 	// ResolveScreeningCase Request the resolution of a screening case
 	// (POST /v1/screening-cases/{id}/resolution)
 	ResolveScreeningCase(w http.ResponseWriter, r *http.Request, id ID, params ResolveScreeningCaseParams)
@@ -2136,6 +2315,164 @@ func (siw *ServerInterfaceWrapper) CreateQuote(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ListBreaks operation middleware
+func (siw *ServerInterfaceWrapper) ListBreaks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListBreaksParams
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListBreaks(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResolveBreak operation middleware
+func (siw *ServerInterfaceWrapper) ResolveBreak(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ResolveBreakParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResolveBreak(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ImportStatement operation middleware
+func (siw *ServerInterfaceWrapper) ImportStatement(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ImportStatementParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ImportStatement(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ResolveScreeningCase operation middleware
 func (siw *ServerInterfaceWrapper) ResolveScreeningCase(w http.ResponseWriter, r *http.Request) {
 
@@ -2509,6 +2846,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/withdrawals", wrapper.CreateWithdrawal)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/payment-orders", wrapper.CreatePaymentOrder)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/statements", wrapper.ImportStatement)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/reconciliation/breaks", wrapper.ListBreaks)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/breaks/{id}/resolution", wrapper.ResolveBreak)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transfers", wrapper.CreateTransfer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/gmf-exemption", wrapper.CreateGMFExemption)
 
@@ -4821,6 +5161,272 @@ func (response CreateQuotedefaultApplicationProblemPlusJSONResponse) VisitCreate
 	return err
 }
 
+type ListBreaksRequestObject struct {
+	Params ListBreaksParams
+}
+
+type ListBreaksResponseObject interface {
+	VisitListBreaksResponse(w http.ResponseWriter) error
+}
+
+type ListBreaks200JSONResponse BreakList
+
+func (response ListBreaks200JSONResponse) VisitListBreaksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListBreaks400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListBreaks400ApplicationProblemPlusJSONResponse) VisitListBreaksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListBreaksdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListBreaksdefaultApplicationProblemPlusJSONResponse) VisitListBreaksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveBreakRequestObject struct {
+	Id     openapi_types.UUID `json:"id"`
+	Params ResolveBreakParams
+	Body   *ResolveBreakJSONRequestBody
+}
+
+type ResolveBreakResponseObject interface {
+	VisitResolveBreakResponse(w http.ResponseWriter) error
+}
+
+type ResolveBreak200JSONResponse Break
+
+func (response ResolveBreak200JSONResponse) VisitResolveBreakResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveBreak400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ResolveBreak400ApplicationProblemPlusJSONResponse) VisitResolveBreakResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveBreak404ApplicationProblemPlusJSONResponse Problem
+
+func (response ResolveBreak404ApplicationProblemPlusJSONResponse) VisitResolveBreakResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveBreak409ApplicationProblemPlusJSONResponse Problem
+
+func (response ResolveBreak409ApplicationProblemPlusJSONResponse) VisitResolveBreakResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveBreak413ApplicationProblemPlusJSONResponse Problem
+
+func (response ResolveBreak413ApplicationProblemPlusJSONResponse) VisitResolveBreakResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveBreak422ApplicationProblemPlusJSONResponse Problem
+
+func (response ResolveBreak422ApplicationProblemPlusJSONResponse) VisitResolveBreakResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveBreakdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ResolveBreakdefaultApplicationProblemPlusJSONResponse) VisitResolveBreakResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportStatementRequestObject struct {
+	Params ImportStatementParams
+	Body   *ImportStatementJSONRequestBody
+}
+
+type ImportStatementResponseObject interface {
+	VisitImportStatementResponse(w http.ResponseWriter) error
+}
+
+type ImportStatement201JSONResponse StatementImport
+
+func (response ImportStatement201JSONResponse) VisitImportStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportStatement400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ImportStatement400ApplicationProblemPlusJSONResponse) VisitImportStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportStatement409ApplicationProblemPlusJSONResponse Problem
+
+func (response ImportStatement409ApplicationProblemPlusJSONResponse) VisitImportStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportStatement413ApplicationProblemPlusJSONResponse Problem
+
+func (response ImportStatement413ApplicationProblemPlusJSONResponse) VisitImportStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportStatement422ApplicationProblemPlusJSONResponse Problem
+
+func (response ImportStatement422ApplicationProblemPlusJSONResponse) VisitImportStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportStatementdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ImportStatementdefaultApplicationProblemPlusJSONResponse) VisitImportStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ResolveScreeningCaseRequestObject struct {
 	Id     ID `json:"id"`
 	Params ResolveScreeningCaseParams
@@ -5378,6 +5984,15 @@ type StrictServerInterface interface {
 	// CreateQuote Quote what an operation costs
 	// (POST /v1/quotes)
 	CreateQuote(ctx context.Context, request CreateQuoteRequestObject) (CreateQuoteResponseObject, error)
+	// ListBreaks List the breaks
+	// (GET /v1/reconciliation/breaks)
+	ListBreaks(ctx context.Context, request ListBreaksRequestObject) (ListBreaksResponseObject, error)
+	// ResolveBreak Resolve a break
+	// (POST /v1/reconciliation/breaks/{id}/resolution)
+	ResolveBreak(ctx context.Context, request ResolveBreakRequestObject) (ResolveBreakResponseObject, error)
+	// ImportStatement Import a rail's statement
+	// (POST /v1/reconciliation/statements)
+	ImportStatement(ctx context.Context, request ImportStatementRequestObject) (ImportStatementResponseObject, error)
 	// ResolveScreeningCase Request the resolution of a screening case
 	// (POST /v1/screening-cases/{id}/resolution)
 	ResolveScreeningCase(ctx context.Context, request ResolveScreeningCaseRequestObject) (ResolveScreeningCaseResponseObject, error)
@@ -6203,6 +6818,99 @@ func (sh *strictHandler) CreateQuote(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateQuoteResponseObject); ok {
 		if err := validResponse.VisitCreateQuoteResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListBreaks operation middleware
+func (sh *strictHandler) ListBreaks(w http.ResponseWriter, r *http.Request, params ListBreaksParams) {
+	var request ListBreaksRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListBreaks(ctx, request.(ListBreaksRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListBreaks")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListBreaksResponseObject); ok {
+		if err := validResponse.VisitListBreaksResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResolveBreak operation middleware
+func (sh *strictHandler) ResolveBreak(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, params ResolveBreakParams) {
+	var request ResolveBreakRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body ResolveBreakJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResolveBreak(ctx, request.(ResolveBreakRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResolveBreak")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResolveBreakResponseObject); ok {
+		if err := validResponse.VisitResolveBreakResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ImportStatement operation middleware
+func (sh *strictHandler) ImportStatement(w http.ResponseWriter, r *http.Request, params ImportStatementParams) {
+	var request ImportStatementRequestObject
+
+	request.Params = params
+
+	var body ImportStatementJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ImportStatement(ctx, request.(ImportStatementRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ImportStatement")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ImportStatementResponseObject); ok {
+		if err := validResponse.VisitImportStatementResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

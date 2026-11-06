@@ -22,6 +22,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
+	"github.com/DrewGGM/aluna/internal/reconciliation"
 )
 
 // Problem is an RFC 9457 error. Code is stable and meant for machines; Title and Detail are meant for people
@@ -197,6 +198,13 @@ var problems = []struct {
 		"A notification of the rail carries an outcome, accepted or rejected with its reason, or a transfer with ISO 20022 identifiers, the code of the bank that sent it, a positive amount, its settlement date and its creditor by account or by key; references and reasons are text of up to 255 characters.")},
 	{payments.ErrOrderNotFound, notFound},
 	{payments.ErrOutcomeConflict, conflict("outcome_conflict", "The payment order already took another outcome")},
+	// reconciliation
+	{reconciliation.ErrInvalidStatement, unprocessable("invalid_statement", "A statement is of a known rail, with a reference of up to 35 characters, a date and up to 5000 lines, each with an end-to-end id of up to 35, a positive amount, a direction and that date")},
+	{reconciliation.ErrDuplicateStatement, conflict("duplicate_statement", "That statement of the rail was already imported")},
+	{reconciliation.ErrBreakNotFound, notFound},
+	{reconciliation.ErrBreakResolved, conflict("break_already_resolved", "The break is already resolved")},
+	{reconciliation.ErrInvalidResolution, unprocessable("invalid_resolution", "A resolution has a cause of 1 to 1000 characters")},
+	{reconciliation.ErrInvalidPage, invalidRequest("Invalid page", "A page has 1 to 200 breaks, of status open or resolved, and its cursor is one a previous page gave.")},
 	// compliance
 	{compliance.ErrCaseNotFound, notFound},
 	{compliance.ErrCaseResolved, conflict("case_already_resolved", "The screening case is already resolved")},

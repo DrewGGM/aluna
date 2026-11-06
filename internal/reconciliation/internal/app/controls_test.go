@@ -56,7 +56,7 @@ func (m *memory) OpenBreak(_ context.Context, b app.Break) (bool, error) {
 	return true, nil
 }
 
-func (m *memory) Publish(_ context.Context, b app.Break) error {
+func (m *memory) PublishOpened(_ context.Context, b app.Break) error {
 	if m.failPub {
 		return errFailed
 	}

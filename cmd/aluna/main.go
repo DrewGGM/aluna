@@ -359,14 +359,15 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 	}
 	requests := approvals.New(policy)
 	return httpapi.API{
-		LedgerHandlers:     httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
-		ApprovalHandlers:   httpapi.NewApprovalHandlers(requests, uow, keys, pool),
-		PartyHandlers:      httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
-		ProductHandlers:    httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
-		DepositHandlers:    httpapi.NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, pool),
-		PricingHandlers:    httpapi.NewPricingHandlers(pricingSvc, depositSvc, uow),
-		ComplianceHandlers: httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
-		PaymentHandlers:    httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
+		LedgerHandlers:         httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
+		ApprovalHandlers:       httpapi.NewApprovalHandlers(requests, uow, keys, pool),
+		PartyHandlers:          httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
+		ProductHandlers:        httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),
+		DepositHandlers:        httpapi.NewDepositHandlers(depositSvc, ledgerSvc, uow, keys, pool),
+		PricingHandlers:        httpapi.NewPricingHandlers(pricingSvc, depositSvc, uow),
+		ComplianceHandlers:     httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
+		PaymentHandlers:        httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
+		ReconciliationHandlers: httpapi.NewReconciliationHandlers(reconciliation.New(events), uow, keys, pool),
 	}, nil
 }
 

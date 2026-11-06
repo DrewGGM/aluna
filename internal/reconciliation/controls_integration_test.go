@@ -535,18 +535,18 @@ func TestAControlHasItsOwnTimeLimit(t *testing.T) {
 	})
 }
 
-// TestAControlWithoutStatementFails: it does not pass as a clean run of a control that looked at nothing.
-func TestAControlWithoutStatementFails(t *testing.T) {
+// TestAControlWithoutQueryFails: it does not pass as a clean run of a control that looked at nothing.
+func TestAControlWithoutQueryFails(t *testing.T) {
 	inTx(t, func(tx postgres.Tx) error {
 		if _, err := pg.NewStore(tx).Findings(t.Context(), "unknown"); err == nil {
-			t.Error("no error for a control without a statement")
+			t.Error("no error for a control without a query")
 		}
 		return nil
 	})
 }
 
-// TestEveryControlHasAStatement: Findings accepts each control of a run.
-func TestEveryControlHasAStatement(t *testing.T) {
+// TestEveryControlHasAQuery: Findings accepts each control of a run.
+func TestEveryControlHasAQuery(t *testing.T) {
 	inTx(t, func(tx postgres.Tx) error {
 		for _, c := range app.Controls {
 			if _, err := pg.NewStore(tx).Findings(t.Context(), c); err != nil {

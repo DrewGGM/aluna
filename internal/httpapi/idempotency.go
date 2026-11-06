@@ -129,6 +129,16 @@ func (r storedResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) e
 	return r.write(w)
 }
 
+// VisitImportStatementResponse writes the response of POST /v1/reconciliation/statements.
+func (r storedResponse) VisitImportStatementResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
+// VisitResolveBreakResponse writes the response of POST /v1/reconciliation/breaks/{id}/resolution.
+func (r storedResponse) VisitResolveBreakResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitResolveScreeningCaseResponse writes the response of POST /v1/screening-cases/{id}/resolution.
 func (r storedResponse) VisitResolveScreeningCaseResponse(w http.ResponseWriter) error {
 	return r.write(w)

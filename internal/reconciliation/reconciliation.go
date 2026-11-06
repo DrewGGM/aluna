@@ -1,11 +1,11 @@
-// Package reconciliation is the facade of the continuous controls (FR-33): it checks the ledger against itself,
-// keeps every result and opens a break for each difference.
+// Package reconciliation is the facade of the continuous controls (FR-33) and of the rail's statements (FR-34): it
+// checks the ledger against itself and the payment orders against what the rail reports, keeps every result and
+// opens a break for each difference, which stays until someone resolves it with a cause.
 package reconciliation
 
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/outbox"
@@ -14,14 +14,12 @@ import (
 	"github.com/DrewGGM/aluna/internal/reconciliation/internal/app"
 )
 
-const typeBreakOpened = "aluna.reconciliation.break.opened.v1"
-
 // Events publishes reconciliation events; outbox.Outbox implements it.
 type Events interface {
 	Emit(ctx context.Context, tx postgres.Tx, e outbox.Event) error
 }
 
-// Service runs the controls.
+// Service runs the controls, imports statements and keeps the breaks.
 type Service struct{ events Events }
 
 // New creates the service; it publishes its events to events.
@@ -58,40 +56,5 @@ func (s *Service) run(ctx context.Context, uow *postgres.UnitOfWork, c app.Contr
 	if err != nil {
 		return err
 	}
-	return uow.Do(ctx, func(tx postgres.Tx) error {
-		return app.Record(ctx, recorder{Store: pg.NewStore(tx), events: s.events, tx: tx}, c, entities, found)
-	})
-}
-
-// recorder is app.Recorder within tx.
-type recorder struct {
-	pg.Store
-	events Events
-	tx     postgres.Tx
-}
-
-// Publish emits that b opened.
-func (r recorder) Publish(ctx context.Context, b app.Break) error {
-	err := r.events.Emit(ctx, r.tx, outbox.Event{
-		Type: typeBreakOpened, Subject: "reconciliation-breaks/" + b.ID.String(), LegalEntityID: b.LegalEntityID, SchemaVersion: 1,
-		Data: openedEvent{BreakID: b.ID, Control: b.Control, Subject: b.Subject, Difference: amount{b.Difference.Units(), b.Difference.Currency().Code()}},
-	})
-	if err != nil {
-		return fmt.Errorf("publish the break of %s: %w", b.Control, err)
-	}
-	return nil
-}
-
-// amount is a Money in an event: minor units and a currency, like the API's.
-type amount struct {
-	Amount   int64  `json:"amount"`
-	Currency string `json:"currency"`
-}
-
-// openedEvent is the data of aluna.reconciliation.break.opened.v1: what does not square and by how much.
-type openedEvent struct {
-	BreakID    ids.ID      `json:"break_id"`
-	Control    app.Control `json:"control"`
-	Subject    string      `json:"subject"`
-	Difference amount      `json:"difference"`
+	return uow.Do(ctx, func(tx postgres.Tx) error { return app.Record(ctx, s.within(tx), c, entities, found) })
 }

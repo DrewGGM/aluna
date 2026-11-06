@@ -218,6 +218,23 @@ func (s *Service) Account(ctx context.Context, q postgres.Querier, entity, id id
 	return pg.NewStore(q).Account(ctx, entity, id)
 }
 
+// Holding is the party that holds a deposit account and the cash account of its product.
+type Holding struct{ PartyID, CashAccount ids.ID }
+
+// HoldingOf is the holding of the deposit account of the entity held in ledger account ledgerAccount, read
+// within tx, or ErrAccountNotFound if no deposit account is.
+func (s *Service) HoldingOf(ctx context.Context, tx postgres.Tx, entity, ledgerAccount ids.ID) (Holding, error) {
+	a, err := pg.NewStore(tx).AccountHeldIn(ctx, entity, ledgerAccount)
+	if err != nil {
+		return Holding{}, err
+	}
+	cash, err := s.movements(tx).CashAccount(ctx, a)
+	if err != nil {
+		return Holding{}, err
+	}
+	return Holding{PartyID: a.PartyID, CashAccount: cash}, nil
+}
+
 // kycStatus is the current KYC status of party partyID of the entity, read once.
 func (s *Service) kycStatus(ctx context.Context, tx postgres.Tx, entity, partyID ids.ID) (party.KYCStatus, error) {
 	p, err := s.parties.Get(ctx, tx, entity, partyID)

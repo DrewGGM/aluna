@@ -1,6 +1,7 @@
 // Package compliance is the facade of screening (FR-42): every party being registered and every outgoing
 // payment is screened against the sanction lists, behind a Screener that fails closed (AD-3), and what the
-// vendor does not clear waits as a case until compliance resolves it.
+// vendor does not clear waits as a case until compliance resolves it. It also keeps each party's cash totals
+// (FR-43), from the transactions the ledger posts.
 package compliance
 
 import (

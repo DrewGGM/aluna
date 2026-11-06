@@ -60,6 +60,7 @@ type transactionPayload struct {
 	Code          string         `json:"code"`
 	Source        string         `json:"source"`
 	ExternalRef   string         `json:"external_ref"`
+	Channel       string         `json:"channel"`
 	ValueDate     string         `json:"value_date"`
 	BusinessDate  string         `json:"business_date"`
 	PostedAt      time.Time      `json:"posted_at"`
@@ -77,7 +78,7 @@ func transactionEvent(typ string, t Transaction) Event {
 	return Event{
 		Type: typ, Subject: "transactions/" + t.ID.String(), LegalEntityID: t.LegalEntityID, SchemaVersion: schemaVersion,
 		Data: transactionPayload{
-			TransactionID: t.ID, ReversesID: t.ReversesID, Code: t.Code, Source: t.Source, ExternalRef: t.ExternalRef,
+			TransactionID: t.ID, ReversesID: t.ReversesID, Code: t.Code, Source: t.Source, ExternalRef: t.ExternalRef, Channel: t.Channel,
 			ValueDate: t.ValueDate.Format(time.DateOnly), BusinessDate: t.BusinessDate.Format(time.DateOnly),
 			PostedAt: t.PostedAt.UTC(), Entries: entries,
 		},

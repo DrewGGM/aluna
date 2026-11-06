@@ -11,6 +11,7 @@ import (
 
 	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
@@ -19,9 +20,10 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// movementChannel is the channel recorded with the movements that come in through the API; who called is
+// transferChannel is the channel recorded with the transfers that come in through the API, and
+// compliance.ChannelCash the one of cash deposits and withdrawals, wherever they are called from; who called is
 // the actor.
-const movementChannel = "api"
+const transferChannel = "api"
 
 // defaultPageSize is the page of history of a request without limit.
 const defaultPageSize = 50
@@ -158,7 +160,7 @@ func (h *DepositHandlers) cash(ctx context.Context, id ids.ID, action, key strin
 	}
 	in := deposits.CashInput{
 		LegalEntityID: p.LegalEntityID, AccountID: id, QuoteID: quoteIDOf(r.quote), Amount: amount, ExternalRef: movementRef(p, op, key),
-		Actor: p.Subject, Channel: movementChannel,
+		Actor: p.Subject, Channel: compliance.ChannelCash,
 	}
 	return h.commands.idempotent(ctx, p, op, key, r.body, func(tx postgres.Tx) (any, error) {
 		posted, err := move(ctx, tx, in)
@@ -185,7 +187,7 @@ func (h *DepositHandlers) CreateTransfer(ctx context.Context, req gen.CreateTran
 	key := req.Params.IdempotencyKey
 	in := deposits.TransferInput{
 		LegalEntityID: p.LegalEntityID, From: from, To: to, QuoteID: quoteIDOf(req.Body.QuoteId), Amount: amount,
-		ExternalRef: movementRef(p, op, key), Actor: p.Subject, Channel: movementChannel,
+		ExternalRef: movementRef(p, op, key), Actor: p.Subject, Channel: transferChannel,
 	}
 	resp, err := h.commands.idempotent(ctx, p, op, key, req.Body, func(tx postgres.Tx) (any, error) {
 		posted, err := h.deposits.Transfer(ctx, tx, in)

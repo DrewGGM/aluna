@@ -211,7 +211,7 @@ func TestTheEventsCarryIDsAmountsAndDates(t *testing.T) {
 	got := expectTypes(t, txSubject(tx.ID), evPosted)[0]
 	day := in.BusinessDate.Format(time.DateOnly)
 	want := map[string]any{
-		"transaction_id": tx.ID.String(), "code": "test", "source": "test", "external_ref": in.ExternalRef,
+		"transaction_id": tx.ID.String(), "code": "test", "source": "test", "external_ref": in.ExternalRef, "channel": in.Channel,
 		"value_date": day, "business_date": day, "posted_at": tx.PostedAt.UTC().Format(time.RFC3339Nano),
 		"entries": []any{
 			map[string]any{"account_id": cash.ID.String(), "amount": map[string]any{"amount": json.Number("100"), "currency": "COP"}},

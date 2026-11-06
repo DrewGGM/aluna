@@ -168,6 +168,34 @@ func (w world) change(t *testing.T, id ids.ID, to deposits.Status) error {
 	})
 }
 
+// TestAHoldingIsOfItsLedgerAccount: a deposit account's ledger account tells its party and the product's cash
+// account; any other ledger account, or another entity's, holds nothing.
+func TestAHoldingIsOfItsLedgerAccount(t *testing.T) {
+	w := newWorld(t)
+	vault := w.vault(t)
+	a := w.active(t)
+	holding := func(entity, account ids.ID) (deposits.Holding, error) {
+		var h deposits.Holding
+		err := try(t, func(tx postgres.Tx) error {
+			var err error
+			h, err = w.deposits.HoldingOf(t.Context(), tx, entity, account)
+			return err
+		})
+		return h, err
+	}
+
+	h, err := holding(w.entity, a.LedgerAccountID)
+	if err != nil || h != (deposits.Holding{PartyID: a.PartyID, CashAccount: vault}) {
+		t.Fatalf("holding = %+v, %v, want party %s and cash account %s", h, err, a.PartyID, vault)
+	}
+	if _, err := holding(w.entity, vault); !errors.Is(err, deposits.ErrAccountNotFound) {
+		t.Errorf("holding of the vault: %v, want ErrAccountNotFound", err)
+	}
+	if _, err := holding(ids.New(), a.LedgerAccountID); !errors.Is(err, deposits.ErrAccountNotFound) {
+		t.Errorf("holding from another entity: %v, want ErrAccountNotFound", err)
+	}
+}
+
 // TestAnAccountOpens (FR-19, FR-22, US-5): with KYC approved, the account opens active, anchored to the
 // product's version in force, on the entity's business date, held in a liability ledger account of the
 // product's currency that cannot go below 0, and its opening is an event.

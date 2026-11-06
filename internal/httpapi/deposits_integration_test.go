@@ -238,6 +238,37 @@ func TestMoneyMovesOverHTTP(t *testing.T) {
 	}
 }
 
+// TestTheChannelTellsCashApart (FR-43): a deposit and a withdrawal post on the cash channel, the one the cash
+// totals follow, and a transfer does not.
+func TestTheChannelTellsCashApart(t *testing.T) {
+	w := newDepositWorld(t)
+	customer, savings := w.party(t, party.KYCApproved), w.savings(t, true)
+	first, second := w.opened(t, customer, savings), w.opened(t, customer, savings)
+	id := first.Id.String()
+
+	for what, c := range map[string]struct {
+		posted response
+		want   string
+	}{
+		"deposit":    {w.move(t, id, "deposits", amountBody(10000000)), "cash"},
+		"withdrawal": {w.move(t, id, "withdrawals", amountBody(1000000)), "cash"},
+		"transfer":   {postTo(t, w.ts, "/v1/transfers", ids.New().String(), transferBody(first, second, 1000000)), "api"},
+	} {
+		expectCreated(t, what, c.posted)
+		var tx gen.Transaction
+		if err := json.Unmarshal(c.posted.body, &tx); err != nil {
+			t.Fatal(err)
+		}
+		var channel string
+		if err := testPool.QueryRow(t.Context(), `SELECT channel FROM ledger.transactions WHERE id = $1`, tx.Id).Scan(&channel); err != nil {
+			t.Fatal(err)
+		}
+		if channel != c.want {
+			t.Errorf("%s posted on channel %q, want %q", what, channel, c.want)
+		}
+	}
+}
+
 // TestDepositErrorsAreProblems: what the deposit rules reject comes back as its problem.
 func TestDepositErrorsAreProblems(t *testing.T) {
 	w := newDepositWorld(t)

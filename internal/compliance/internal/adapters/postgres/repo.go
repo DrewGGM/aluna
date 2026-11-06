@@ -1,4 +1,4 @@
-// Package postgres stores the screening cases in compliance.cases.
+// Package postgres stores the screening cases in compliance.cases and the cash totals in compliance.cash_totals.
 package postgres
 
 import (
@@ -62,6 +62,19 @@ func (s Store) ResolveCase(ctx context.Context, c app.Case) error {
 		c.ID, c.Status, c.ResolvedBy)
 	if err != nil {
 		return fmt.Errorf("resolve screening case %s: %w", c.ID, err)
+	}
+	return nil
+}
+
+// AddCash adds m to its party's total of its month, direction and currency, which it creates the first time.
+func (s Store) AddCash(ctx context.Context, m app.CashMovement) error {
+	_, err := s.q.Exec(ctx, `INSERT INTO compliance.cash_totals (legal_entity_id, party_id, month, direction, currency, total_units)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (legal_entity_id, party_id, month, direction, currency)
+		DO UPDATE SET total_units = cash_totals.total_units + EXCLUDED.total_units`,
+		m.LegalEntityID, m.PartyID, m.Month, m.Direction, m.Amount.Currency().Code(), m.Amount.Units())
+	if err != nil {
+		return fmt.Errorf("add to the cash total of party %s: %w", m.PartyID, err)
 	}
 	return nil
 }

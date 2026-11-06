@@ -5,13 +5,16 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/riverqueue/river"
 
 	"github.com/DrewGGM/aluna/internal/audit"
+	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/idempotency"
+	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/payments"
@@ -94,7 +97,7 @@ func Config(deps Deps) *river.Config {
 }
 
 // Register registers in w the workers of the periodic jobs, the one that publishes the outbox and the one that
-// sends payments.
+// sends payments, and subscribes the consumer of the cash totals to the outbox.
 func Register(w *river.Workers, deps Deps) {
 	river.AddWorker(w, &task[expireHolds]{run: func(ctx context.Context) error {
 		_, err := deps.Ledger.ExpireDueHolds(ctx, deps.UnitOfWork, time.Now(), holdsBatch)
@@ -129,8 +132,23 @@ func Register(w *river.Workers, deps Deps) {
 		_, err := deps.Deposits.MarkDormant(ctx, deps.UnitOfWork, dormancyBatch)
 		return err
 	}})
+	compliance.FollowCash(deps.Outbox, holderOf(deps.Deposits))
 	deps.Outbox.AddWorkers(w)
 	deps.Payments.AddWorkers(w, deps.UnitOfWork)
+}
+
+// holderOf answers compliance who holds a ledger account from deposits, where the customers' accounts are.
+func holderOf(d *deposits.Service) compliance.HolderOf {
+	return func(ctx context.Context, tx postgres.Tx, entity, account ids.ID) (compliance.Holder, bool, error) {
+		h, err := d.HoldingOf(ctx, tx, entity, account)
+		if errors.Is(err, deposits.ErrAccountNotFound) {
+			return compliance.Holder{}, false, nil
+		}
+		if err != nil {
+			return compliance.Holder{}, false, err
+		}
+		return compliance.Holder(h), true, nil
+	}
 }
 
 // Periodic are the periodic jobs. They also run at startup (RunOnStart): River's scheduler lives in the

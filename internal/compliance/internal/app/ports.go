@@ -1,5 +1,5 @@
 // Package app holds compliance's use cases and the ports they need: the screening vendor (FR-42) behind
-// a Screener that fails closed (AD-3).
+// a Screener that fails closed (AD-3), and the cash totals of each party (FR-43).
 package app
 
 import (

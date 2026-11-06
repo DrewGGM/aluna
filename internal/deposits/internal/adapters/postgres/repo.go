@@ -47,6 +47,12 @@ func (s Store) Account(ctx context.Context, entity, id ids.ID) (domain.Account, 
 	return scan(id, s.q.QueryRow(ctx, selectAccount+` WHERE id = $1 AND legal_entity_id = $2`, id, entity))
 }
 
+// AccountHeldIn returns the account of the entity held in ledger account ledgerAccount, or
+// app.ErrAccountNotFound.
+func (s Store) AccountHeldIn(ctx context.Context, entity, ledgerAccount ids.ID) (domain.Account, error) {
+	return scan(ledgerAccount, s.q.QueryRow(ctx, selectAccount+` WHERE ledger_account_id = $1 AND legal_entity_id = $2`, ledgerAccount, entity))
+}
+
 // LockAccount returns account id of the entity locked (FOR UPDATE) until the transaction ends, or
 // app.ErrAccountNotFound. FOR UPDATE and not FOR SHARE: two movements holding a shared lock that both update
 // the account later would deadlock upgrading it.

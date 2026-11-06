@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/compliance"
@@ -19,17 +20,20 @@ import (
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/reconciliation"
 )
 
 // QueueLedger is the queue for the jobs that write to the ledger and QueueInterest the one of the accrual,
 // which runs one at a time: a catch-up can outlast its interval, and the runs it enqueues meanwhile wait and
 // then find nothing to do, instead of sharing the work, colliding on its rows and taking the default queue's
-// workers from the other jobs. Payments are sent from their own queue (payments.Queue), whose jobs wait up to
-// 15 seconds for the rail and would otherwise hold the default queue's workers. The rest go to
-// river.QueueDefault.
+// workers from the other jobs. QueueControls is for the same reason the controls', although a run that waits
+// would repeat the whole read, so at most one is ever queued or running (runControls). Payments are sent from
+// their own queue (payments.Queue), whose jobs wait up to 15 seconds for the rail and would otherwise hold the
+// default queue's workers. The rest go to river.QueueDefault.
 const (
 	QueueLedger   = "ledger"
 	QueueInterest = "interest"
+	QueueControls = "controls"
 )
 
 // The two ledger jobs keep taking batches until they catch up; the size bounds each transaction.
@@ -58,6 +62,13 @@ const (
 	dormancyTimeout = 30 * time.Minute
 )
 
+// The controls (FR-33) run every 15 minutes, continuous enough for what they find. Each of the 4 reads for up to 5
+// minutes, and the rest of the limit is for recording what they found.
+const (
+	controlsInterval = 15 * time.Minute
+	controlsTimeout  = 25 * time.Minute
+)
+
 // Sealing (ADR-0012) closes blocks of at most auditBlockSize records, sealRounds per run so it finishes
 // before the job's time limit; whatever is left goes to the next run.
 const (
@@ -72,13 +83,14 @@ const (
 
 // Deps are the services the jobs use.
 type Deps struct {
-	UnitOfWork  *postgres.UnitOfWork
-	Ledger      *ledger.Service
-	Idempotency *idempotency.Store
-	Outbox      *outbox.Outbox
-	Audit       *audit.Service
-	Deposits    *deposits.Service
-	Payments    *payments.Service
+	UnitOfWork     *postgres.UnitOfWork
+	Ledger         *ledger.Service
+	Idempotency    *idempotency.Store
+	Outbox         *outbox.Outbox
+	Audit          *audit.Service
+	Deposits       *deposits.Service
+	Payments       *payments.Service
+	Reconciliation *reconciliation.Service
 }
 
 // Config is the worker's River configuration: the queues, the workers from Register, the periodic jobs
@@ -89,7 +101,8 @@ func Config(deps Deps) *river.Config {
 	return &river.Config{
 		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: Periodic(),
 		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1}, payments.Queue: {MaxWorkers: 4},
+			river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1}, QueueControls: {MaxWorkers: 1},
+			payments.Queue: {MaxWorkers: 4},
 		},
 		// REINDEX requires owning the index and the worker runs as aluna_app (migration 0009).
 		ReindexerIndexNames: []string{},
@@ -132,6 +145,9 @@ func Register(w *river.Workers, deps Deps) {
 		_, err := deps.Deposits.MarkDormant(ctx, deps.UnitOfWork, dormancyBatch)
 		return err
 	}})
+	river.AddWorker(w, &task[runControls]{timeout: controlsTimeout, run: func(ctx context.Context) error {
+		return deps.Reconciliation.RunControls(ctx, deps.UnitOfWork)
+	}})
 	compliance.FollowCash(deps.Outbox, holderOf(deps.Deposits))
 	deps.Outbox.AddWorkers(w)
 	deps.Payments.AddWorkers(w, deps.UnitOfWork)
@@ -163,6 +179,7 @@ func Periodic() []*river.PeriodicJob {
 		every(time.Minute, sealAudit{}),
 		every(5*time.Minute, accrueInterest{}),
 		every(time.Hour, markDormant{}),
+		every(controlsInterval, runControls{}),
 	}
 }
 
@@ -225,3 +242,16 @@ type markDormant struct{}
 
 func (markDormant) Kind() string                 { return "deposits.accounts.mark_dormant" }
 func (markDormant) InsertOpts() river.InsertOpts { return insertOpts(river.QueueDefault) }
+
+// runControls runs the continuous controls (FR-33). A run is not inserted while another is waiting or running.
+type runControls struct{}
+
+func (runControls) Kind() string { return "reconciliation.controls.run" }
+
+func (runControls) InsertOpts() river.InsertOpts {
+	opts := insertOpts(QueueControls)
+	opts.UniqueOpts = river.UniqueOpts{ByState: []rivertype.JobState{
+		rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateScheduled,
+	}}
+	return opts
+}

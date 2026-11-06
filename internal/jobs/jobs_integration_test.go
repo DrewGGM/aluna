@@ -32,6 +32,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
+	"github.com/DrewGGM/aluna/internal/reconciliation"
 )
 
 var testPool *pgxpool.Pool
@@ -69,7 +70,7 @@ func newDeps(t *testing.T) jobs.Deps {
 	return jobs.Deps{
 		Audit:      records,
 		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(testPool), Outbox: events,
-		Deposits: depositSvc, Payments: paymentSvc,
+		Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
 	}
 }
 
@@ -201,7 +202,7 @@ func TestTheWorkerRunsEveryJob(t *testing.T) {
 
 	waitFor(t, startWorker(t, deps),
 		"ledger.holds.expire", "ledger.balances.aggregate", "idempotency.purge", "outbox.purge", "outbox.publish", "audit.seal",
-		"deposits.interest.accrue", "deposits.accounts.mark_dormant", "payments.send")
+		"deposits.interest.accrue", "deposits.accounts.mark_dormant", "reconciliation.controls.run", "payments.send")
 
 	var block *int64
 	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil || block == nil {
@@ -307,5 +308,33 @@ func queueSend(t *testing.T) {
 	}
 	if _, err := client.Insert(t.Context(), sendArgs{OrderID: id}, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestOneRunOfTheControlsAtATime: a run that waits would repeat the whole read, so another is not inserted
+// while one is waiting.
+func TestOneRunOfTheControlsAtATime(t *testing.T) {
+	client, err := river.NewClient(riverpgxv5.New(testPool), &river.Config{Schema: outbox.RiverSchema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	discard := func() {
+		if _, err := testPool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM infra.river_job WHERE kind = 'reconciliation.controls.run'`); err != nil {
+			t.Error(err)
+		}
+	}
+	discard() // a worker of another test may have left one waiting
+	t.Cleanup(discard)
+
+	first, err := client.Insert(t.Context(), jobs.RunControls{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.Insert(t.Context(), jobs.RunControls{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.UniqueSkippedAsDuplicate || !second.UniqueSkippedAsDuplicate || first.Job.Queue != jobs.QueueControls {
+		t.Fatalf("first %+v and second %+v: want the second skipped, in queue %s", first, second, jobs.QueueControls)
 	}
 }

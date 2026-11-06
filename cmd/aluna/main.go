@@ -40,6 +40,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
+	"github.com/DrewGGM/aluna/internal/reconciliation"
 	"github.com/DrewGGM/aluna/internal/telemetry"
 )
 
@@ -60,7 +61,7 @@ commands:
                              notifications with it); with OTEL_EXPORTER_OTLP_ENDPOINT it exports
                              traces and metrics over OTLP; ALUNA_GMF_MODALITY is the GMF
                              exemption's modality, single_account (the default) or split_accounts
-  worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing,
+  worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls,
                              payments) on ALUNA_DATABASE_URL, anchoring blocks in
                              ALUNA_AUDIT_ANCHOR_DIR; multiple workers elect a leader for the
                              periodic jobs; it reads ALUNA_GMF_MODALITY and ALUNA_SIMBREB_SECRET as
@@ -506,7 +507,7 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality,
 	}
 	cfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
-		Audit: records, Deposits: depositSvc, Payments: paymentSvc,
+		Audit: records, Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)

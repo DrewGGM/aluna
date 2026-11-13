@@ -74,6 +74,8 @@ commands:
                              their anchors in ALUNA_AUDIT_ANCHOR_DIR
   migrate up|down|status     applies, rolls back the latest or lists the migrations on
                              ALUNA_DATABASE_URL
+  healthcheck                exits with 0 if the api on ALUNA_HTTP_ADDR answers /healthz, for the
+                             container's HEALTHCHECK
   version                    prints the version
 `
 
@@ -106,6 +108,8 @@ func run(args []string, stdout io.Writer) int {
 		return untilSignal(func(ctx context.Context) int { return workerCommand(ctx, stdout) })
 	case "version":
 		return printVersion(stdout)
+	case "healthcheck":
+		return healthcheckCommand()
 	default:
 		return printUsage()
 	}
@@ -118,6 +122,10 @@ func migrateCommand(args []string, stdout io.Writer) int {
 	return untilSignal(func(ctx context.Context) int {
 		return exitCode(runMigrate(ctx, os.Getenv("ALUNA_DATABASE_URL"), args[0], stdout))
 	})
+}
+
+func healthcheckCommand() int {
+	return untilSignal(func(ctx context.Context) int { return exitCode(healthcheck(ctx, envOr("ALUNA_HTTP_ADDR", ":8080"))) })
 }
 
 func printVersion(stdout io.Writer) int {

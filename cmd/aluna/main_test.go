@@ -50,6 +50,7 @@ func TestRunWithoutValidCommandPrintsUsage(t *testing.T) {
 		"migrate with extra arguments": {"migrate", "up", "extra"},
 		"api with arguments":           {"api", "extra"},
 		"worker with arguments":        {"worker", "extra"},
+		"healthcheck with arguments":   {"healthcheck", "extra"},
 		"audit without subcommand":     {"audit"},
 		"unknown audit subcommand":     {"audit", "check"},
 		"verify without blocks":        {"audit", "verify"},

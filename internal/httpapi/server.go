@@ -25,6 +25,7 @@ type API struct {
 	*ComplianceHandlers
 	*PaymentHandlers
 	*ReconciliationHandlers
+	*AccountingHandlers
 }
 
 var _ gen.StrictServerInterface = API{}

@@ -25,6 +25,7 @@ import (
 	contract "github.com/DrewGGM/aluna/api"
 	"github.com/DrewGGM/aluna/config"
 	"github.com/DrewGGM/aluna/internal/access"
+	"github.com/DrewGGM/aluna/internal/accounting"
 	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
@@ -368,6 +369,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 		ComplianceHandlers:     httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
 		PaymentHandlers:        httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: httpapi.NewReconciliationHandlers(reconciliation.New(events), uow, keys, pool),
+		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(), requests, uow, keys),
 	}, nil
 }
 

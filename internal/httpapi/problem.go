@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/DrewGGM/aluna/internal/access"
+	"github.com/DrewGGM/aluna/internal/accounting"
 	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
@@ -117,7 +118,7 @@ func invalidRequest(title, detail string) Problem {
 
 // problems maps domain errors to the API, grouped by module. It is walked in order because an error can
 // wrap two sentinels; the first one in the list wins. Detail never carries the internal text of the
-// error.
+// error, except what withDetail chooses to show.
 var problems = []struct {
 	err error
 	p   Problem
@@ -198,6 +199,9 @@ var problems = []struct {
 		"A notification of the rail carries an outcome, accepted or rejected with its reason, or a transfer with ISO 20022 identifiers, the code of the bank that sent it, a positive amount, its settlement date and its creditor by account or by key; references and reasons are text of up to 255 characters.")},
 	{payments.ErrOrderNotFound, notFound},
 	{payments.ErrOutcomeConflict, conflict("outcome_conflict", "The payment order already took another outcome")},
+	// accounting
+	{accounting.ErrInvalidMapping, unprocessable("invalid_mapping", "A file of CUIF mappings has the header pattern,cuif_code,valid_from,valid_to and rows with the start of an internal code, a code of 6 to 10 digits and a period")},
+	{accounting.ErrMappingOverlap, conflict("mapping_overlap", "Another mapping of the pattern holds in that period")},
 	// reconciliation
 	{reconciliation.ErrInvalidStatement, unprocessable("invalid_statement", "A statement is of a known rail, with a reference of up to 35 characters, a date and up to 5000 lines, each with an end-to-end id of up to 35, a positive amount, a direction and that date")},
 	{reconciliation.ErrDuplicateStatement, conflict("duplicate_statement", "That statement of the rail was already imported")},
@@ -233,11 +237,15 @@ func problemFor(err error) (Problem, bool) {
 }
 
 // withDetail adds to p what the client needs to know from err and that its code alone does not say: the limit
-// a movement exceeds (FR-24).
+// a movement exceeds (FR-24), and the line or pattern of a file of CUIF mappings that does not hold, which carries
+// only codes, dates and positions.
 func withDetail(p Problem, err error) Problem {
 	var limit *deposits.LimitError
-	if errors.As(err, &limit) {
+	switch {
+	case errors.As(err, &limit):
 		p.Detail = fmt.Sprintf("The movement exceeds the product's %s limit of %d minor units.", limit.Name, limit.Units)
+	case errors.Is(err, accounting.ErrInvalidMapping), errors.Is(err, accounting.ErrMappingOverlap):
+		p.Detail = err.Error()
 	}
 	return p
 }

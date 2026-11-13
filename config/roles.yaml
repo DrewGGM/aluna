@@ -58,6 +58,7 @@ finance:
     - ledger.transactions.post
     - ledger.transactions.read
     - ledger.transactions.reverse
+    - accounting.cuif_mappings.load
     - reconciliation.statements.import
     - reconciliation.breaks.read
     - reconciliation.breaks.resolve

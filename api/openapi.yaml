@@ -771,6 +771,38 @@ paths:
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/cuif-mappings:
+    post:
+      operationId: requestCuifMappingsLoad
+      summary: Request the load of a file of CUIF mappings
+      description: >-
+        Asks to load which CUIF code the entity's internal accounts are (FR-36): a CSV file in `csv`, with the
+        header `pattern,cuif_code,valid_from,valid_to`. A pattern is the start of an internal code, the most
+        specific in force wins, and a period goes from `valid_from` (included) to `valid_to` (excluded). Creates an
+        `accounting.cuif_mappings_load` maker-checker request and answers 202 with it; the file is stored when
+        someone else with `accounting.cuif_mappings.load` approves it. An invalid file is 422 `invalid_mapping`; a
+        mapping that overlaps another of its pattern is 409 `mapping_overlap` when requesting, and leaves the
+        request `failed` if it overlaps when approving. A mapping is never changed: a correction is another
+        period. Idempotent by `Idempotency-Key`.
+      x-aluna-permission: accounting.cuif_mappings.load
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoadCuifMappings"}
+      responses:
+        "202":
+          description: Load request created, pending approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/reconciliation/statements:
     post:
       operationId: importStatement
@@ -1373,6 +1405,11 @@ components:
         account_id: {type: string, format: uuid}
         party_id: {type: string, format: uuid}
         marked_at: {type: string, format: date-time}
+    LoadCuifMappings:
+      type: object
+      required: [csv]
+      properties:
+        csv: {type: string, description: "The file, with its header"}
     ImportStatement:
       type: object
       required: [rail, statement_ref, statement_date, lines]

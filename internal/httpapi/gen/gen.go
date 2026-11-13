@@ -708,6 +708,12 @@ type LedgerAccount struct {
 	LowerLimit  int64              `json:"lower_limit"`
 }
 
+// LoadCuifMappings defines model for LoadCuifMappings.
+type LoadCuifMappings struct {
+	// Csv The file, with its header
+	Csv string `json:"csv"`
+}
+
 // LoadMarketParameter defines model for LoadMarketParameter.
 type LoadMarketParameter struct {
 	Kind MarketKind `json:"kind"`
@@ -992,6 +998,11 @@ type ApproveRequestParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// RequestCuifMappingsLoadParams defines parameters for RequestCuifMappingsLoad.
+type RequestCuifMappingsLoadParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // OpenDepositAccountParams defines parameters for OpenDepositAccount.
 type OpenDepositAccountParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -1117,6 +1128,9 @@ type CreateTransferParams struct {
 // RejectRequestJSONRequestBody defines body for RejectRequest for application/json ContentType.
 type RejectRequestJSONRequestBody = RejectApproval
 
+// RequestCuifMappingsLoadJSONRequestBody defines body for RequestCuifMappingsLoad for application/json ContentType.
+type RequestCuifMappingsLoadJSONRequestBody = LoadCuifMappings
+
 // OpenDepositAccountJSONRequestBody defines body for OpenDepositAccount for application/json ContentType.
 type OpenDepositAccountJSONRequestBody = OpenDepositAccount
 
@@ -1185,6 +1199,9 @@ type ServerInterface interface {
 	// RejectRequest Reject a request
 	// (POST /v1/approvals/{id}/rejection)
 	RejectRequest(w http.ResponseWriter, r *http.Request, id ID)
+	// RequestCuifMappingsLoad Request the load of a file of CUIF mappings
+	// (POST /v1/cuif-mappings)
+	RequestCuifMappingsLoad(w http.ResponseWriter, r *http.Request, params RequestCuifMappingsLoadParams)
 	// OpenDepositAccount Open a deposit account
 	// (POST /v1/deposit-accounts)
 	OpenDepositAccount(w http.ResponseWriter, r *http.Request, params OpenDepositAccountParams)
@@ -1393,6 +1410,51 @@ func (siw *ServerInterfaceWrapper) RejectRequest(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RejectRequest(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RequestCuifMappingsLoad operation middleware
+func (siw *ServerInterfaceWrapper) RequestCuifMappingsLoad(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RequestCuifMappingsLoadParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestCuifMappingsLoad(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2846,6 +2908,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/withdrawals", wrapper.CreateWithdrawal)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/payment-orders", wrapper.CreatePaymentOrder)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/cuif-mappings", wrapper.RequestCuifMappingsLoad)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/statements", wrapper.ImportStatement)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/reconciliation/breaks", wrapper.ListBreaks)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/breaks/{id}/resolution", wrapper.ResolveBreak)
@@ -3111,6 +3174,104 @@ type RejectRequestdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response RejectRequestdefaultApplicationProblemPlusJSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestCuifMappingsLoadRequestObject struct {
+	Params RequestCuifMappingsLoadParams
+	Body   *RequestCuifMappingsLoadJSONRequestBody
+}
+
+type RequestCuifMappingsLoadResponseObject interface {
+	VisitRequestCuifMappingsLoadResponse(w http.ResponseWriter) error
+}
+
+type RequestCuifMappingsLoad202JSONResponse Approval
+
+func (response RequestCuifMappingsLoad202JSONResponse) VisitRequestCuifMappingsLoadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestCuifMappingsLoad400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RequestCuifMappingsLoad400ApplicationProblemPlusJSONResponse) VisitRequestCuifMappingsLoadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestCuifMappingsLoad409ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestCuifMappingsLoad409ApplicationProblemPlusJSONResponse) VisitRequestCuifMappingsLoadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestCuifMappingsLoad413ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestCuifMappingsLoad413ApplicationProblemPlusJSONResponse) VisitRequestCuifMappingsLoadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestCuifMappingsLoad422ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestCuifMappingsLoad422ApplicationProblemPlusJSONResponse) VisitRequestCuifMappingsLoadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestCuifMappingsLoaddefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RequestCuifMappingsLoaddefaultApplicationProblemPlusJSONResponse) VisitRequestCuifMappingsLoadResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -5915,6 +6076,9 @@ type StrictServerInterface interface {
 	// RejectRequest Reject a request
 	// (POST /v1/approvals/{id}/rejection)
 	RejectRequest(ctx context.Context, request RejectRequestRequestObject) (RejectRequestResponseObject, error)
+	// RequestCuifMappingsLoad Request the load of a file of CUIF mappings
+	// (POST /v1/cuif-mappings)
+	RequestCuifMappingsLoad(ctx context.Context, request RequestCuifMappingsLoadRequestObject) (RequestCuifMappingsLoadResponseObject, error)
 	// OpenDepositAccount Open a deposit account
 	// (POST /v1/deposit-accounts)
 	OpenDepositAccount(ctx context.Context, request OpenDepositAccountRequestObject) (OpenDepositAccountResponseObject, error)
@@ -6128,6 +6292,39 @@ func (sh *strictHandler) RejectRequest(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RejectRequestResponseObject); ok {
 		if err := validResponse.VisitRejectRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RequestCuifMappingsLoad operation middleware
+func (sh *strictHandler) RequestCuifMappingsLoad(w http.ResponseWriter, r *http.Request, params RequestCuifMappingsLoadParams) {
+	var request RequestCuifMappingsLoadRequestObject
+
+	request.Params = params
+
+	var body RequestCuifMappingsLoadJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestCuifMappingsLoad(ctx, request.(RequestCuifMappingsLoadRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestCuifMappingsLoad")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestCuifMappingsLoadResponseObject); ok {
+		if err := validResponse.VisitRequestCuifMappingsLoadResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

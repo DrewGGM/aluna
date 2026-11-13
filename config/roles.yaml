@@ -9,9 +9,9 @@ channel:
     - ledger.accounts.read
     - ledger.balances.read
 
-# Day-to-day operations: parties, products, deposit accounts and their movements, ledger accounts, manual
-# entries and holds, and deciding maker-checker requests (the permission for each request's type is required
-# separately).
+# Day-to-day operations: parties, products, deposit accounts with their movements and status changes, payment
+# orders, ledger accounts, manual entries and holds, and deciding maker-checker requests (the permission for each
+# request's type is required separately).
 operator:
   all:
     - approvals.read
@@ -26,10 +26,12 @@ operator:
     - products.market_parameters.read
     - deposits.accounts.open
     - deposits.accounts.read
+    - deposits.accounts.change_status
     - deposits.deposits.post
     - deposits.withdrawals.post
     - deposits.transfers.post
     - payments.orders.create
+    - payments.orders.read
     - pricing.quotes.create
     - pricing.gmf_exemptions.create
     - ledger.accounts.create
@@ -54,6 +56,7 @@ finance:
     - products.market_parameters.load
     - products.market_parameters.read
     - deposits.accounts.read
+    - payments.orders.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.post
@@ -74,10 +77,12 @@ compliance:
     - approvals.decide
     - party.parties.read
     - party.kyc.change
+    - compliance.screening.read
     - compliance.screening.resolve
     - products.versions.read
     - products.market_parameters.read
     - deposits.accounts.read
+    - payments.orders.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read
@@ -89,9 +94,11 @@ auditor:
   all:
     - approvals.read
     - party.parties.read
+    - compliance.screening.read
     - products.versions.read
     - products.market_parameters.read
     - deposits.accounts.read
+    - payments.orders.read
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read

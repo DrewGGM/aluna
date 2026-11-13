@@ -3,8 +3,11 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
@@ -155,6 +158,102 @@ func TestAWrongResolutionIsAProblem(t *testing.T) {
 		r := postTo(t, tc.as, "/v1/screening-cases/"+tc.id+"/resolution", ids.New().String(), `{"resolution": "`+tc.resolution+`"}`)
 		if r.status != tc.status || problemCode(t, r) != tc.code {
 			t.Errorf("%s = %d %s, want %d %s", name, r.status, r.body, tc.status, tc.code)
+		}
+	}
+}
+
+// casesPage reads the page of screening cases at query as ts, which must be 200, and the subjects of its cases.
+func casesPage(t *testing.T, ts *httptest.Server, query string) (gen.ScreeningCaseList, []string) {
+	t.Helper()
+	var page gen.ScreeningCaseList
+	if status := call(t, ts, http.MethodGet, "/v1/screening-cases"+query, "", &page); status != http.StatusOK {
+		t.Fatalf("cases %s = %d, want 200", query, status)
+	}
+	subjects := make([]string, len(page.Cases))
+	for i, c := range page.Cases {
+		subjects[i] = c.SubjectId.String()
+	}
+	return page, subjects
+}
+
+// TestThePendingCasesOverHTTP (FR-42): compliance lists the entity's pending cases, newest first and in pages; the
+// cases of every status, without one; and nothing of another entity.
+func TestThePendingCasesOverHTTP(t *testing.T) {
+	w := newScreeningWorld(t)
+	clean := w.registered(t, "onb-")
+	first, second, third := w.registered(t, "match-"), w.registered(t, "match-"), w.registered(t, "match-")
+	newScreeningWorld(t).registered(t, "match-") // another entity's case
+
+	page1, subjects1 := casesPage(t, w.a, "?status=pending&limit=2")
+	if page1.NextCursor == nil {
+		t.Fatalf("first page = %+v, want a next cursor", page1)
+	}
+	page2, subjects2 := casesPage(t, w.a, "?status=pending&limit=2&cursor="+*page1.NextCursor)
+	_, all := casesPage(t, w.a, "")
+
+	pending := []string{third.Id.String(), second.Id.String(), first.Id.String()}
+	if page2.NextCursor != nil || !slices.Equal(slices.Concat(subjects1, subjects2), pending) {
+		t.Fatalf("pending pages = %v and %v (next %v), want %v", subjects1, subjects2, page2.NextCursor, pending)
+	}
+	if want := slices.Concat(pending, []string{clean.Id.String()}); !slices.Equal(all, want) {
+		t.Fatalf("all cases = %v, want %v", all, want)
+	}
+}
+
+// TestACaseSaysNothingOfItsParty (FR-42): a case carries its id, kind, subject, status and when it opened, and nothing
+// that says who the party is.
+func TestACaseSaysNothingOfItsParty(t *testing.T) {
+	w := newScreeningWorld(t)
+	matched := w.registered(t, "match-")
+
+	page, _ := casesPage(t, w.a, "?status=pending")
+
+	c := page.Cases[0]
+	if c.Kind != gen.ScreeningCaseKindParty || c.Status != gen.ScreeningCaseStatusPending || c.SubjectId != matched.Id || c.Id.String() != caseOf(t, matched) || c.OpenedAt.IsZero() {
+		t.Fatalf("case = %+v, want the pending party case of %s", c, matched.Id)
+	}
+	if raw := rawCases(t, w.a); strings.Contains(raw, "match-") || strings.Contains(raw, "external_ref") {
+		t.Fatalf("cases = %s, want nothing of the parties", raw)
+	}
+}
+
+// rawCases is the body of the first page of cases as ts reads it.
+func rawCases(t *testing.T, ts *httptest.Server) string {
+	t.Helper()
+	var raw json.RawMessage
+	if status := call(t, ts, http.MethodGet, "/v1/screening-cases", "", &raw); status != http.StatusOK {
+		t.Fatalf("cases = %d", status)
+	}
+	return string(raw)
+}
+
+// TestAWrongPageOfCasesIsAProblem: a limit outside 1 to 200, an unknown status or a cursor of nowhere is 400.
+func TestAWrongPageOfCasesIsAProblem(t *testing.T) {
+	w := newScreeningWorld(t)
+	for name, query := range map[string]string{
+		"limit 0": "?limit=0", "limit 201": "?limit=201", "an unknown status": "?status=open", "a cursor of nowhere": "?cursor=nowhere",
+	} {
+		var p Problem
+		if status := call(t, w.a, http.MethodGet, "/v1/screening-cases"+query, "", &p); status != http.StatusBadRequest || p.Code != "invalid_request" {
+			t.Errorf("%s = %d %+v, want 400 invalid_request", name, status, p)
+		}
+	}
+}
+
+// TestWhoListsTheCases (ADR-0014): compliance and the auditor list the screening cases; an operator, a channel and
+// an integrator do not.
+func TestWhoListsTheCases(t *testing.T) {
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entity := ids.New()
+	for role, want := range map[string]int{
+		"compliance": http.StatusOK, "auditor": http.StatusOK,
+		"operator": http.StatusForbidden, "channel": http.StatusForbidden, "integrator": http.StatusForbidden,
+	} {
+		if status := call(t, apiServerAsRole(t, entity, events, "someone-"+role, role), http.MethodGet, "/v1/screening-cases", "", nil); status != want {
+			t.Errorf("as %s = %d, want %d", role, status, want)
 		}
 	}
 }

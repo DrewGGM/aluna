@@ -495,6 +495,64 @@
           }
         },
         {
+          "name": "Change a deposit account's status",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"frozen\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/deposit-accounts/:id/status-changes",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "deposit-accounts",
+                ":id",
+                "status-changes"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Moves the account through its life cycle (FR-22). Freezing an active account (a blocking order) and unfreezing a frozen one (`active` on a frozen account) go through maker-checker: they create a `deposits.account_status_change` request, with the account and the status, and answer 202 with it. The change is made when another person with `deposits.accounts.change_status` approves it at `POST /v1/approvals/{id}/approval`, with the approver as who made it; if the account changed status after the request (it was closed, unfrozen or frozen meanwhile, even back to the status it had), approving it leaves the request `failed`. Every other change is made at once and answers 200 with the account: `active` reactivates a dormant account or activates a pending one whose party's KYC is approved (422 `kyc_not_satisfied` otherwise), and `closed` closes a pending, active or dormant account without a balance (409 `account_not_empty`) and without pending holds (409 `pending_holds`). Any other change, such as freezing a dormant account, closing a frozen one or changing a closed one, is 409 `invalid_status_transition`. `dormant` is not set by hand: the dormancy job marks an active account without customer activity (FR-27). Going back to `active` records the business date as the customer's last activity, so the dormancy job does not take it straight back. Each change is recorded with who made it and emits its event (`aluna.deposits.account.{activated,frozen,unfrozen,closed}.v1`). An account of another entity is 404. Idempotent by `Idempotency-Key`.\n\nPermission: `deposits.accounts.change_status`"
+          }
+        },
+        {
           "name": "Read a deposit account's history",
           "request": {
             "method": "GET",
@@ -1193,6 +1251,32 @@
             },
             "description": "Initiates a payment from a deposit account of the entity to a beneficiary at another bank, by account number or by key, through a rail (FR-31), and answers 202 with the order. Its beneficiary is screened first (FR-42): if screening does not clear it (a possible match, or no answer), the order is `pending_screening` and nothing is held or charged until compliance resolves its case. If it does, the amount and its charges (the fees and the GMF of a transfer, those of `quote_id` if it names one) are held on the account and the order is `held`, to be sent. Without funds for all of it it is 422 `insufficient_funds` and nothing is stored; an account that is not active is 409 `account_not_active`. The rail's clearing account (`L.CLEARING.SIMBREB`, in the account's currency) must exist in the entity's ledger. Idempotent by `Idempotency-Key`; a retry with the same key after the key store forgot it is 409 `duplicate_payment`, not a second payment.\n\nPermission: `payments.orders.create`"
           }
+        },
+        {
+          "name": "Read an outgoing payment order",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/payment-orders/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "payment-orders",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Where an outgoing payment order of the entity stands (FR-30): its status, its amount, what it holds on the account while it is `held`, its ISO 20022 identifiers, the rail's reference once the rail gives it, and why it was rejected, if it was. Its beneficiary is not shown. A transfer received from another bank, or an order of another entity, is 404.\n\nPermission: `payments.orders.read`"
+          }
         }
       ]
     },
@@ -1559,6 +1643,44 @@
     {
       "name": "screening-cases",
       "item": [
+        {
+          "name": "List the screening cases",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/screening-cases",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "screening-cases"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending",
+                  "description": "One of: pending, cleared, confirmed",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "cursor",
+                  "description": "The `next_cursor` of the previous page; absent for the first one.",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "1",
+                  "description": "Cases per page.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "The entity's screening cases (FR-42), newest first, those of `status` if it says one: `pending` are the ones waiting for compliance to resolve them at `POST /v1/screening-cases/{id}/resolution`. A case names what was screened, a party being registered or an outgoing payment order, by its id, never by the subject's name or documents. `next_cursor` reads the next page and is absent on the last one. A `limit` outside 1 to 200, an unknown `status` or a cursor that is not a case id is 400 `invalid_request`.\n\nPermission: `compliance.screening.read`"
+          }
+        },
         {
           "name": "Request the resolution of a screening case",
           "event": [

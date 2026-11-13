@@ -100,11 +100,11 @@ Cada contexto de negocio es un módulo en `internal/<módulo>/`; los demás solo
 | `approvals` | Maker-checker: guarda el comando sensible como solicitud y lo corre cuando otra persona lo aprueba | `GET /v1/approvals`, `POST /v1/approvals/{id}/approval`, `POST /v1/approvals/{id}/rejection` |
 | `audit` | Registro de cada comando de la API de los canales, sellado en bloques encadenados y anclados fuera de la base | Nada: se consulta con `aluna audit verify` |
 | `calendar` | Entidades legales, fecha de negocio, días hábiles con los festivos de Colombia y periodos contables | `GET /v1/business-date`, `POST /v1/business-date/rollover` |
-| `compliance` | Screening de parties y de beneficiarios de pagos contra listas, casos pendientes y acumulados de efectivo por cliente | `POST /v1/screening-cases/{id}/resolution` |
-| `deposits` | Cuentas de depósito: apertura, estados, depósitos, retiros, transferencias, intereses, inactividad y extractos | `POST /v1/deposit-accounts`, `GET /v1/deposit-accounts/{id}` y sus `/transactions`, `/statements/{period}`, `/deposits`, `/withdrawals`; `POST /v1/transfers` |
+| `compliance` | Screening de parties y de beneficiarios de pagos contra listas, casos pendientes y acumulados de efectivo por cliente | `GET /v1/screening-cases`, `POST /v1/screening-cases/{id}/resolution` |
+| `deposits` | Cuentas de depósito: apertura, estados, depósitos, retiros, transferencias, intereses, inactividad y extractos | `POST /v1/deposit-accounts`, `GET /v1/deposit-accounts/{id}` y sus `/transactions`, `/statements/{period}`, `/deposits`, `/withdrawals`, `/status-changes`; `POST /v1/transfers` |
 | `ledger` | Cuentas, transacciones balanceadas, reversas, holds de dos fases y saldos `sync` o `async` | `POST /v1/ledger-accounts`, `GET /v1/ledger-accounts/{id}` y `/balance`, `POST /v1/transactions`, `GET /v1/transactions/{id}`, `POST /v1/transactions/{id}/reversal`, `POST /v1/holds` y `/capture`, `/release` |
 | `party` | Clientes de la entidad con su estado de KYC, versionados; los datos documentales quedan en el sistema de vinculación | `POST /v1/parties`, `GET /v1/parties/{id}`, `POST /v1/parties/{id}/kyc-status-changes` |
-| `payments` | Órdenes de pago salientes (screening, hold, envío, liquidación o rechazo) y entrantes (abono o suspense) | `POST /v1/payment-orders`; en el puerto de rails, las notificaciones |
+| `payments` | Órdenes de pago salientes (screening, hold, envío, liquidación o rechazo) y entrantes (abono o suspense) | `POST /v1/payment-orders`, `GET /v1/payment-orders/{id}`; en el puerto de rails, las notificaciones |
 | `pricing` | Comisiones y GMF de un retiro o una transferencia, cotizados antes y cobrados exactamente; exención del GMF | `POST /v1/quotes`, `POST /v1/deposit-accounts/{id}/gmf-exemption` |
 | `products` | Productos de depósito con versiones inmutables publicadas por maker-checker y parámetros de mercado con vigencia | `POST /v1/products`, `POST /v1/products/{id}/versions`, `GET /v1/product-versions/{id}`, `POST .../publication`, `POST` y `GET /v1/market-parameters` |
 | `reconciliation` | Controles continuos sobre el ledger, importación de extractos del rail y breaks hasta que alguien los resuelve | `POST /v1/reconciliation/statements`, `GET /v1/reconciliation/breaks`, `POST /v1/reconciliation/breaks/{id}/resolution` |
@@ -154,12 +154,13 @@ su `trace_id`. Los montos son enteros de 64 bits en unidades menores.
 
 ### Maker-checker
 
-Siete tipos de comando no corren al pedirlos: crean una solicitud pendiente y responden 202.
+Ocho tipos de comando no corren al pedirlos: crean una solicitud pendiente y responden 202.
 
 | Solicitud | Se pide con |
 |---|---|
 | `ledger.reversal` | `POST /v1/transactions/{id}/reversal` |
 | `party.kyc_status_change` | `POST /v1/parties/{id}/kyc-status-changes` |
+| `deposits.account_status_change` | `POST /v1/deposit-accounts/{id}/status-changes` que congela o descongela una cuenta (activarla, reactivarla o cerrarla es inmediato y responde 200) |
 | `compliance.screening_resolution` | `POST /v1/screening-cases/{id}/resolution` |
 | `products.publish` | `POST /v1/product-versions/{id}/publication` |
 | `products.market_parameter_load` | `POST /v1/market-parameters` |
@@ -193,6 +194,10 @@ Cada evento se escribe en `infra.outbox` en la transacción de su efecto, como C
 | `aluna.compliance.screening.confirmed.v1` | La resolución aprobada de un caso como coincidencia |
 | `aluna.products.version.published.v1` | La publicación aprobada de una versión |
 | `aluna.deposits.account.opened.v1` | `POST /v1/deposit-accounts` |
+| `aluna.deposits.account.activated.v1` | `POST /v1/deposit-accounts/{id}/status-changes` que activa una cuenta pendiente o reactiva una inactiva |
+| `aluna.deposits.account.frozen.v1` | La congelación aprobada de una cuenta |
+| `aluna.deposits.account.unfrozen.v1` | La descongelación aprobada de una cuenta |
+| `aluna.deposits.account.closed.v1` | `POST /v1/deposit-accounts/{id}/status-changes` que cierra una cuenta sin saldo ni holds pendientes |
 | `aluna.deposits.account.dormant.v1` | El job `deposits.accounts.mark_dormant` |
 | `aluna.deposits.interest.capitalized.v1` | El job `deposits.interest.accrue`, en un día de capitalización |
 | `aluna.payments.order.initiated.v1` | `POST /v1/payment-orders` |
@@ -207,10 +212,6 @@ Cada evento se escribe en `infra.outbox` en la transacción de su efecto, como C
 | `aluna.reconciliation.break.opened.v1` | El job `reconciliation.controls.run` o `POST /v1/reconciliation/statements`, al abrir un break nuevo |
 | `aluna.reconciliation.break.resolved.v1` | `POST /v1/reconciliation/breaks/{id}/resolution` |
 | `aluna.accounting.period.closed.v1` | El cierre de periodo aprobado |
-
-El módulo de depósitos define también `aluna.deposits.account.activated.v1`,
-`aluna.deposits.account.frozen.v1`, `aluna.deposits.account.unfrozen.v1` y `aluna.deposits.account.closed.v1`,
-pero ninguna operación de la API ni ningún job cambia hoy una cuenta a esos estados.
 
 ### Entrega
 

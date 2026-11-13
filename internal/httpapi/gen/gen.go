@@ -108,6 +108,27 @@ func (e BreakStatus) Valid() bool {
 	}
 }
 
+// Defines values for ChangeDepositAccountStatusStatus.
+const (
+	ChangeDepositAccountStatusStatusActive ChangeDepositAccountStatusStatus = "active"
+	ChangeDepositAccountStatusStatusClosed ChangeDepositAccountStatusStatus = "closed"
+	ChangeDepositAccountStatusStatusFrozen ChangeDepositAccountStatusStatus = "frozen"
+)
+
+// Valid indicates whether the value is a known member of the ChangeDepositAccountStatusStatus enum.
+func (e ChangeDepositAccountStatusStatus) Valid() bool {
+	switch e {
+	case ChangeDepositAccountStatusStatusActive:
+		return true
+	case ChangeDepositAccountStatusStatusClosed:
+		return true
+	case ChangeDepositAccountStatusStatusFrozen:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreatePaymentOrderRail.
 const (
 	CreatePaymentOrderRailSimbreb CreatePaymentOrderRail = "simbreb"
@@ -341,16 +362,16 @@ func (e QuoteOperation) Valid() bool {
 
 // Defines values for ResolveScreeningCaseResolution.
 const (
-	Cleared   ResolveScreeningCaseResolution = "cleared"
-	Confirmed ResolveScreeningCaseResolution = "confirmed"
+	ResolveScreeningCaseResolutionCleared   ResolveScreeningCaseResolution = "cleared"
+	ResolveScreeningCaseResolutionConfirmed ResolveScreeningCaseResolution = "confirmed"
 )
 
 // Valid indicates whether the value is a known member of the ResolveScreeningCaseResolution enum.
 func (e ResolveScreeningCaseResolution) Valid() bool {
 	switch e {
-	case Cleared:
+	case ResolveScreeningCaseResolutionCleared:
 		return true
-	case Confirmed:
+	case ResolveScreeningCaseResolutionConfirmed:
 		return true
 	default:
 		return false
@@ -372,6 +393,45 @@ func (e RiskLevel) Valid() bool {
 	case Low:
 		return true
 	case Medium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScreeningCaseKind.
+const (
+	ScreeningCaseKindParty   ScreeningCaseKind = "party"
+	ScreeningCaseKindPayment ScreeningCaseKind = "payment"
+)
+
+// Valid indicates whether the value is a known member of the ScreeningCaseKind enum.
+func (e ScreeningCaseKind) Valid() bool {
+	switch e {
+	case ScreeningCaseKindParty:
+		return true
+	case ScreeningCaseKindPayment:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScreeningCaseStatus.
+const (
+	ScreeningCaseStatusCleared   ScreeningCaseStatus = "cleared"
+	ScreeningCaseStatusConfirmed ScreeningCaseStatus = "confirmed"
+	ScreeningCaseStatusPending   ScreeningCaseStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the ScreeningCaseStatus enum.
+func (e ScreeningCaseStatus) Valid() bool {
+	switch e {
+	case ScreeningCaseStatusCleared:
+		return true
+	case ScreeningCaseStatusConfirmed:
+		return true
+	case ScreeningCaseStatusPending:
 		return true
 	default:
 		return false
@@ -408,6 +468,27 @@ func (e ListBreaksParamsStatus) Valid() bool {
 	case ListBreaksParamsStatusOpen:
 		return true
 	case ListBreaksParamsStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListScreeningCasesParamsStatus.
+const (
+	ListScreeningCasesParamsStatusCleared   ListScreeningCasesParamsStatus = "cleared"
+	ListScreeningCasesParamsStatusConfirmed ListScreeningCasesParamsStatus = "confirmed"
+	ListScreeningCasesParamsStatusPending   ListScreeningCasesParamsStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the ListScreeningCasesParamsStatus enum.
+func (e ListScreeningCasesParamsStatus) Valid() bool {
+	switch e {
+	case ListScreeningCasesParamsStatusCleared:
+		return true
+	case ListScreeningCasesParamsStatusConfirmed:
+		return true
+	case ListScreeningCasesParamsStatusPending:
 		return true
 	default:
 		return false
@@ -554,6 +635,15 @@ type CashWithdrawal struct {
 	// QuoteId Quote of this withdrawal (POST /v1/quotes); without one it is priced as it is done
 	QuoteId *openapi_types.UUID `json:"quote_id,omitempty"`
 }
+
+// ChangeDepositAccountStatus defines model for ChangeDepositAccountStatus.
+type ChangeDepositAccountStatus struct {
+	// Status The status the account goes to; `pending` and `dormant` are not set by hand
+	Status ChangeDepositAccountStatusStatus `json:"status"`
+}
+
+// ChangeDepositAccountStatusStatus The status the account goes to; `pending` and `dormant` are not set by hand
+type ChangeDepositAccountStatusStatus string
 
 // CloudEvent A CloudEvent 1.0 (architecture §8): specversion, id (UUIDv7), source (aluna/<module>), type, subject, time, datacontenttype (application/json) and data, with legalentityid, correlationid (if any) and schemaversion. Its data carries identifiers, amounts and statuses, never personal data.
 type CloudEvent = json.RawMessage
@@ -832,9 +922,15 @@ type PaymentOrder struct {
 	Id   openapi_types.UUID `json:"id"`
 
 	// InstrId ISO 20022 InstrId
-	InstrId string             `json:"instr_id"`
-	Rail    string             `json:"rail"`
-	Status  PaymentOrderStatus `json:"status"`
+	InstrId string `json:"instr_id"`
+	Rail    string `json:"rail"`
+
+	// RailRef The rail's reference to the order, once the rail gives it
+	RailRef *string `json:"rail_ref,omitempty"`
+
+	// Reason Why the rail rejected it, as the rail said it, or RAIL_REFUSED if the rail did not take it
+	Reason *string            `json:"reason,omitempty"`
+	Status PaymentOrderStatus `json:"status"`
 
 	// TxId ISO 20022 TxId
 	TxId string `json:"tx_id"`
@@ -1002,6 +1098,33 @@ type RolloverBusinessDate struct {
 	BusinessDate openapi_types.Date `json:"business_date"`
 }
 
+// ScreeningCase defines model for ScreeningCase.
+type ScreeningCase struct {
+	Id openapi_types.UUID `json:"id"`
+
+	// Kind What was screened, a party being registered or an outgoing payment's beneficiary
+	Kind     ScreeningCaseKind   `json:"kind"`
+	OpenedAt time.Time           `json:"opened_at"`
+	Status   ScreeningCaseStatus `json:"status"`
+
+	// SubjectId The party, or the payment order
+	SubjectId openapi_types.UUID `json:"subject_id"`
+}
+
+// ScreeningCaseKind What was screened, a party being registered or an outgoing payment's beneficiary
+type ScreeningCaseKind string
+
+// ScreeningCaseStatus defines model for ScreeningCase.Status.
+type ScreeningCaseStatus string
+
+// ScreeningCaseList defines model for ScreeningCaseList.
+type ScreeningCaseList struct {
+	Cases []ScreeningCase `json:"cases"`
+
+	// NextCursor Cursor of the next page; absent on the last one
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
 // Statement defines model for Statement.
 type Statement struct {
 	// ContentHash SHA-256 of the document's bytes
@@ -1096,6 +1219,11 @@ type OpenDepositAccountParams struct {
 
 // CreateDepositParams defines parameters for CreateDeposit.
 type CreateDepositParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ChangeDepositAccountStatusParams defines parameters for ChangeDepositAccountStatus.
+type ChangeDepositAccountStatusParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
@@ -1208,6 +1336,20 @@ type ImportStatementParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListScreeningCasesParams defines parameters for ListScreeningCases.
+type ListScreeningCasesParams struct {
+	Status *ListScreeningCasesParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// Cursor The `next_cursor` of the previous page; absent for the first one.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit Cases per page.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListScreeningCasesParamsStatus defines parameters for ListScreeningCases.
+type ListScreeningCasesParamsStatus string
+
 // ResolveScreeningCaseParams defines parameters for ResolveScreeningCase.
 type ResolveScreeningCaseParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -1242,6 +1384,9 @@ type OpenDepositAccountJSONRequestBody = OpenDepositAccount
 
 // CreateDepositJSONRequestBody defines body for CreateDeposit for application/json ContentType.
 type CreateDepositJSONRequestBody = CashMovement
+
+// ChangeDepositAccountStatusJSONRequestBody defines body for ChangeDepositAccountStatus for application/json ContentType.
+type ChangeDepositAccountStatusJSONRequestBody = ChangeDepositAccountStatus
 
 // CreateWithdrawalJSONRequestBody defines body for CreateWithdrawal for application/json ContentType.
 type CreateWithdrawalJSONRequestBody = CashWithdrawal
@@ -1335,6 +1480,9 @@ type ServerInterface interface {
 	// GetDepositAccountStatement Read a deposit account's statement of a month
 	// (GET /v1/deposit-accounts/{id}/statements/{period})
 	GetDepositAccountStatement(w http.ResponseWriter, r *http.Request, id ID, period string)
+	// ChangeDepositAccountStatus Change a deposit account's status
+	// (POST /v1/deposit-accounts/{id}/status-changes)
+	ChangeDepositAccountStatus(w http.ResponseWriter, r *http.Request, id ID, params ChangeDepositAccountStatusParams)
 	// ListDepositAccountTransactions Read a deposit account's history
 	// (GET /v1/deposit-accounts/{id}/transactions)
 	ListDepositAccountTransactions(w http.ResponseWriter, r *http.Request, id ID, params ListDepositAccountTransactionsParams)
@@ -1383,6 +1531,9 @@ type ServerInterface interface {
 	// CreatePaymentOrder Initiate an outgoing payment
 	// (POST /v1/payment-orders)
 	CreatePaymentOrder(w http.ResponseWriter, r *http.Request, params CreatePaymentOrderParams)
+	// GetPaymentOrder Read an outgoing payment order
+	// (GET /v1/payment-orders/{id})
+	GetPaymentOrder(w http.ResponseWriter, r *http.Request, id ID)
 	// GetProductVersion Read a product version
 	// (GET /v1/product-versions/{id})
 	GetProductVersion(w http.ResponseWriter, r *http.Request, id ID)
@@ -1407,6 +1558,9 @@ type ServerInterface interface {
 	// ImportStatement Import a rail's statement
 	// (POST /v1/reconciliation/statements)
 	ImportStatement(w http.ResponseWriter, r *http.Request, params ImportStatementParams)
+	// ListScreeningCases List the screening cases
+	// (GET /v1/screening-cases)
+	ListScreeningCases(w http.ResponseWriter, r *http.Request, params ListScreeningCasesParams)
 	// ResolveScreeningCase Request the resolution of a screening case
 	// (POST /v1/screening-cases/{id}/resolution)
 	ResolveScreeningCase(w http.ResponseWriter, r *http.Request, id ID, params ResolveScreeningCaseParams)
@@ -1884,6 +2038,60 @@ func (siw *ServerInterfaceWrapper) GetDepositAccountStatement(w http.ResponseWri
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetDepositAccountStatement(w, r, id, period)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ChangeDepositAccountStatus operation middleware
+func (siw *ServerInterfaceWrapper) ChangeDepositAccountStatus(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ChangeDepositAccountStatusParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChangeDepositAccountStatus(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2585,6 +2793,32 @@ func (siw *ServerInterfaceWrapper) CreatePaymentOrder(w http.ResponseWriter, r *
 	handler.ServeHTTP(w, r)
 }
 
+// GetPaymentOrder operation middleware
+func (siw *ServerInterfaceWrapper) GetPaymentOrder(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPaymentOrder(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetProductVersion operation middleware
 func (siw *ServerInterfaceWrapper) GetProductVersion(w http.ResponseWriter, r *http.Request) {
 
@@ -2896,6 +3130,65 @@ func (siw *ServerInterfaceWrapper) ImportStatement(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ImportStatement(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListScreeningCases operation middleware
+func (siw *ServerInterfaceWrapper) ListScreeningCases(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListScreeningCasesParams
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListScreeningCases(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3278,6 +3571,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/parties", wrapper.RegisterParty)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/parties/{id}", wrapper.GetParty)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/parties/{id}/kyc-status-changes", wrapper.RequestKYCStatusChange)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/screening-cases", wrapper.ListScreeningCases)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/screening-cases/{id}/resolution", wrapper.ResolveScreeningCase)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/products", wrapper.CreateProduct)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/products/{id}/versions", wrapper.CreateProductVersion)
@@ -3291,8 +3585,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/deposit-accounts/{id}/statements/{period}", wrapper.GetDepositAccountStatement)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/deposits", wrapper.CreateDeposit)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/withdrawals", wrapper.CreateWithdrawal)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/status-changes", wrapper.ChangeDepositAccountStatus)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/payment-orders", wrapper.CreatePaymentOrder)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/payment-orders/{id}", wrapper.GetPaymentOrder)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/cuif-mappings", wrapper.RequestCuifMappingsLoad)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/accounting-periods/{period}/closure", wrapper.RequestPeriodClose)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/general-ledger/daily", wrapper.GetDailyGL)
@@ -4360,6 +4656,133 @@ type GetDepositAccountStatementdefaultApplicationProblemPlusJSONResponse struct 
 }
 
 func (response GetDepositAccountStatementdefaultApplicationProblemPlusJSONResponse) VisitGetDepositAccountStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDepositAccountStatusRequestObject struct {
+	Id     ID `json:"id"`
+	Params ChangeDepositAccountStatusParams
+	Body   *ChangeDepositAccountStatusJSONRequestBody
+}
+
+type ChangeDepositAccountStatusResponseObject interface {
+	VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error
+}
+
+type ChangeDepositAccountStatus200JSONResponse DepositAccount
+
+func (response ChangeDepositAccountStatus200JSONResponse) VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDepositAccountStatus202JSONResponse Approval
+
+func (response ChangeDepositAccountStatus202JSONResponse) VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDepositAccountStatus400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ChangeDepositAccountStatus400ApplicationProblemPlusJSONResponse) VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDepositAccountStatus404ApplicationProblemPlusJSONResponse Problem
+
+func (response ChangeDepositAccountStatus404ApplicationProblemPlusJSONResponse) VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDepositAccountStatus409ApplicationProblemPlusJSONResponse Problem
+
+func (response ChangeDepositAccountStatus409ApplicationProblemPlusJSONResponse) VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDepositAccountStatus413ApplicationProblemPlusJSONResponse Problem
+
+func (response ChangeDepositAccountStatus413ApplicationProblemPlusJSONResponse) VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDepositAccountStatus422ApplicationProblemPlusJSONResponse Problem
+
+func (response ChangeDepositAccountStatus422ApplicationProblemPlusJSONResponse) VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDepositAccountStatusdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ChangeDepositAccountStatusdefaultApplicationProblemPlusJSONResponse) VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -5739,6 +6162,75 @@ func (response CreatePaymentOrderdefaultApplicationProblemPlusJSONResponse) Visi
 	return err
 }
 
+type GetPaymentOrderRequestObject struct {
+	Id ID `json:"id"`
+}
+
+type GetPaymentOrderResponseObject interface {
+	VisitGetPaymentOrderResponse(w http.ResponseWriter) error
+}
+
+type GetPaymentOrder200JSONResponse PaymentOrder
+
+func (response GetPaymentOrder200JSONResponse) VisitGetPaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPaymentOrder400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetPaymentOrder400ApplicationProblemPlusJSONResponse) VisitGetPaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPaymentOrder404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetPaymentOrder404ApplicationProblemPlusJSONResponse) VisitGetPaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPaymentOrderdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetPaymentOrderdefaultApplicationProblemPlusJSONResponse) VisitGetPaymentOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetProductVersionRequestObject struct {
 	Id ID `json:"id"`
 }
@@ -6437,6 +6929,61 @@ func (response ImportStatementdefaultApplicationProblemPlusJSONResponse) VisitIm
 	return err
 }
 
+type ListScreeningCasesRequestObject struct {
+	Params ListScreeningCasesParams
+}
+
+type ListScreeningCasesResponseObject interface {
+	VisitListScreeningCasesResponse(w http.ResponseWriter) error
+}
+
+type ListScreeningCases200JSONResponse ScreeningCaseList
+
+func (response ListScreeningCases200JSONResponse) VisitListScreeningCasesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListScreeningCases400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListScreeningCases400ApplicationProblemPlusJSONResponse) VisitListScreeningCasesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListScreeningCasesdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListScreeningCasesdefaultApplicationProblemPlusJSONResponse) VisitListScreeningCasesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ResolveScreeningCaseRequestObject struct {
 	Id     ID `json:"id"`
 	Params ResolveScreeningCaseParams
@@ -7021,6 +7568,9 @@ type StrictServerInterface interface {
 	// GetDepositAccountStatement Read a deposit account's statement of a month
 	// (GET /v1/deposit-accounts/{id}/statements/{period})
 	GetDepositAccountStatement(ctx context.Context, request GetDepositAccountStatementRequestObject) (GetDepositAccountStatementResponseObject, error)
+	// ChangeDepositAccountStatus Change a deposit account's status
+	// (POST /v1/deposit-accounts/{id}/status-changes)
+	ChangeDepositAccountStatus(ctx context.Context, request ChangeDepositAccountStatusRequestObject) (ChangeDepositAccountStatusResponseObject, error)
 	// ListDepositAccountTransactions Read a deposit account's history
 	// (GET /v1/deposit-accounts/{id}/transactions)
 	ListDepositAccountTransactions(ctx context.Context, request ListDepositAccountTransactionsRequestObject) (ListDepositAccountTransactionsResponseObject, error)
@@ -7069,6 +7619,9 @@ type StrictServerInterface interface {
 	// CreatePaymentOrder Initiate an outgoing payment
 	// (POST /v1/payment-orders)
 	CreatePaymentOrder(ctx context.Context, request CreatePaymentOrderRequestObject) (CreatePaymentOrderResponseObject, error)
+	// GetPaymentOrder Read an outgoing payment order
+	// (GET /v1/payment-orders/{id})
+	GetPaymentOrder(ctx context.Context, request GetPaymentOrderRequestObject) (GetPaymentOrderResponseObject, error)
 	// GetProductVersion Read a product version
 	// (GET /v1/product-versions/{id})
 	GetProductVersion(ctx context.Context, request GetProductVersionRequestObject) (GetProductVersionResponseObject, error)
@@ -7093,6 +7646,9 @@ type StrictServerInterface interface {
 	// ImportStatement Import a rail's statement
 	// (POST /v1/reconciliation/statements)
 	ImportStatement(ctx context.Context, request ImportStatementRequestObject) (ImportStatementResponseObject, error)
+	// ListScreeningCases List the screening cases
+	// (GET /v1/screening-cases)
+	ListScreeningCases(ctx context.Context, request ListScreeningCasesRequestObject) (ListScreeningCasesResponseObject, error)
 	// ResolveScreeningCase Request the resolution of a screening case
 	// (POST /v1/screening-cases/{id}/resolution)
 	ResolveScreeningCase(ctx context.Context, request ResolveScreeningCaseRequestObject) (ResolveScreeningCaseResponseObject, error)
@@ -7494,6 +8050,40 @@ func (sh *strictHandler) GetDepositAccountStatement(w http.ResponseWriter, r *ht
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetDepositAccountStatementResponseObject); ok {
 		if err := validResponse.VisitGetDepositAccountStatementResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ChangeDepositAccountStatus operation middleware
+func (sh *strictHandler) ChangeDepositAccountStatus(w http.ResponseWriter, r *http.Request, id ID, params ChangeDepositAccountStatusParams) {
+	var request ChangeDepositAccountStatusRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body ChangeDepositAccountStatusJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ChangeDepositAccountStatus(ctx, request.(ChangeDepositAccountStatusRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ChangeDepositAccountStatus")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ChangeDepositAccountStatusResponseObject); ok {
+		if err := validResponse.VisitChangeDepositAccountStatusResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -7975,6 +8565,32 @@ func (sh *strictHandler) CreatePaymentOrder(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+// GetPaymentOrder operation middleware
+func (sh *strictHandler) GetPaymentOrder(w http.ResponseWriter, r *http.Request, id ID) {
+	var request GetPaymentOrderRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPaymentOrder(ctx, request.(GetPaymentOrderRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPaymentOrder")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPaymentOrderResponseObject); ok {
+		if err := validResponse.VisitGetPaymentOrderResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetProductVersion operation middleware
 func (sh *strictHandler) GetProductVersion(w http.ResponseWriter, r *http.Request, id ID) {
 	var request GetProductVersionRequestObject
@@ -8210,6 +8826,32 @@ func (sh *strictHandler) ImportStatement(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ImportStatementResponseObject); ok {
 		if err := validResponse.VisitImportStatementResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListScreeningCases operation middleware
+func (sh *strictHandler) ListScreeningCases(w http.ResponseWriter, r *http.Request, params ListScreeningCasesParams) {
+	var request ListScreeningCasesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListScreeningCases(ctx, request.(ListScreeningCasesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListScreeningCases")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListScreeningCasesResponseObject); ok {
+		if err := validResponse.VisitListScreeningCasesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

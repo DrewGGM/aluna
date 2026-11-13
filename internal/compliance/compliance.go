@@ -30,6 +30,8 @@ type (
 	CaseStatus = app.CaseStatus
 	// Case is a screening of an operation's subject.
 	Case = app.Case
+	// CasePage is a page of cases and the cursor of the next one.
+	CasePage = app.CasePage
 )
 
 // Outcomes, subject kinds and case kinds.
@@ -47,6 +49,7 @@ const (
 var (
 	ErrCaseNotFound = app.ErrCaseNotFound
 	ErrCaseResolved = app.ErrCaseResolved
+	ErrInvalidPage  = app.ErrInvalidPage
 )
 
 // eventTypes are the screening events (architecture §8), by where the case stands.
@@ -132,6 +135,12 @@ func ResolvingParties(parties *party.Service) Resolved {
 // ErrCaseResolved otherwise. q can be the pool or a Tx.
 func (s *Service) CheckResolution(ctx context.Context, q postgres.Querier, entity, id ids.ID) error {
 	return app.CheckResolution(ctx, pg.NewStore(q), entity, id)
+}
+
+// Cases is the page of limit cases of entity after cursor, newest first, those in status if it is not empty, or
+// ErrInvalidPage for a limit outside 1 to 200, an unknown status or a cursor no page gave. q can be the pool or a Tx.
+func (s *Service) Cases(ctx context.Context, q postgres.Querier, entity ids.ID, status CaseStatus, cursor string, limit int) (CasePage, error) {
+	return app.ListCases(ctx, pg.NewStore(q), entity, status, cursor, limit)
 }
 
 // Resolve resolves pending case id of entity within tx as to, CaseCleared (not a match) or CaseConfirmed, by

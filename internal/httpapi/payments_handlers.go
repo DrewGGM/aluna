@@ -20,12 +20,13 @@ import (
 type PaymentHandlers struct {
 	payments *payments.Service
 	commands commands
+	reader   postgres.Querier
 }
 
 // NewPaymentHandlers creates the payment handlers; keys stores the responses of the commands with
-// Idempotency-Key.
-func NewPaymentHandlers(p *payments.Service, uow *postgres.UnitOfWork, keys *idempotency.Store) *PaymentHandlers {
-	return &PaymentHandlers{payments: p, commands: commands{uow: uow, keys: keys}}
+// Idempotency-Key, and reader serves the reads outside a transaction.
+func NewPaymentHandlers(p *payments.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *PaymentHandlers {
+	return &PaymentHandlers{payments: p, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
 // CreatePaymentOrder initiates an outgoing payment from an account of the token's entity, once per
@@ -62,6 +63,19 @@ func (h *PaymentHandlers) CreatePaymentOrder(ctx context.Context, req gen.Create
 	return resp, nil
 }
 
+// GetPaymentOrder reads an outgoing payment order of the token's entity.
+func (h *PaymentHandlers) GetPaymentOrder(ctx context.Context, req gen.GetPaymentOrderRequestObject) (gen.GetPaymentOrderResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	o, err := h.payments.Order(ctx, h.reader, p.LegalEntityID, ids.ID(req.Id))
+	if err != nil {
+		return nil, err
+	}
+	return gen.GetPaymentOrder200JSONResponse(toPaymentOrderJSON(o)), nil
+}
+
 func toPaymentOrderJSON(o payments.Order) gen.PaymentOrder {
 	j := gen.PaymentOrder{
 		Id: openapi_types.UUID(o.ID), AccountId: openapi_types.UUID(o.AccountID), Rail: o.Rail, Amount: moneyJSON(o.Amount),
@@ -70,6 +84,12 @@ func toPaymentOrderJSON(o payments.Order) gen.PaymentOrder {
 	if o.Status == payments.StatusHeld {
 		held := moneyJSON(o.Held)
 		j.Held = &held
+	}
+	if o.RailRef != "" {
+		j.RailRef = &o.RailRef
+	}
+	if o.Reason != "" {
+		j.Reason = &o.Reason
 	}
 	return j
 }

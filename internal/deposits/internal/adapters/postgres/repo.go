@@ -75,6 +75,17 @@ func (s Store) SetStatus(ctx context.Context, a domain.Account, to domain.Status
 	return nil
 }
 
+// StatusChanges counts the recorded status changes of account id of entity.
+func (s Store) StatusChanges(ctx context.Context, entity, id ids.ID) (int, error) {
+	var n int
+	err := s.q.QueryRow(ctx, `SELECT count(*) FROM deposits.status_changes c JOIN deposits.accounts a ON a.id = c.account_id
+		WHERE a.id = $1 AND a.legal_entity_id = $2`, id, entity).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count the status changes of deposit account %s: %w", id, err)
+	}
+	return n, nil
+}
+
 // RecordActivity sets the last customer activity of account id to on.
 func (s Store) RecordActivity(ctx context.Context, id ids.ID, on calendar.Date) error {
 	if _, err := s.q.Exec(ctx, `UPDATE deposits.accounts SET last_customer_activity_on = $2 WHERE id = $1`, id, on.Time()); err != nil {

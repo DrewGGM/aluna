@@ -116,6 +116,12 @@ func (r storedResponse) VisitCreateDepositResponse(w http.ResponseWriter) error 
 // VisitCreateWithdrawalResponse writes the stored response of POST /v1/deposit-accounts/{id}/withdrawals.
 func (r storedResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error { return r.write(w) }
 
+// VisitChangeDepositAccountStatusResponse writes the stored response of POST
+// /v1/deposit-accounts/{id}/status-changes.
+func (r storedResponse) VisitChangeDepositAccountStatusResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitCreateQuoteResponse writes the response of POST /v1/quotes.
 func (r storedResponse) VisitCreateQuoteResponse(w http.ResponseWriter) error { return r.write(w) }
 
@@ -255,6 +261,13 @@ func (c commands) audited(ctx context.Context, step func(tx postgres.Tx) (stored
 	return resp, err
 }
 
+// withStatus is the result of an effect that answers body with status instead of its operation's success: a
+// command that runs at once or waits for approval depending on what it finds, as a status change does.
+type withStatus struct {
+	status int
+	body   any
+}
+
 // underSavepoint runs effect under a savepoint and turns it into the command's response and its result: ok
 // or the problem code. A business error is rolled back to there, also if the database aborted the
 // transaction, and its problem is the response. Any other error, including the conflicts that UnitOfWork
@@ -266,11 +279,15 @@ func underSavepoint(ctx context.Context, tx postgres.Tx, op operation, effect fu
 	}
 	result, effectErr := effect(tx)
 	if effectErr == nil {
+		status := op.success
+		if s, ok := result.(withStatus); ok {
+			status, result = s.status, s.body
+		}
 		body, err := json.Marshal(result)
 		if err != nil {
 			return storedResponse{}, "", fmt.Errorf("command response: %w", err)
 		}
-		return storedResponse{status: op.success, body: append(body, '\n')}, resultOK, nil
+		return storedResponse{status: status, body: append(body, '\n')}, resultOK, nil
 	}
 	p, isBusiness := problemFor(effectErr)
 	if !isBusiness {

@@ -3,12 +3,14 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/DrewGGM/aluna/internal/access"
+	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
@@ -26,18 +28,32 @@ const transferChannel = "api"
 
 var openDepositAccount = operation{method: http.MethodPost, path: "/v1/deposit-accounts", success: http.StatusCreated}
 
+// errInvalidAccountStatus is a status change to other than active, frozen or closed: the generated code does not
+// reject it, and the domain would take dormant, which only the dormancy job sets (FR-27).
+var errInvalidAccountStatus = errors.New("a deposit account's status changes to active, frozen or closed")
+
+// Maker-checker request kind of freezing and unfreezing a deposit account (a blocking order and its lifting,
+// architecture §5) and the permission to request and to approve it.
+const (
+	statusChangeKind       = "deposits.account_status_change"
+	statusChangePermission = "deposits.accounts.change_status"
+)
+
 // DepositHandlers implements the contract's deposit account operations (api/openapi.yaml).
 type DepositHandlers struct {
-	deposits *deposits.Service
-	ledger   *ledger.Service
-	commands commands
-	reader   postgres.Querier
+	deposits  *deposits.Service
+	ledger    *ledger.Service
+	approvals *approvals.Service
+	commands  commands
+	reader    postgres.Querier
 }
 
-// NewDepositHandlers creates the deposit handlers; l reads the accounts' history. keys stores the responses
-// of the commands with Idempotency-Key; reader serves the reads outside a transaction.
-func NewDepositHandlers(d *deposits.Service, l *ledger.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *DepositHandlers {
-	return &DepositHandlers{deposits: d, ledger: l, commands: commands{uow: uow, keys: keys}, reader: reader}
+// NewDepositHandlers creates the deposit handlers and registers in a the freeze and unfreeze request kind, which
+// goes through maker-checker; l reads the accounts' history. keys stores the responses of the commands with
+// Idempotency-Key; reader serves the reads outside a transaction.
+func NewDepositHandlers(d *deposits.Service, l *ledger.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *DepositHandlers {
+	a.RegisterKind(statusChangeKind, statusChangePermission, changeStatusOnApproval(d))
+	return &DepositHandlers{deposits: d, ledger: l, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
 // OpenDepositAccount opens an account of the token's entity, once per Idempotency-Key.
@@ -71,6 +87,98 @@ func (h *DepositHandlers) GetDepositAccount(ctx context.Context, req gen.GetDepo
 		return nil, err
 	}
 	return gen.GetDepositAccount200JSONResponse(toDepositAccountJSON(a)), nil
+}
+
+// ChangeDepositAccountStatus moves an account of the token's entity to the requested status, once per
+// Idempotency-Key: a freeze or an unfreeze waits as a deposits.account_status_change request until someone else
+// approves it (FR-39) and answers 202 with it; any other change is made at once, with the token's subject as who
+// made it, and answers the account as it stands afterwards.
+func (h *DepositHandlers) ChangeDepositAccountStatus(ctx context.Context, req gen.ChangeDepositAccountStatusRequestObject) (gen.ChangeDepositAccountStatusResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := ids.ID(req.Id)
+	op := resourceOperation("deposit-accounts", id, "status-changes", http.StatusOK)
+	noteTargets(ctx, op.targets) // before validating the body: its rejection also names the account
+	if !req.Body.Status.Valid() {
+		return nil, fmt.Errorf("%w, not %q", errInvalidAccountStatus, req.Body.Status)
+	}
+	change := statusChange{AccountID: id, Status: deposits.Status(req.Body.Status)}
+	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		return h.changeStatus(ctx, tx, p, change)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// statusChange is an account, the status it goes to and how many status changes the account had when it was
+// requested: the payload of a freeze or unfreeze request, kept as evidence, and what approving it returns
+// (approvals.read does not grant reading accounts).
+type statusChange struct {
+	AccountID ids.ID          `json:"account_id"`
+	Status    deposits.Status `json:"status"`
+	Changes   int             `json:"status_changes"`
+}
+
+// changeStatus makes change for p within tx, deciding under the account's lock: a freeze or an unfreeze becomes a
+// request (202), so a concurrent change cannot turn a direct change into an unfreeze nobody approved; any other change
+// is made at once and answers the account.
+func (h *DepositHandlers) changeStatus(ctx context.Context, tx postgres.Tx, p access.Principal, change statusChange) (any, error) {
+	a, err := h.deposits.LockAccount(ctx, tx, p.LegalEntityID, change.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if needsApproval(a.Status, change.Status) {
+		if change.Changes, err = h.deposits.StatusChanges(ctx, tx, p.LegalEntityID, a.ID); err != nil {
+			return nil, err
+		}
+		requested, err := h.approvals.Request(ctx, tx, statusChangeKind, change, p)
+		if err != nil {
+			return nil, err
+		}
+		return withStatus{status: http.StatusAccepted, body: toApprovalJSON(requested)}, nil
+	}
+	if err := h.deposits.ChangeStatus(ctx, tx, p.LegalEntityID, a.ID, change.Status, p.Subject); err != nil {
+		return nil, err
+	}
+	if a, err = h.deposits.Account(ctx, tx, p.LegalEntityID, a.ID); err != nil {
+		return nil, err
+	}
+	return toDepositAccountJSON(a), nil
+}
+
+// needsApproval reports whether moving an account from from to to is a freeze or an unfreeze, which the diagram puts
+// under maker-checker (architecture §5). Any other change is made at once, or rejected by ChangeStatus.
+func needsApproval(from, to deposits.Status) bool {
+	return (from == deposits.Active && to == deposits.Frozen) || (from == deposits.Frozen && to == deposits.Active)
+}
+
+// changeStatusOnApproval is the Executor of statusChangeKind: it makes the change in the approver's entity, with the
+// approver as who made it, if the account has not changed status since the request. One that did (closed, or frozen
+// or unfrozen by another request, even back to the status it had) is ErrInvalidTransition, and the request is left
+// failed: an old unfreeze does not lift a later freeze.
+func changeStatusOnApproval(d *deposits.Service) approvals.Executor {
+	return onApproval("deposit account status change", func(ctx context.Context, tx postgres.Tx, r statusChange, checker access.Principal) (statusChange, error) {
+		a, err := d.LockAccount(ctx, tx, checker.LegalEntityID, r.AccountID)
+		if err != nil {
+			return statusChange{}, err
+		}
+		changes, err := d.StatusChanges(ctx, tx, checker.LegalEntityID, a.ID)
+		if err != nil {
+			return statusChange{}, err
+		}
+		if changes != r.Changes {
+			return statusChange{}, fmt.Errorf("%w: account %s changed status after the change to %s was requested",
+				deposits.ErrInvalidTransition, a.ID, r.Status)
+		}
+		if err := d.ChangeStatus(ctx, tx, checker.LegalEntityID, a.ID, r.Status, checker.Subject); err != nil {
+			return statusChange{}, err
+		}
+		return r, nil
+	})
 }
 
 // ListDepositAccountTransactions reads a page of the history of an account of the token's entity.

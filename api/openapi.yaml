@@ -377,6 +377,43 @@ paths:
         "409": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/screening-cases:
+    get:
+      operationId: listScreeningCases
+      summary: List the screening cases
+      description: >-
+        The entity's screening cases (FR-42), newest first, those of `status` if it says one: `pending` are the ones
+        waiting for compliance to resolve them at `POST /v1/screening-cases/{id}/resolution`. A case names what was
+        screened, a party being registered or an outgoing payment order, by its id, never by the subject's name or
+        documents. `next_cursor` reads the next page and is absent on the last one. A `limit` outside 1 to 200, an
+        unknown `status` or a cursor that is not a case id is 400 `invalid_request`.
+      x-aluna-permission: compliance.screening.read
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, cleared, confirmed]
+            example: pending
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` of the previous page; absent for the first one.
+          schema: {type: string}
+        - name: limit
+          in: query
+          required: false
+          description: Cases per page.
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+      responses:
+        "200":
+          description: A page of screening cases
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ScreeningCaseList"}
+        "400": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/screening-cases/{id}/resolution:
     post:
       operationId: resolveScreeningCase
@@ -739,6 +776,70 @@ paths:
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/deposit-accounts/{id}/status-changes:
+    post:
+      operationId: changeDepositAccountStatus
+      summary: Change a deposit account's status
+      description: >-
+        Moves the account through its life cycle (FR-22). Freezing an active account (a blocking order) and
+        unfreezing a frozen one (`active` on a frozen account) go through maker-checker: they create a
+        `deposits.account_status_change` request, with the account and the status, and answer 202 with it. The change
+        is made when another person with `deposits.accounts.change_status` approves it at
+        `POST /v1/approvals/{id}/approval`, with the approver as who made it; if the account changed status after the
+        request (it was closed, unfrozen or frozen meanwhile, even back to the status it had), approving it leaves the
+        request `failed`.
+        Every other change is made at once and answers 200 with the account: `active` reactivates a dormant account or
+        activates a pending one whose party's KYC is approved (422 `kyc_not_satisfied` otherwise), and `closed` closes
+        a pending, active or dormant account without a balance (409 `account_not_empty`) and without pending holds
+        (409 `pending_holds`). Any other change, such as freezing a dormant account, closing a frozen one or changing a
+        closed one, is 409 `invalid_status_transition`. `dormant` is not set by hand: the dormancy job marks an active
+        account without customer activity (FR-27). Going back to `active` records the business date as the
+        customer's last activity, so the dormancy job does not take it straight back. Each change is recorded with
+        who made it and emits its event (`aluna.deposits.account.{activated,frozen,unfrozen,closed}.v1`). An account
+        of another entity is 404. Idempotent by `Idempotency-Key`.
+      x-aluna-permission: deposits.accounts.change_status
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ChangeDepositAccountStatus"}
+      responses:
+        "200":
+          description: Status changed (activation, reactivation or closure)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DepositAccount"}
+              example:
+                id: 0196f3a2-7c41-7d1e-9b2a-3c4d5e6f7a8b
+                party_id: 0196f3a2-6b30-7c0d-8a19-2b3c4d5e6f7a
+                product_version_id: 0196f3a2-5a2f-7b0c-9908-1a2b3c4d5e6f
+                ledger_account_id: 0196f3a2-7c42-7e2f-8c3b-4d5e6f7a8b9c
+                currency: COP
+                status: closed
+                opened_on: "2026-03-02"
+                last_customer_activity_on: "2026-03-02"
+        "202":
+          description: Freeze or unfreeze request created, pending approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+              example:
+                id: 0196f3a3-1d52-7f30-a14b-5e6f7a8b9c0d
+                kind: deposits.account_status_change
+                status: pending
+                payload: {account_id: 0196f3a2-7c41-7d1e-9b2a-3c4d5e6f7a8b, status: frozen, status_changes: 0}
+                maker: operator-a
+                created_at: "2026-03-02T15:04:05Z"
+                expires_at: "2026-03-09T15:04:05Z"
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/quotes:
     post:
       operationId: createQuote
@@ -800,6 +901,27 @@ paths:
         "409": {$ref: "#/components/responses/Problem"}
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/payment-orders/{id}:
+    get:
+      operationId: getPaymentOrder
+      summary: Read an outgoing payment order
+      description: >-
+        Where an outgoing payment order of the entity stands (FR-30): its status, its amount, what it holds on the
+        account while it is `held`, its ISO 20022 identifiers, the rail's reference once the rail gives it, and why
+        it was rejected, if it was. Its beneficiary is not shown. A transfer received from another bank, or an order
+        of another entity, is 404.
+      x-aluna-permission: payments.orders.read
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Payment order
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentOrder"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
   /v1/cuif-mappings:
     post:
@@ -1360,6 +1482,8 @@ components:
         instr_id: {type: string, description: ISO 20022 InstrId}
         tx_id: {type: string, description: ISO 20022 TxId}
         held: {$ref: "#/components/schemas/Money", description: "What is held on the account: the amount, its fees and its GMF"}
+        rail_ref: {type: string, description: "The rail's reference to the order, once the rail gives it"}
+        reason: {type: string, description: "Why the rail rejected it, as the rail said it, or RAIL_REFUSED if the rail did not take it"}
     RegisterWebhookEndpoint:
       type: object
       required: [url]
@@ -1582,6 +1706,15 @@ components:
     DepositAccountStatus:
       type: string
       enum: [pending, active, frozen, dormant, closed]
+    ChangeDepositAccountStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [active, frozen, closed]
+          example: frozen
+          description: "The status the account goes to; `pending` and `dormant` are not set by hand"
     DepositAccount:
       type: object
       required: [id, party_id, product_version_id, ledger_account_id, currency, status, opened_on, last_customer_activity_on]
@@ -1762,6 +1895,28 @@ components:
       required: [cause]
       properties:
         cause: {type: string, description: "Why it happened, of 1 to 1000 characters"}
+    ScreeningCase:
+      type: object
+      required: [id, kind, subject_id, status, opened_at]
+      properties:
+        id: {type: string, format: uuid}
+        kind:
+          type: string
+          enum: [party, payment]
+          description: What was screened, a party being registered or an outgoing payment's beneficiary
+        subject_id: {type: string, format: uuid, description: "The party, or the payment order"}
+        status:
+          type: string
+          enum: [pending, cleared, confirmed]
+        opened_at: {type: string, format: date-time}
+    ScreeningCaseList:
+      type: object
+      required: [cases]
+      properties:
+        cases:
+          type: array
+          items: {$ref: "#/components/schemas/ScreeningCase"}
+        next_cursor: {type: string, description: Cursor of the next page; absent on the last one}
     ResolveScreeningCase:
       type: object
       required: [resolution]

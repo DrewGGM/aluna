@@ -128,6 +128,12 @@ func (s *Service) Initiate(ctx context.Context, tx postgres.Tx, in InitiateInput
 	return o, nil
 }
 
+// Order reads outgoing payment order id of entity; another entity's order, or a transfer received, is
+// ErrOrderNotFound. q can be the pool or a Tx.
+func (s *Service) Order(ctx context.Context, q postgres.Querier, entity, id ids.ID) (Order, error) {
+	return pg.NewStore(q).Outgoing(ctx, entity, id)
+}
+
 // undo rolls tx back to the payment's savepoint, which failed with err, and releases it. If it cannot, it
 // returns that error and not err: the payment may still be in tx, so it must not pass for a clean rejection.
 func undo(ctx context.Context, tx postgres.Tx, err error) error {

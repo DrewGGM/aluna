@@ -131,6 +131,7 @@ var problems = []struct {
 	{errReversalOfReversal, conflict("reversal_of_reversal", "The transaction is already a reversal")},
 	{errInvalidResolution, invalidRequest("Unknown resolution", "resolution is cleared or confirmed.")},
 	{errInvalidApprovalStatus, invalidRequest("Unknown request status", "status is pending, approved, rejected, failed or expired.")},
+	{errInvalidAccountStatus, invalidRequest("Unknown account status", "status is active, frozen or closed; the dormancy job sets dormant.")},
 	// idempotency
 	{idempotency.ErrKeyReused, unprocessable("idempotency_key_reused", "The Idempotency-Key was already used with another payload")},
 	{idempotency.ErrInProgress, conflict("request_in_progress", "A request with the same Idempotency-Key is in progress")},
@@ -187,6 +188,9 @@ var problems = []struct {
 	{deposits.ErrAccountNotFound, notFound},
 	{deposits.ErrStatementNotFound, Problem{Status: http.StatusNotFound, Code: "statement_not_found", Title: "The account has no statement of that month: its period is not closed or not stated yet, the account did not exist then, or it was closed and did not move in it"}},
 	{deposits.ErrAccountNotActive, conflict("account_not_active", "Only an active account moves money")},
+	{deposits.ErrInvalidTransition, conflict("invalid_status_transition", "The account's life cycle does not allow that status change")},
+	{deposits.ErrNotEmpty, conflict("account_not_empty", "An account with a balance does not close")},
+	{deposits.ErrPendingHolds, conflict("pending_holds", "An account with pending holds does not close")},
 	{deposits.ErrKYCNotSatisfied, unprocessable("kyc_not_satisfied", "The party's KYC status does not allow the product")},
 	{deposits.ErrInvalidMovement, unprocessable("invalid_movement", "The amount must be positive and the accounts different")},
 	{deposits.ErrLimitExceeded, unprocessable("limit_exceeded", "The movement exceeds a limit of the product")},
@@ -227,6 +231,7 @@ var problems = []struct {
 	// compliance
 	{compliance.ErrCaseNotFound, notFound},
 	{compliance.ErrCaseResolved, conflict("case_already_resolved", "The screening case is already resolved")},
+	{compliance.ErrInvalidPage, invalidRequest("Invalid page", "A page has 1 to 200 cases, of status pending, cleared or confirmed, and its cursor is one a previous page gave.")},
 	// pricing
 	{pricing.ErrInvalidQuote, unprocessable("invalid_quote", "The operation is not priced, or the amount is not positive or not in the account's currency")},
 	{pricing.ErrQuoteUnavailable, conflict("quote_unavailable", "The quote does not exist for this operation, was already used or expired, or its GMF exemption was used meanwhile")},

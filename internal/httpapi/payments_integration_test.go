@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -208,7 +209,7 @@ func newRailSide(t *testing.T) railSide {
 	if r.payments, err = payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, testPool, r.rail); err != nil {
 		t.Fatal(err)
 	}
-	handlers := NewPaymentHandlers(r.payments, postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool))
+	handlers := NewPaymentHandlers(r.payments, postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool)
 	r.ts = httptest.NewServer(NewServer(ServerConfig{}, RailRoutes(handlers, log), log).Handler)
 	t.Cleanup(r.ts.Close)
 	return r
@@ -328,5 +329,107 @@ func TestATransferReceivedOverHTTP(t *testing.T) {
 	expectProblem(t, "a forged transfer", deliverTo(t, rails.ts, "transfers", forged), http.StatusUnauthorized, "invalid_signature")
 	if w.natural(t, a) != 130000000 {
 		t.Fatalf("the balance = %d, want 1,300,000 COP: the transfer once", w.natural(t, a))
+	}
+}
+
+// readOrder reads order id over ts, which must be 200.
+func readOrder(t *testing.T, ts *httptest.Server, id string) gen.PaymentOrder {
+	t.Helper()
+	var o gen.PaymentOrder
+	if status := call(t, ts, http.MethodGet, "/v1/payment-orders/"+id, "", &o); status != http.StatusOK {
+		t.Fatalf("read order %s = %d, want 200", id, status)
+	}
+	return o
+}
+
+// sentAndNotified sends order o through the rail and delivers the rail's outcome to the core.
+func sentAndNotified(t *testing.T, rails railSide, o gen.PaymentOrder) {
+	t.Helper()
+	if err := rails.payments.Send(t.Context(), postgres.NewUnitOfWork(testPool), ids.ID(o.Id)); err != nil {
+		t.Fatal(err)
+	}
+	if r := deliver(t, rails.ts, rails.next(t)); r.status != http.StatusNoContent {
+		t.Fatalf("the outcome = %d %s, want 204", r.status, r.body)
+	}
+}
+
+// TestAPaymentOrderIsReadOverHTTP (FR-30): an order reads as it was initiated, held; once the rail settles it, with
+// the rail's reference, and once the rail rejects another, with its reason.
+func TestAPaymentOrderIsReadOverHTTP(t *testing.T) {
+	w, a := payingWorld(t)
+	rails := newRailSide(t)
+	initiated := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30000000, "simbreb", "@beneficiary")))
+	rejected := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30001300, "simbreb", "@beneficiary")))
+
+	if held := readOrder(t, w.ts, initiated.Id.String()); !reflect.DeepEqual(held, initiated) {
+		t.Fatalf("read = %+v, want it as initiated %+v", held, initiated)
+	}
+	sentAndNotified(t, rails, initiated)
+	sentAndNotified(t, rails, rejected)
+
+	settled, refused := readOrder(t, w.ts, initiated.Id.String()), readOrder(t, w.ts, rejected.Id.String())
+	want := initiated
+	want.Status, want.Held, want.RailRef = gen.PaymentOrderStatusSettled, nil, settled.RailRef
+	if settled.RailRef == nil || *settled.RailRef == "" || !reflect.DeepEqual(settled, want) {
+		t.Fatalf("settled = %+v, want it settled with the rail's reference and no reason", settled)
+	}
+	if refused.Status != gen.PaymentOrderStatusRejected || refused.Reason == nil || *refused.Reason != "AC04" {
+		t.Fatalf("rejected = %+v, want it rejected as AC04", refused)
+	}
+}
+
+// TestAPaymentOrderOfNowhereIsNotFound: an unknown order, another entity's and a transfer received are 404.
+func TestAPaymentOrderOfNowhereIsNotFound(t *testing.T) {
+	w, a := payingWorld(t)
+	if status := call(t, w.ts, http.MethodPost, "/v1/ledger-accounts",
+		`{"code":"L.SUSPENSE.SIMBREB","kind":"liability","currency":"COP","balance_mode":"async"}`, nil); status != http.StatusCreated {
+		t.Fatalf("create the suspense account = %d", status)
+	}
+	o := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30000000, "simbreb", "@beneficiary")))
+	e2e := "BANKX" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	received := deliverTo(t, newRailSide(t).ts, "transfers", signedTransfer(`{"creditor_agent":"`+w.entity.String()+`","end_to_end_id":"`+e2e+
+		`","instr_id":"INSTR1","tx_id":"TX1","rail_ref":"SIMIN1","debtor_agent":"BANKXCOBB","amount":100,"currency":"COP",`+
+		`"settlement_date":"2026-03-02","creditor":{"account_number":"`+a.Id.String()+`"}}`))
+	if received.status != http.StatusNoContent {
+		t.Fatalf("the transfer = %d %s, want 204", received.status, received.body)
+	}
+	var incoming string
+	if err := testPool.QueryRow(t.Context(), `SELECT id FROM payments.orders WHERE end_to_end_id = $1`, e2e).Scan(&incoming); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, c := range map[string]struct {
+		ts *httptest.Server
+		id string
+	}{
+		"an unknown order":    {w.ts, ids.New().String()},
+		"another entity's":    {apiServer(t, ids.New()), o.Id.String()},
+		"a transfer received": {w.ts, incoming},
+	} {
+		var p Problem
+		if status := call(t, c.ts, http.MethodGet, "/v1/payment-orders/"+c.id, "", &p); status != http.StatusNotFound || p.Code != "not_found" {
+			t.Errorf("%s = %d %+v, want 404 not_found", name, status, p)
+		}
+	}
+}
+
+// TestWhoReadsAPaymentOrder (ADR-0014): those who read the entity's deposit accounts read its payment orders; a
+// channel and an integrator do not.
+func TestWhoReadsAPaymentOrder(t *testing.T) {
+	w, a := payingWorld(t)
+	o := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30000000, "simbreb", "@beneficiary")))
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for role, want := range map[string]int{
+		"finance": http.StatusOK, "compliance": http.StatusOK, "auditor": http.StatusOK,
+		"channel": http.StatusForbidden, "integrator": http.StatusForbidden,
+	} {
+		ts := apiServerAsRole(t, w.entity, events, "someone-"+role, role)
+		if status := call(t, ts, http.MethodGet, "/v1/payment-orders/"+o.Id.String(), "", nil); status != want {
+			t.Errorf("as %s = %d, want %d", role, status, want)
+		}
 	}
 }

@@ -31,13 +31,48 @@ type ComplianceHandlers struct {
 	compliance *compliance.Service
 	approvals  *approvals.Service
 	commands   commands
+	reader     postgres.Querier
 }
 
 // NewComplianceHandlers creates the compliance handlers and registers in a the resolution request kind,
-// which goes through maker-checker. keys stores the responses of the commands with Idempotency-Key.
-func NewComplianceHandlers(c *compliance.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store) *ComplianceHandlers {
+// which goes through maker-checker. keys stores the responses of the commands with Idempotency-Key; reader
+// serves the reads outside a transaction.
+func NewComplianceHandlers(c *compliance.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *ComplianceHandlers {
 	a.RegisterKind(screeningResolutionKind, screeningResolutionPermission, resolveOnApproval(c))
-	return &ComplianceHandlers{compliance: c, approvals: a, commands: commands{uow: uow, keys: keys}}
+	return &ComplianceHandlers{compliance: c, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
+}
+
+// ListScreeningCases lists the screening cases of the token's entity, newest first: what was screened and where
+// its case stands, nothing of who the subject is.
+func (h *ComplianceHandlers) ListScreeningCases(ctx context.Context, req gen.ListScreeningCasesRequestObject) (gen.ListScreeningCasesResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cursor, limit := pageOf(req.Params.Cursor, req.Params.Limit)
+	var status compliance.CaseStatus
+	if req.Params.Status != nil {
+		status = compliance.CaseStatus(*req.Params.Status)
+	}
+	page, err := h.compliance.Cases(ctx, h.reader, p.LegalEntityID, status, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	list := gen.ScreeningCaseList{Cases: make([]gen.ScreeningCase, len(page.Cases))}
+	for i, c := range page.Cases {
+		list.Cases[i] = toScreeningCaseJSON(c)
+	}
+	if page.Next != "" {
+		list.NextCursor = &page.Next
+	}
+	return gen.ListScreeningCases200JSONResponse(list), nil
+}
+
+func toScreeningCaseJSON(c compliance.Case) gen.ScreeningCase {
+	return gen.ScreeningCase{
+		Id: [16]byte(c.ID), Kind: gen.ScreeningCaseKind(c.Kind), SubjectId: [16]byte(c.SubjectID),
+		Status: gen.ScreeningCaseStatus(c.Status), OpenedAt: c.CreatedAt,
+	}
 }
 
 // resolutionRequest is the payload of a resolution request, kept as evidence: which case, and what it

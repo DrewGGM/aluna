@@ -210,7 +210,7 @@ func undo(ctx context.Context, tx postgres.Tx, err error) error {
 // is active: one that is not is ErrAccountNotActive, an unknown one ErrAccountNotFound. A module that moves
 // money out of an account (payments) locks it with this, so that the account does not close meanwhile.
 func (s *Service) LockActive(ctx context.Context, tx postgres.Tx, entity, id ids.ID) (Account, error) {
-	a, err := pg.NewStore(tx).LockAccount(ctx, entity, id)
+	a, err := s.LockAccount(ctx, tx, entity, id)
 	if err != nil {
 		return Account{}, err
 	}
@@ -218,6 +218,18 @@ func (s *Service) LockActive(ctx context.Context, tx postgres.Tx, entity, id ids
 		return Account{}, fmt.Errorf("%w: account %s is %s", ErrAccountNotActive, id, a.Status)
 	}
 	return a, nil
+}
+
+// LockAccount locks deposit account id of the entity until tx ends, as ChangeStatus does, and returns it, or
+// ErrAccountNotFound: whoever decides by its status decides on a status nobody changes before tx ends.
+func (s *Service) LockAccount(ctx context.Context, tx postgres.Tx, entity, id ids.ID) (Account, error) {
+	return pg.NewStore(tx).LockAccount(ctx, entity, id)
+}
+
+// StatusChanges is how many times deposit account id of the entity has changed status. The history only grows, so
+// two equal counts mean the status did not change in between. q can be the pool or a Tx.
+func (s *Service) StatusChanges(ctx context.Context, q postgres.Querier, entity, id ids.ID) (int, error) {
+	return pg.NewStore(q).StatusChanges(ctx, entity, id)
 }
 
 // Account returns deposit account id of the entity, or ErrAccountNotFound. q can be the pool or a Tx.

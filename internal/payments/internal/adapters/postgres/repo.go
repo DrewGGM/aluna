@@ -68,11 +68,12 @@ func orNull(id ids.ID) *ids.ID {
 	return &id
 }
 
-// The queries that lock an order, by id and an outgoing one by its end-to-end id: a beneficiary, a reason, a
-// rail reference and a debtor agent the order does not have are empty.
+// The queries that lock an order, by id and an outgoing one by its end-to-end id, and the one that reads an outgoing
+// order of an entity: a beneficiary, a reason, a rail reference and a debtor agent the order does not have are empty.
 const (
 	lockOrderSQL = `SELECT ` + orderColumns + ` FROM payments.orders WHERE id = $1 FOR UPDATE`
 	lockByE2ESQL = `SELECT ` + orderColumns + ` FROM payments.orders WHERE direction = 'outgoing' AND end_to_end_id = $1 FOR UPDATE`
+	outgoingSQL  = `SELECT ` + orderColumns + ` FROM payments.orders WHERE id = $1 AND legal_entity_id = $2 AND direction = 'outgoing'`
 	orderColumns = `id, legal_entity_id, account_id, direction, rail, end_to_end_id, instr_id, tx_id, currency, amount_units,
 		coalesce(creditor_number, ''), coalesce(creditor_key, ''), status, coalesce(reason, ''), coalesce(rail_ref, ''), external_ref,
 		hold_id, held_units, fees, gmf_units, coalesce(debtor_agent, '')`
@@ -80,16 +81,23 @@ const (
 
 // LockOrder locks (FOR UPDATE) and returns order id, or app.ErrOrderNotFound.
 func (s Store) LockOrder(ctx context.Context, id ids.ID) (app.Order, error) {
-	return s.lock(ctx, lockOrderSQL, id)
+	return s.read(ctx, lockOrderSQL, id)
 }
 
 // LockByEndToEndID locks (FOR UPDATE) and returns the outgoing order with end-to-end id e2e, or
 // app.ErrOrderNotFound.
 func (s Store) LockByEndToEndID(ctx context.Context, e2e string) (app.Order, error) {
-	return s.lock(ctx, lockByE2ESQL, e2e)
+	return s.read(ctx, lockByE2ESQL, e2e)
 }
 
-func (s Store) lock(ctx context.Context, query string, key any) (app.Order, error) {
+// Outgoing reads outgoing order id of entity, or app.ErrOrderNotFound: another entity's order, or a transfer received,
+// looks the same as a missing one.
+func (s Store) Outgoing(ctx context.Context, entity, id ids.ID) (app.Order, error) {
+	return s.read(ctx, outgoingSQL, id, entity)
+}
+
+// read returns the order query finds by key and the rest of args, locked if query locks it.
+func (s Store) read(ctx context.Context, query string, key any, args ...any) (app.Order, error) {
 	var (
 		o                           app.Order
 		direction, status, currency string
@@ -97,14 +105,14 @@ func (s Store) lock(ctx context.Context, query string, key any) (app.Order, erro
 		feesJSON                    []byte
 		holdID, accountID           *ids.ID // an order that holds nothing, or is for no account, has none
 	)
-	err := s.q.QueryRow(ctx, query, key).Scan(&o.ID, &o.LegalEntityID, &accountID, &direction, &o.Rail, &o.EndToEndID, &o.InstrID,
-		&o.TxID, &currency, &amount, &o.Creditor.Number, &o.Creditor.Key, &status, &o.Reason, &o.RailRef, &o.ExternalRef, &holdID,
-		&held, &feesJSON, &gmf, &o.DebtorAgent)
+	err := s.q.QueryRow(ctx, query, append([]any{key}, args...)...).Scan(&o.ID, &o.LegalEntityID, &accountID, &direction, &o.Rail,
+		&o.EndToEndID, &o.InstrID, &o.TxID, &currency, &amount, &o.Creditor.Number, &o.Creditor.Key, &status, &o.Reason, &o.RailRef,
+		&o.ExternalRef, &holdID, &held, &feesJSON, &gmf, &o.DebtorAgent)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.Order{}, fmt.Errorf("%w: %v", app.ErrOrderNotFound, key)
 	}
 	if err != nil {
-		return app.Order{}, fmt.Errorf("lock payment order %v: %w", key, err)
+		return app.Order{}, fmt.Errorf("read payment order %v: %w", key, err)
 	}
 	c, err := money.CurrencyOf(currency)
 	if err != nil {

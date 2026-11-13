@@ -46,7 +46,13 @@ var (
 	ErrCaseNotFound = errors.New("screening case not found")
 	// ErrCaseResolved means the case is no longer pending.
 	ErrCaseResolved = errors.New("screening case already resolved")
+	// ErrInvalidPage means a page of no cases or of more than MaxPageSize, of an unknown status, or a cursor that
+	// is not one a page gave.
+	ErrInvalidPage = errors.New("invalid page of screening cases")
 )
+
+// MaxPageSize is the most cases a page has.
+const MaxPageSize = 200
 
 // Cases is the persistence of screening cases; reads by ID are of the entity's cases, ErrCaseNotFound
 // otherwise.
@@ -101,4 +107,46 @@ func pending(c Case) error {
 		return fmt.Errorf("%w: case %s is %s", ErrCaseResolved, c.ID, c.Status)
 	}
 	return nil
+}
+
+// CasePage is a page of cases, newest first, and the cursor of the next one: empty on the last page.
+type CasePage struct {
+	Cases []Case
+	Next  string
+}
+
+// CaseReader reads the cases.
+type CaseReader interface {
+	// CasesBefore are the first limit cases of the entity with an id below before, or from the newest one if it
+	// is zero, those in status if it has one, newest first.
+	CasesBefore(ctx context.Context, entity ids.ID, status CaseStatus, before ids.ID, limit int) ([]Case, error)
+}
+
+// ListCases is the page of limit cases of the entity after cursor, those in status if it has one, or its first
+// page when cursor is empty. Ids grow with time, so the last one of a page is the cursor of the next.
+func ListCases(ctx context.Context, r CaseReader, entity ids.ID, status CaseStatus, cursor string, limit int) (CasePage, error) {
+	if limit < 1 || limit > MaxPageSize {
+		return CasePage{}, fmt.Errorf("%w: a page has 1 to %d cases, not %d", ErrInvalidPage, MaxPageSize, limit)
+	}
+	switch status {
+	case "", CasePending, CaseCleared, CaseConfirmed:
+	default:
+		return CasePage{}, fmt.Errorf("%w: a case is pending, cleared or confirmed, not %q", ErrInvalidPage, status)
+	}
+	var before ids.ID
+	if cursor != "" {
+		parsed, err := ids.Parse(cursor)
+		if err != nil {
+			return CasePage{}, fmt.Errorf("%w: unknown cursor", ErrInvalidPage)
+		}
+		before = parsed
+	}
+	found, err := r.CasesBefore(ctx, entity, status, before, limit+1)
+	if err != nil {
+		return CasePage{}, err
+	}
+	if len(found) <= limit {
+		return CasePage{Cases: found}, nil
+	}
+	return CasePage{Cases: found[:limit], Next: found[limit-1].ID.String()}, nil
 }

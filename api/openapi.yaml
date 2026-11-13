@@ -803,6 +803,33 @@ paths:
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/general-ledger/daily:
+    get:
+      operationId: getDailyGL
+      summary: Read the GL of a day
+      description: >-
+        What each CUIF code moved on a closed business date of the entity, by currency (FR-36, US-13), projected from
+        the journal with the mapping in force that day: debits and credits apart, so the lines sum zero by currency.
+        Only the days from the entity's first mapping have a GL. A day without a projection is 404
+        `gl_day_not_projected`: it is open, it had no transactions, or it comes before that mapping. A day with an
+        account without a mapping in force is 409 `gl_day_unmapped`, which the reconciliation control
+        `accounts_mapped_to_cuif` reports as a break.
+      x-aluna-permission: accounting.gl.read
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema: {type: string, format: date}
+      responses:
+        "200":
+          description: The GL of the day
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DailyGL"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/reconciliation/statements:
     post:
       operationId: importStatement
@@ -1405,6 +1432,22 @@ components:
         account_id: {type: string, format: uuid}
         party_id: {type: string, format: uuid}
         marked_at: {type: string, format: date-time}
+    DailyGL:
+      type: object
+      required: [date, projected_at, lines]
+      properties:
+        date: {type: string, format: date}
+        projected_at: {type: string, format: date-time}
+        lines:
+          type: array
+          items: {$ref: "#/components/schemas/GLLine"}
+    GLLine:
+      type: object
+      required: [cuif_code, debits, credits]
+      properties:
+        cuif_code: {type: string}
+        debits: {$ref: "#/components/schemas/Money"}
+        credits: {$ref: "#/components/schemas/Money"}
     LoadCuifMappings:
       type: object
       required: [csv]

@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
+	"github.com/DrewGGM/aluna/internal/accounting"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/compliance"
@@ -71,6 +72,7 @@ func newDeps(t *testing.T) jobs.Deps {
 		Audit:      records,
 		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(testPool), Outbox: events,
 		Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
+		Accounting: accounting.New(),
 	}
 }
 
@@ -202,7 +204,7 @@ func TestTheWorkerRunsEveryJob(t *testing.T) {
 
 	waitFor(t, startWorker(t, deps),
 		"ledger.holds.expire", "ledger.balances.aggregate", "idempotency.purge", "outbox.purge", "outbox.publish", "audit.seal",
-		"deposits.interest.accrue", "deposits.accounts.mark_dormant", "reconciliation.controls.run", "payments.send")
+		"deposits.interest.accrue", "deposits.accounts.mark_dormant", "reconciliation.controls.run", "accounting.gl.project", "payments.send")
 
 	var block *int64
 	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil || block == nil {

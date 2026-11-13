@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/DrewGGM/aluna/internal/accounting"
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
@@ -110,6 +112,54 @@ func TestAFileIsCheckedWhenRequestedAndWhenApproved(t *testing.T) {
 		http.StatusUnprocessableEntity, "idempotency_key_reused")
 	expectProblem(t, "overlapping rows", postTo(t, w.a, "/v1/cuif-mappings", ids.New().String(),
 		cuifBody("A.,110000,2026-03-02,2027-01-01\nA.,110001,2026-06-01,2027-01-01\n")), http.StatusConflict, "mapping_overlap")
+}
+
+// TestTheGLOfADayOverHTTP (FR-36, US-13): a projected day answers its lines, with debits and credits apart, and one
+// without a projection is 404.
+func TestTheGLOfADayOverHTTP(t *testing.T) {
+	w := newCuifWorld(t)
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(t.Context(), `INSERT INTO accounting.gl_days (legal_entity_id, business_date, status, seen_below)
+			VALUES ($1, '2026-03-01', 'projected', '1'), ($1, '2026-02-28', 'unmapped', '1')`, w.entity); err != nil {
+			return err
+		}
+		_, err := tx.Exec(t.Context(), `INSERT INTO accounting.gl_lines (legal_entity_id, business_date, cuif_code, currency, debit_units, credit_units)
+			VALUES ($1, '2026-03-01', '110505', 'COP', 100, 0), ($1, '2026-03-01', '210505', 'COP', 0, 100)`, w.entity)
+		return err
+	})
+
+	var gl gen.DailyGL
+	if status := call(t, w.a, http.MethodGet, "/v1/general-ledger/daily?date=2026-03-01", "", &gl); status != http.StatusOK {
+		t.Fatalf("GL = %d", status)
+	}
+	want := []gen.GLLine{
+		{CuifCode: "110505", Debits: gen.Money{Amount: 100, Currency: "COP"}, Credits: gen.Money{Amount: 0, Currency: "COP"}},
+		{CuifCode: "210505", Debits: gen.Money{Amount: 0, Currency: "COP"}, Credits: gen.Money{Amount: 100, Currency: "COP"}},
+	}
+	if !slices.Equal(gl.Lines, want) || gl.Date.String() != "2026-03-01" || gl.ProjectedAt.IsZero() {
+		t.Fatalf("GL = %+v, want %+v", gl, want)
+	}
+	var p Problem
+	if status := call(t, w.a, http.MethodGet, "/v1/general-ledger/daily?date=2026-03-02", "", &p); status != http.StatusNotFound || p.Code != "gl_day_not_projected" {
+		t.Fatalf("a day without a projection = %d %+v", status, p)
+	}
+	if status := call(t, w.a, http.MethodGet, "/v1/general-ledger/daily?date=2026-02-28", "", &p); status != http.StatusConflict || p.Code != "gl_day_unmapped" {
+		t.Fatalf("an unmapped day = %d %+v", status, p)
+	}
+}
+
+// TestTheAuditorReadsTheGL: reading it is not loading mappings.
+func TestTheAuditorReadsTheGL(t *testing.T) {
+	w := newCuifWorld(t)
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditor := apiServerAsRole(t, w.entity, events, "auditor-a", "auditor")
+	var p Problem
+	if status := call(t, auditor, http.MethodGet, "/v1/general-ledger/daily?date=2026-03-01", "", &p); status != http.StatusNotFound || p.Code != "gl_day_not_projected" {
+		t.Fatalf("the auditor reads = %d %+v, want the 404 of a day without a projection", status, p)
+	}
 }
 
 // TestOnlyFinanceLoadsMappings: an operator does not.

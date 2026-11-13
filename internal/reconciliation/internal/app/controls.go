@@ -25,10 +25,13 @@ const (
 	// CustomersMatchControl checks, by entity and currency, the customers' balances against the journal's total
 	// of their accounts, the control figure.
 	CustomersMatchControl Control = "customers_match_control"
+	// AccountsMappedToCUIF checks that every account with transactions on a closed day had a CUIF mapping in force
+	// that day (FR-36), in the entities that map: without one, that day has no GL.
+	AccountsMappedToCUIF Control = "accounts_mapped_to_cuif"
 )
 
 // Controls are all the controls, in the order a run goes through them.
-var Controls = []Control{TrialBalance, BalancesMatchEntries, RailAccountsAtZero, CustomersMatchControl}
+var Controls = []Control{TrialBalance, BalancesMatchEntries, RailAccountsAtZero, CustomersMatchControl, AccountsMappedToCUIF}
 
 // Finding is a difference a control or a statement found: what does not square (a currency, a ledger account, or a
 // direction and an end-to-end id), by how much and, in a statement, why.

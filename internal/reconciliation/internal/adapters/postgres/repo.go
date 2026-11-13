@@ -1,5 +1,5 @@
 // Package postgres runs the controls of reconciliation and keeps their results and the rail's statements in recon.
-// The controls read ledger and calendar tables, read-only, in one query each: a query sees one snapshot, so a
+// The controls read ledger, calendar and accounting tables, read-only, in one query each: a query sees one snapshot, so a
 // transaction in the middle of committing is never half seen. An import reads payments.orders, read-only too.
 package postgres
 
@@ -68,6 +68,22 @@ var controlQueries = map[app.Control]string{
 		WHERE a.code LIKE 'deposits/%'
 		GROUP BY a.legal_entity_id, a.currency
 		HAVING coalesce(sum(b.posted), 0) <> coalesce(sum(s.total), 0)`,
+
+	// Only the closed days from the entity's first mapping, the ones the GL projects: a mapping cannot start before
+	// the business date, so nothing could ever map the days before it, and an entity that does not map has none. The
+	// difference is what the account moved on those days, both ways, since its net can be zero.
+	app.AccountsMappedToCUIF: `SELECT a.legal_entity_id, a.id::text, a.currency::text, sum(abs(e.amount))::bigint
+		FROM ledger.accounts a
+		JOIN calendar.legal_entities l ON l.id = a.legal_entity_id
+		JOIN (SELECT legal_entity_id, min(valid_from) AS adopted FROM accounting.cuif_mappings GROUP BY legal_entity_id) f
+			ON f.legal_entity_id = a.legal_entity_id
+		JOIN ledger.entries e ON e.account_id = a.id
+		JOIN ledger.transactions t ON t.id = e.transaction_id
+		WHERE t.business_date >= f.adopted AND t.business_date < l.business_date
+			AND NOT EXISTS (SELECT 1 FROM accounting.cuif_mappings m
+				WHERE m.legal_entity_id = a.legal_entity_id AND starts_with(a.code, m.pattern)
+					AND m.valid_from <= t.business_date AND t.business_date < m.valid_to)
+		GROUP BY a.legal_entity_id, a.id, a.currency`,
 }
 
 // Store is what the controls and the statements read and keep, without what they publish.

@@ -612,6 +612,13 @@ type CreateTransfer struct {
 	ToAccountId openapi_types.UUID `json:"to_account_id"`
 }
 
+// DailyGL defines model for DailyGL.
+type DailyGL struct {
+	Date        openapi_types.Date `json:"date"`
+	Lines       []GLLine           `json:"lines"`
+	ProjectedAt time.Time          `json:"projected_at"`
+}
+
 // DepositAccount defines model for DepositAccount.
 type DepositAccount struct {
 	Currency string             `json:"currency"`
@@ -639,6 +646,13 @@ type Entry struct {
 
 	// Amount Signed, debit positive and credit negative.
 	Amount Money `json:"amount"`
+}
+
+// GLLine defines model for GLLine.
+type GLLine struct {
+	Credits  Money  `json:"credits"`
+	CuifCode string `json:"cuif_code"`
+	Debits   Money  `json:"debits"`
 }
 
 // GMFExemption defines model for GMFExemption.
@@ -1027,6 +1041,11 @@ type CreateWithdrawalParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// GetDailyGLParams defines parameters for GetDailyGL.
+type GetDailyGLParams struct {
+	Date openapi_types.Date `form:"date" json:"date"`
+}
+
 // PlaceHoldParams defines parameters for PlaceHold.
 type PlaceHoldParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -1220,6 +1239,9 @@ type ServerInterface interface {
 	// CreateWithdrawal Withdraw cash from an account
 	// (POST /v1/deposit-accounts/{id}/withdrawals)
 	CreateWithdrawal(w http.ResponseWriter, r *http.Request, id ID, params CreateWithdrawalParams)
+	// GetDailyGL Read the GL of a day
+	// (GET /v1/general-ledger/daily)
+	GetDailyGL(w http.ResponseWriter, r *http.Request, params GetDailyGLParams)
 	// PlaceHold Hold funds of an account
 	// (POST /v1/holds)
 	PlaceHold(w http.ResponseWriter, r *http.Request, params PlaceHoldParams)
@@ -1715,6 +1737,39 @@ func (siw *ServerInterfaceWrapper) CreateWithdrawal(w http.ResponseWriter, r *ht
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateWithdrawal(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDailyGL operation middleware
+func (siw *ServerInterfaceWrapper) GetDailyGL(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetDailyGLParams
+
+	// ------------- Required query parameter "date" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "date", r.URL.Query(), &params.Date, runtime.BindQueryParameterOptions{Type: "string", Format: "date"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "date"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "date", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDailyGL(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2909,6 +2964,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/payment-orders", wrapper.CreatePaymentOrder)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/cuif-mappings", wrapper.RequestCuifMappingsLoad)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/general-ledger/daily", wrapper.GetDailyGL)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/statements", wrapper.ImportStatement)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/reconciliation/breaks", wrapper.ListBreaks)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/breaks/{id}/resolution", wrapper.ResolveBreak)
@@ -3832,6 +3888,89 @@ type CreateWithdrawaldefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response CreateWithdrawaldefaultApplicationProblemPlusJSONResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDailyGLRequestObject struct {
+	Params GetDailyGLParams
+}
+
+type GetDailyGLResponseObject interface {
+	VisitGetDailyGLResponse(w http.ResponseWriter) error
+}
+
+type GetDailyGL200JSONResponse DailyGL
+
+func (response GetDailyGL200JSONResponse) VisitGetDailyGLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDailyGL400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetDailyGL400ApplicationProblemPlusJSONResponse) VisitGetDailyGLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDailyGL404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDailyGL404ApplicationProblemPlusJSONResponse) VisitGetDailyGLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDailyGL409ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDailyGL409ApplicationProblemPlusJSONResponse) VisitGetDailyGLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDailyGLdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetDailyGLdefaultApplicationProblemPlusJSONResponse) VisitGetDailyGLResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -6097,6 +6236,9 @@ type StrictServerInterface interface {
 	// CreateWithdrawal Withdraw cash from an account
 	// (POST /v1/deposit-accounts/{id}/withdrawals)
 	CreateWithdrawal(ctx context.Context, request CreateWithdrawalRequestObject) (CreateWithdrawalResponseObject, error)
+	// GetDailyGL Read the GL of a day
+	// (GET /v1/general-ledger/daily)
+	GetDailyGL(ctx context.Context, request GetDailyGLRequestObject) (GetDailyGLResponseObject, error)
 	// PlaceHold Hold funds of an account
 	// (POST /v1/holds)
 	PlaceHold(ctx context.Context, request PlaceHoldRequestObject) (PlaceHoldResponseObject, error)
@@ -6505,6 +6647,32 @@ func (sh *strictHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Request
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateWithdrawalResponseObject); ok {
 		if err := validResponse.VisitCreateWithdrawalResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDailyGL operation middleware
+func (sh *strictHandler) GetDailyGL(w http.ResponseWriter, r *http.Request, params GetDailyGLParams) {
+	var request GetDailyGLRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDailyGL(ctx, request.(GetDailyGLRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDailyGL")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDailyGLResponseObject); ok {
+		if err := validResponse.VisitGetDailyGLResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

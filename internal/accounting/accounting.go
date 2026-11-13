@@ -23,6 +23,8 @@ var (
 	ErrInvalidMapping = domain.ErrInvalidMapping
 	ErrMappingOverlap = domain.ErrMappingOverlap
 	ErrNoMapping      = domain.ErrNoMapping
+	ErrNotProjected   = domain.ErrNotProjected
+	ErrDayUnmapped    = domain.ErrDayUnmapped
 )
 
 // ParseMappings reads a CSV file of mappings, with the header pattern,cuif_code,valid_from,valid_to:

@@ -28,13 +28,32 @@ type AccountingHandlers struct {
 	accounting *accounting.Service
 	approvals  *approvals.Service
 	commands   commands
+	reader     postgres.Querier
 }
 
 // NewAccountingHandlers creates the accounting handlers and registers in a the load of CUIF mappings, which goes
-// through maker-checker. keys stores the responses of the commands with Idempotency-Key.
-func NewAccountingHandlers(s *accounting.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store) *AccountingHandlers {
+// through maker-checker. keys stores the responses of the commands with Idempotency-Key, and reader is what the GL
+// is read from.
+func NewAccountingHandlers(s *accounting.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *AccountingHandlers {
 	a.RegisterKind(cuifLoadKind, cuifLoadPermission, loadCuifMappingsOnApproval(s))
-	return &AccountingHandlers{accounting: s, approvals: a, commands: commands{uow: uow, keys: keys}}
+	return &AccountingHandlers{accounting: s, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
+}
+
+// GetDailyGL reads the GL of a day of the token's entity.
+func (h *AccountingHandlers) GetDailyGL(ctx context.Context, req gen.GetDailyGLRequestObject) (gen.GetDailyGLResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	gl, err := h.accounting.GL(ctx, h.reader, p.LegalEntityID, calendarDate(req.Params.Date.Time))
+	if err != nil {
+		return nil, err
+	}
+	out := gen.DailyGL{Date: req.Params.Date, ProjectedAt: gl.ProjectedAt, Lines: make([]gen.GLLine, len(gl.Lines))}
+	for i, l := range gl.Lines {
+		out.Lines[i] = gen.GLLine{CuifCode: l.CUIFCode, Debits: moneyJSON(l.Debits), Credits: moneyJSON(l.Credits)}
+	}
+	return gen.GetDailyGL200JSONResponse(out), nil
 }
 
 // cuifLoadRequest is the payload of a load request: the file the checker approves.

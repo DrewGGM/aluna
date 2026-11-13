@@ -11,6 +11,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"github.com/DrewGGM/aluna/internal/accounting"
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
@@ -27,13 +28,14 @@ import (
 // which runs one at a time: a catch-up can outlast its interval, and the runs it enqueues meanwhile wait and
 // then find nothing to do, instead of sharing the work, colliding on its rows and taking the default queue's
 // workers from the other jobs. QueueControls is for the same reason the controls', although a run that waits
-// would repeat the whole read, so at most one is ever queued or running (runControls). Payments are sent from
+// would repeat the whole read, so at most one is ever queued or running (runControls); QueueGL, the GL's, likewise. Payments are sent from
 // their own queue (payments.Queue), whose jobs wait up to 15 seconds for the rail and would otherwise hold the
 // default queue's workers. The rest go to river.QueueDefault.
 const (
 	QueueLedger   = "ledger"
 	QueueInterest = "interest"
 	QueueControls = "controls"
+	QueueGL       = "gl"
 )
 
 // The two ledger jobs keep taking batches until they catch up; the size bounds each transaction.
@@ -69,6 +71,15 @@ const (
 	controlsTimeout  = 25 * time.Minute
 )
 
+// The GL (FR-36) projects each closed day once, and again if a transaction reached it after its projection: after
+// a rollover the previous day is projected within glInterval. A catch-up after a long stop projects many days, the
+// newest first, so it has its own queue and the controls' limit, and like them a run is not inserted while another
+// waits or runs.
+const (
+	glInterval = 15 * time.Minute
+	glTimeout  = 25 * time.Minute
+)
+
 // Sealing (ADR-0012) closes blocks of at most auditBlockSize records, sealRounds per run so it finishes
 // before the job's time limit; whatever is left goes to the next run.
 const (
@@ -91,6 +102,7 @@ type Deps struct {
 	Deposits       *deposits.Service
 	Payments       *payments.Service
 	Reconciliation *reconciliation.Service
+	Accounting     *accounting.Service
 }
 
 // Config is the worker's River configuration: the queues, the workers from Register, the periodic jobs
@@ -102,7 +114,7 @@ func Config(deps Deps) *river.Config {
 		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: Periodic(),
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1}, QueueControls: {MaxWorkers: 1},
-			payments.Queue: {MaxWorkers: 4},
+			QueueGL: {MaxWorkers: 1}, payments.Queue: {MaxWorkers: 4},
 		},
 		// REINDEX requires owning the index and the worker runs as aluna_app (migration 0009).
 		ReindexerIndexNames: []string{},
@@ -148,6 +160,9 @@ func Register(w *river.Workers, deps Deps) {
 	river.AddWorker(w, &task[runControls]{timeout: controlsTimeout, run: func(ctx context.Context) error {
 		return deps.Reconciliation.RunControls(ctx, deps.UnitOfWork)
 	}})
+	river.AddWorker(w, &task[projectGL]{timeout: glTimeout, run: func(ctx context.Context) error {
+		return deps.Accounting.ProjectGL(ctx, deps.UnitOfWork)
+	}})
 	compliance.FollowCash(deps.Outbox, holderOf(deps.Deposits))
 	deps.Outbox.AddWorkers(w)
 	deps.Payments.AddWorkers(w, deps.UnitOfWork)
@@ -180,6 +195,7 @@ func Periodic() []*river.PeriodicJob {
 		every(5*time.Minute, accrueInterest{}),
 		every(time.Hour, markDormant{}),
 		every(controlsInterval, runControls{}),
+		every(glInterval, projectGL{}),
 	}
 }
 
@@ -248,8 +264,19 @@ type runControls struct{}
 
 func (runControls) Kind() string { return "reconciliation.controls.run" }
 
-func (runControls) InsertOpts() river.InsertOpts {
-	opts := insertOpts(QueueControls)
+func (runControls) InsertOpts() river.InsertOpts { return oneAtATime(QueueControls) }
+
+// projectGL projects the daily GL of the closed days (FR-36). A run is not inserted while another is waiting or
+// running.
+type projectGL struct{}
+
+func (projectGL) Kind() string { return "accounting.gl.project" }
+
+func (projectGL) InsertOpts() river.InsertOpts { return oneAtATime(QueueGL) }
+
+// oneAtATime puts a job in queue, like insertOpts, and inserts it only if no other of its kind waits or runs.
+func oneAtATime(queue string) river.InsertOpts {
+	opts := insertOpts(queue)
 	opts.UniqueOpts = river.UniqueOpts{ByState: []rivertype.JobState{
 		rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateScheduled,
 	}}

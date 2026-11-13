@@ -62,7 +62,7 @@ commands:
                              notifications with it); with OTEL_EXPORTER_OTLP_ENDPOINT it exports
                              traces and metrics over OTLP; ALUNA_GMF_MODALITY is the GMF
                              exemption's modality, single_account (the default) or split_accounts
-  worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls,
+  worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls, GL,
                              payments) on ALUNA_DATABASE_URL, anchoring blocks in
                              ALUNA_AUDIT_ANCHOR_DIR; multiple workers elect a leader for the
                              periodic jobs; it reads ALUNA_GMF_MODALITY and ALUNA_SIMBREB_SECRET as
@@ -369,7 +369,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 		ComplianceHandlers:     httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
 		PaymentHandlers:        httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: httpapi.NewReconciliationHandlers(reconciliation.New(events), uow, keys, pool),
-		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(), requests, uow, keys),
+		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(), requests, uow, keys, pool),
 	}, nil
 }
 
@@ -511,6 +511,7 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality,
 	cfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
 		Audit: records, Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
+		Accounting: accounting.New(),
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)

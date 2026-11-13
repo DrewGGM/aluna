@@ -34,6 +34,7 @@ const (
 	balances        = "balances_match_entries"
 	railAccounts    = "rail_accounts_at_zero"
 	customers       = "customers_match_control"
+	mapped          = "accounts_mapped_to_cuif"
 	typeBreakOpened = "aluna.reconciliation.break.opened.v1"
 )
 
@@ -207,7 +208,7 @@ func TestASquareLedgerPasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{balances, customers, railAccounts, trialBalance}; !slices.Equal(got, want) {
+	if want := []string{mapped, balances, customers, railAccounts, trialBalance}; !slices.Equal(got, want) {
 		t.Fatalf("clean runs = %v, want %v", got, want)
 	}
 }
@@ -418,6 +419,91 @@ func TestABreakGoesOutThroughTheOutbox(t *testing.T) {
 	}
 }
 
+// mapsFromToday gives the world's entity a CUIF mapping for the pattern, as the owner: that it maps at all is what
+// the control looks at.
+func (w world) mapsFromToday(t *testing.T, pattern string) { w.mapsFrom(t, pattern, "2026-03-02") }
+
+// mapsFrom is mapsFromToday from day.
+func (w world) mapsFrom(t *testing.T, pattern, day string) {
+	w.mapsBetween(t, pattern, day, "2030-01-01")
+}
+
+// mapsBetween is mapsFromToday from from to to, which is excluded.
+func (w world) mapsBetween(t *testing.T, pattern, from, to string) {
+	t.Helper()
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO accounting.cuif_mappings (legal_entity_id, pattern, cuif_code, valid_from, valid_to)
+			VALUES ($1, $2, '110505', $3, $4)`, w.entity, pattern, from, to)
+		return err
+	})
+}
+
+// TestAMappingThatEndedDoesNotCount: one that ended before the day the account moved leaves that day unmapped, and
+// one that ends right after it covers it.
+func TestAMappingThatEndedDoesNotCount(t *testing.T) {
+	w := newWorld(t)
+	w.mapsFromToday(t, "A.")
+	w.mapsBetween(t, "L.O", "2026-03-01", "2026-03-02")
+	w.mapsBetween(t, "L.P", "2026-03-02", "2026-03-03")
+	w.mapsFrom(t, "L.Q", "2026-03-03")
+	vault := w.account(t, "A.CASH.VAULT", ledger.KindAsset, ledger.BalanceModeSync)
+	ended, covered := w.account(t, "L.OTHER", ledger.KindLiability, ledger.BalanceModeSync), w.account(t, "L.PAID", ledger.KindLiability, ledger.BalanceModeSync)
+	later := w.account(t, "L.QUOTA", ledger.KindLiability, ledger.BalanceModeSync)
+	w.post(t, vault, ended, 10_00)
+	w.post(t, vault, covered, 20_00)
+	w.post(t, vault, later, 30_00)
+	w.rollover(t)
+
+	w.run(t)
+
+	w.expectBreaks(t, openBreak{mapped, ended.String(), "COP", 10_00}, openBreak{mapped, later.String(), "COP", 30_00})
+}
+
+// TestTheDaysBeforeTheFirstMappingAreNotChecked: an entity that starts mapping with history cannot map those days,
+// so they are no break.
+func TestTheDaysBeforeTheFirstMappingAreNotChecked(t *testing.T) {
+	w := newWorld(t)
+	vault, other := w.account(t, "A.CASH.VAULT", ledger.KindAsset, ledger.BalanceModeSync), w.account(t, "L.OTHER", ledger.KindLiability, ledger.BalanceModeSync)
+	w.post(t, vault, other, 10_00)
+	w.rollover(t)
+	w.mapsFrom(t, "A.", "2026-03-03")
+
+	w.run(t)
+
+	w.expectBreaks(t)
+}
+
+// TestAnAccountWithoutAMappingOpensABreak (FR-36): in an entity that maps, an account that moved on a closed day
+// without a mapping in force that day is a break, by what it moved both ways; one with its mapping, or one that moved
+// only on the open day, is not.
+func TestAnAccountWithoutAMappingOpensABreak(t *testing.T) {
+	w := newWorld(t)
+	w.mapsFromToday(t, "A.")
+	vault, other := w.account(t, "A.CASH.VAULT", ledger.KindAsset, ledger.BalanceModeSync), w.account(t, "L.OTHER", ledger.KindLiability, ledger.BalanceModeSync)
+	w.post(t, vault, other, 10_00)
+	w.post(t, other, vault, 4_00)
+
+	w.run(t)
+	w.expectBreaks(t)
+
+	w.rollover(t)
+	w.run(t)
+
+	w.expectBreaks(t, openBreak{mapped, other.String(), "COP", 14_00})
+}
+
+// TestAnEntityThatDoesNotMapHasNoBreakOfIt: it has not started on the GL.
+func TestAnEntityThatDoesNotMapHasNoBreakOfIt(t *testing.T) {
+	w := newWorld(t)
+	vault, other := w.account(t, "A.CASH.VAULT", ledger.KindAsset, ledger.BalanceModeSync), w.account(t, "L.OTHER", ledger.KindLiability, ledger.BalanceModeSync)
+	w.post(t, vault, other, 10_00)
+	w.rollover(t)
+
+	w.run(t)
+
+	w.expectBreaks(t)
+}
+
 // TestOnlyOwnAccountsCount: another entity's difference opens a break of that entity.
 func TestOnlyOwnAccountsCount(t *testing.T) {
 	w, other := newWorld(t), newWorld(t)
@@ -492,7 +578,7 @@ func TestAControlThatFailsStopsNoOther(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{customers, railAccounts, trialBalance}; !slices.Equal(got, want) {
+	if want := []string{mapped, customers, railAccounts, trialBalance}; !slices.Equal(got, want) {
 		t.Fatalf("runs = %v, want %v", got, want)
 	}
 }

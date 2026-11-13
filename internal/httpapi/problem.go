@@ -202,6 +202,8 @@ var problems = []struct {
 	// accounting
 	{accounting.ErrInvalidMapping, unprocessable("invalid_mapping", "A file of CUIF mappings has the header pattern,cuif_code,valid_from,valid_to and rows with the start of an internal code, a code of 6 to 10 digits and a period")},
 	{accounting.ErrMappingOverlap, conflict("mapping_overlap", "Another mapping of the pattern holds in that period")},
+	{accounting.ErrNotProjected, Problem{Status: http.StatusNotFound, Code: "gl_day_not_projected", Title: "The day has no projection of the GL: it is open, it had no transactions, or it is before the entity's first CUIF mapping"}},
+	{accounting.ErrDayUnmapped, conflict("gl_day_unmapped", "An account of the day has no CUIF mapping in force, so the day has no GL")},
 	// reconciliation
 	{reconciliation.ErrInvalidStatement, unprocessable("invalid_statement", "A statement is of a known rail, with a reference of up to 35 characters, a date and up to 5000 lines, each with an end-to-end id of up to 35, a positive amount, a direction and that date")},
 	{reconciliation.ErrDuplicateStatement, conflict("duplicate_statement", "That statement of the rail was already imported")},

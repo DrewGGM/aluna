@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/DrewGGM/aluna/internal/accounting"
 	"github.com/DrewGGM/aluna/internal/calendar"
@@ -176,8 +175,8 @@ func (w closeWorld) oneLeg(t *testing.T, tx postgres.Tx, on string) {
 		VALUES ($1, $2, 'test', $3, $3, 'test', $4, 'tester', 'test', 'v1')`, id, w.entity, on, id.String()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(t.Context(), `INSERT INTO ledger.entries (transaction_id, legal_entity_id, account_id, currency, amount, value_date, posted_at)
-		VALUES ($1, $2, $3, 'COP', 7, $4, clock_timestamp())`, id, w.entity, w.cash, on); err != nil {
+	if _, err := tx.Exec(t.Context(), `INSERT INTO ledger.entries (transaction_id, account_id, currency, amount)
+		VALUES ($1, $2, 'COP', 7)`, id, w.cash); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -213,8 +212,7 @@ func TestTheCloseWaitsForAPostingInFlight(t *testing.T) {
 }
 
 // TestAPostingThatCheckedBeforeTheCloseIsRefusedAfterIt: one that saw the period open and writes after the close
-// committed is refused by the database. The ledger still hands over its error as it is, not as ErrPeriodClosed
-// (open question Q-131).
+// committed is refused by the database, and the ledger reports it as the closed period it is.
 func TestAPostingThatCheckedBeforeTheCloseIsRefusedAfterIt(t *testing.T) {
 	w := newCloseWorld(t)
 	posting := make(chan error, 1)
@@ -231,9 +229,8 @@ func TestAPostingThatCheckedBeforeTheCloseIsRefusedAfterIt(t *testing.T) {
 		return err
 	})
 
-	var pgErr *pgconn.PgError
-	if err := <-posting; !errors.As(err, &pgErr) || pgErr.ConstraintName != "transactions_in_open_period" {
-		t.Fatalf("posting = %v, want refused by transactions_in_open_period", err)
+	if err := <-posting; !errors.Is(err, ledger.ErrPeriodClosed) {
+		t.Fatalf("posting = %v, want %v", err, ledger.ErrPeriodClosed)
 	}
 }
 

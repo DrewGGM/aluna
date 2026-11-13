@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger/internal/adapters/postgres/sqlcgen"
 	"github.com/DrewGGM/aluna/internal/ledger/internal/app"
@@ -40,7 +41,7 @@ func (s *Store) InsertAccount(ctx context.Context, a domain.Account) error {
 		ID: a.ID, LegalEntityID: a.LegalEntityID, Code: a.Code, Kind: string(a.Kind),
 		Currency: a.Currency.Code(), BalanceMode: string(a.Mode), LowerLimit: a.LowerLimit,
 	})
-	if isUniqueViolation(err, "accounts_legal_entity_id_code_key") {
+	if isViolation(err, uniqueViolation, "accounts_legal_entity_id_code_key") {
 		return fmt.Errorf("%w: code %q already exists in the entity", app.ErrInvalidAccount, a.Code)
 	}
 	if err != nil {
@@ -205,6 +206,10 @@ func (s *Store) InsertTransaction(ctx context.Context, rec app.TransactionRecord
 	if errors.Is(err, pgx.ErrNoRows) {
 		return time.Time{}, fmt.Errorf("%w: %s/%s", app.ErrDuplicateExternalRef, rec.Source, rec.ExternalRef)
 	}
+	if isViolation(err, checkViolation, "transactions_in_open_period") {
+		// the period was open when the posting checked it and closed before the insert (migration 0029)
+		return time.Time{}, fmt.Errorf("%w: %s", calendar.ErrPeriodClosed, rec.BusinessDate.Format("2006-01"))
+	}
 	if err != nil {
 		return time.Time{}, fmt.Errorf("insert transaction: %w", err)
 	}
@@ -294,9 +299,14 @@ func (s *Store) EntriesBefore(ctx context.Context, entity, accountID ids.ID, p a
 	return entries, nil
 }
 
-func isUniqueViolation(err error, constraint string) bool {
+const (
+	uniqueViolation = "23505"
+	checkViolation  = "23514" // an accounting invariant or a CHECK
+)
+
+func isViolation(err error, code, constraint string) bool {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
+	return errors.As(err, &pgErr) && pgErr.Code == code && pgErr.ConstraintName == constraint
 }
 
 // DatabaseNow is the database time (clock_timestamp), the same one that sets posted_at.

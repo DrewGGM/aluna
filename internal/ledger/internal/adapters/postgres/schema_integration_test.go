@@ -13,13 +13,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/ledger/internal/app"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
 
 // SQLSTATEs set by migration 0002 (and the PostgreSQL ones that go with them).
 const (
-	checkViolation        = "23514" // accounting invariant or CHECK
 	foreignKeyViolation   = "23503"
 	insufficientPrivilege = "42501"
 	prohibitedStatement   = "2F003" // change to something already posted
@@ -168,9 +169,10 @@ func TestEntriesInsideASavepointArePosted(t *testing.T) {
 	}
 }
 
-// TestWritersCannotChooseTimeOrEntity sends forged posted_at, posted_xact, value date and entity; the
-// database replaces them with its own (transactions_stamp, entries_stamp).
-func TestWritersCannotChooseTimeOrEntity(t *testing.T) {
+// TestWritersCannotChooseTime sends a forged posted_at and posted_xact with the transaction, which
+// transactions_stamp replaces; its entries inherit the entity and the dates through entries_stamp (forging them on an
+// entry is refused: TestEntriesTakeOnlyTheirOwnColumns).
+func TestWritersCannotChooseTime(t *testing.T) {
 	cash, deposit := newAccount(t, legalEntityA, "asset", "COP"), newAccount(t, legalEntityA, "liability", "COP")
 	forged := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
 	txID := ids.New()
@@ -182,11 +184,7 @@ func TestWritersCannotChooseTimeOrEntity(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(t.Context(), `INSERT INTO ledger.entries
-			(transaction_id, account_id, currency, amount, legal_entity_id, value_date, posted_at)
-			VALUES ($1, $2, 'COP', 100, $3, $4, $5), ($1, $6, 'COP', -100, $3, $4, $5)`,
-			txID, cash, legalEntityB, forged.Format(time.DateOnly), forged, deposit)
-		return err
+		return insertEntries(t.Context(), tx, txID, []entry{{cash, "COP", 100}, {deposit, "COP", -100}})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +199,34 @@ func TestWritersCannotChooseTimeOrEntity(t *testing.T) {
 		txID).Scan(&forgedTx, &mismatched)
 	if err != nil || forgedTx != 0 || mismatched != 0 {
 		t.Fatalf("forged values remained: transaction %d, entries %d (err = %v)", forgedTx, mismatched, err)
+	}
+}
+
+// TestEntriesTakeOnlyTheirOwnColumns (Q-25): the application writes an entry's transaction, account, currency and
+// amount; the id comes from its identity and the rest from the transaction, so a writer that names any other column,
+// or overrides the identity to take future ids, is refused.
+func TestEntriesTakeOnlyTheirOwnColumns(t *testing.T) {
+	cash, deposit := newAccount(t, legalEntityA, "asset", "COP"), newAccount(t, legalEntityA, "liability", "COP")
+	for name, sql := range map[string]string{
+		"its own id": `INSERT INTO ledger.entries (id, transaction_id, account_id, currency, amount) OVERRIDING SYSTEM VALUE
+			VALUES (9000000000000000000, $1, $2, 'COP', 100), (9000000000000000001, $1, $3, 'COP', -100)`,
+		"the entity and the dates": `INSERT INTO ledger.entries (transaction_id, account_id, currency, amount, legal_entity_id, value_date, posted_at)
+			VALUES ($1, $2, 'COP', 100, gen_random_uuid(), '2001-01-01', '2001-01-01Z'),
+			       ($1, $3, 'COP', -100, gen_random_uuid(), '2001-01-01', '2001-01-01Z')`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
+				txID, err := insertTransaction(t.Context(), tx, legalEntityA)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(t.Context(), sql, txID, cash, deposit)
+				return err
+			})
+			if got := sqlState(err); got != insufficientPrivilege {
+				t.Fatalf("SQLSTATE = %q, want %q (error: %v)", got, insufficientPrivilege, err)
+			}
+		})
 	}
 }
 
@@ -404,6 +430,39 @@ func TestPostedRowsAreImmutable(t *testing.T) {
 	var n int
 	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM ledger.entries WHERE transaction_id = $1`, txID).Scan(&n); err != nil || n != 2 {
 		t.Fatalf("the original transaction must stay intact: %d entries, err = %v", n, err)
+	}
+}
+
+// TestATransactionInAClosedPeriodIsPeriodClosed (Q-131 a): an insert into a closed period, which is what a posting
+// that checked its period before a close meets after it, is refused by transactions_in_open_period and reported as
+// the calendar's closed period, so the client gets period_closed and not a 500.
+func TestATransactionInAClosedPeriodIsPeriodClosed(t *testing.T) {
+	entity := ids.New()
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
+			VALUES ($1, 'Entity', '2026-02-02', 'COP')`, entity)
+		return err
+	})
+	// a period closes one step at a time (calendar.guard_period, migration 0029)
+	for _, sql := range []string{
+		`INSERT INTO calendar.periods (legal_entity_id, period, status) VALUES ($1, '2026-01', 'open')`,
+		`UPDATE calendar.periods SET status = 'closing' WHERE legal_entity_id = $1`,
+		`UPDATE calendar.periods SET status = 'closed', closed_by = 'finance' WHERE legal_entity_id = $1`,
+	} {
+		if _, err := testPool.Exec(t.Context(), sql, entity); err != nil {
+			t.Fatal(err)
+		}
+	}
+	day := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
+		_, err := NewStore(tx).InsertTransaction(t.Context(), app.TransactionRecord{
+			ID: ids.New(), LegalEntityID: entity, Code: "test", ValueDate: day, BusinessDate: day, Source: "test",
+			ExternalRef: ids.New().String(), Actor: "tester", Channel: "test", RuleVersion: "v1",
+		}, nil)
+		return err
+	})
+	if !errors.Is(err, calendar.ErrPeriodClosed) {
+		t.Fatalf("insert in a closed period = %v, want %v", err, calendar.ErrPeriodClosed)
 	}
 }
 

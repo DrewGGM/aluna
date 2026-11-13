@@ -41,6 +41,7 @@ operator:
     - ledger.holds.place
     - ledger.holds.capture
     - ledger.holds.release
+    - calendar.business_date.read
 
 # Finance: queries, accounting adjustments, reversals, product publications (rates and fees), market
 # parameters and deciding requests.
@@ -64,6 +65,7 @@ finance:
     - reconciliation.statements.import
     - reconciliation.breaks.read
     - reconciliation.breaks.resolve
+    - calendar.business_date.read
 
 # Compliance: queries, KYC changes, screening resolutions and deciding requests.
 compliance:
@@ -80,6 +82,7 @@ compliance:
     - ledger.balances.read
     - ledger.transactions.read
     - webhooks.events.read
+    - calendar.business_date.read
 
 # Internal audit or statutory auditor: read only.
 auditor:
@@ -95,8 +98,10 @@ auditor:
     - reconciliation.breaks.read
     - accounting.gl.read
     - webhooks.events.read
+    - calendar.business_date.read
 
-# Internal services (rails, jobs): move money with holds and entries.
+# Internal services (rails, jobs, the operator's scheduler): move money with holds and entries, and roll the business
+# date over at the end of each business day.
 system:
   all:
     - ledger.accounts.read
@@ -106,6 +111,8 @@ system:
     - ledger.holds.place
     - ledger.holds.capture
     - ledger.holds.release
+    - calendar.business_date.read
+    - calendar.business_date.rollover
 
 # Integrators: follow the entity's events (FR-46), by reading them or registering webhooks, and nothing else, so a
 # token to follow them cannot move money.

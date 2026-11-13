@@ -1100,6 +1100,56 @@ paths:
         "409": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/business-date:
+    get:
+      operationId: getBusinessDate
+      summary: Read the business date
+      description: >-
+        The entity's current business date (FR-13, ADR-0006): the day its postings are booked on until the next
+        rollover. An entity of the token that is not registered is 404 `legal_entity_not_found`.
+      x-aluna-permission: calendar.business_date.read
+      responses:
+        "200":
+          description: The business date
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BusinessDate"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/business-date/rollover:
+    post:
+      operationId: rolloverBusinessDate
+      summary: Roll the business date over
+      description: >-
+        Closes the entity's business date `business_date`, advances it to the next business day (FR-13, ADR-0006)
+        and emits `aluna.calendar.business-date.rolled.v1`. The operator's scheduler calls it at the end of each
+        business day with a `system` client. It does not wait for the postings in flight: those that already read the
+        closed date keep it. A day closes once it has started in America/Bogota: a `business_date` after today there is
+        422 `business_date_ahead`, so the business date never runs ahead of the calendar. If the business date is not
+        `business_date` (another rollover advanced it, or the caller is behind), it is 409 `business_date_stale`;
+        `GET /v1/business-date` says which one it is. Either way nothing changes. A body without `business_date` is 400,
+        and an entity of the token that is not registered is 404 `legal_entity_not_found`. Idempotent by
+        `Idempotency-Key`: a retry with the same key gets the same response without advancing again.
+      x-aluna-permission: calendar.business_date.rollover
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RolloverBusinessDate"}
+      responses:
+        "200":
+          description: Business date rolled over
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BusinessDateRollover"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
 components:
   parameters:
     ID:
@@ -1725,3 +1775,28 @@ components:
       required: [kyc_status]
       properties:
         kyc_status: {$ref: "#/components/schemas/KYCStatus", example: approved}
+    BusinessDate:
+      type: object
+      required: [legal_entity_id, business_date]
+      properties:
+        legal_entity_id: {type: string, format: uuid}
+        business_date: {type: string, format: date, example: "2026-10-30"}
+    RolloverBusinessDate:
+      type: object
+      required: [business_date]
+      properties:
+        business_date:
+          type: string
+          format: date
+          example: "2026-10-30"
+          description: The business date the caller expects to close, the one `GET /v1/business-date` gives
+    BusinessDateRollover:
+      type: object
+      required: [closed_business_date, business_date]
+      properties:
+        closed_business_date: {type: string, format: date, example: "2026-10-30"}
+        business_date:
+          type: string
+          format: date
+          example: "2026-11-03"
+          description: The new business date, the next business day

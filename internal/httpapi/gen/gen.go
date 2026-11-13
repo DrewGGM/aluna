@@ -521,6 +521,19 @@ type BreakList struct {
 	NextCursor *string `json:"next_cursor,omitempty"`
 }
 
+// BusinessDate defines model for BusinessDate.
+type BusinessDate struct {
+	BusinessDate  openapi_types.Date `json:"business_date"`
+	LegalEntityId openapi_types.UUID `json:"legal_entity_id"`
+}
+
+// BusinessDateRollover defines model for BusinessDateRollover.
+type BusinessDateRollover struct {
+	// BusinessDate The new business date, the next business day
+	BusinessDate       openapi_types.Date `json:"business_date"`
+	ClosedBusinessDate openapi_types.Date `json:"closed_business_date"`
+}
+
 // CaptureHold defines model for CaptureHold.
 type CaptureHold struct {
 	Amount       Money              `json:"amount"`
@@ -983,6 +996,12 @@ type ResolveScreeningCaseResolution string
 // RiskLevel defines model for RiskLevel.
 type RiskLevel string
 
+// RolloverBusinessDate defines model for RolloverBusinessDate.
+type RolloverBusinessDate struct {
+	// BusinessDate The business date the caller expects to close, the one `GET /v1/business-date` gives
+	BusinessDate openapi_types.Date `json:"business_date"`
+}
+
 // Statement defines model for Statement.
 type Statement struct {
 	// ContentHash SHA-256 of the document's bytes
@@ -1057,6 +1076,11 @@ type ListApprovalsParams struct {
 
 // ApproveRequestParams defines parameters for ApproveRequest.
 type ApproveRequestParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RolloverBusinessDateParams defines parameters for RolloverBusinessDate.
+type RolloverBusinessDateParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
@@ -1207,6 +1231,9 @@ type CreateTransferParams struct {
 // RejectRequestJSONRequestBody defines body for RejectRequest for application/json ContentType.
 type RejectRequestJSONRequestBody = RejectApproval
 
+// RolloverBusinessDateJSONRequestBody defines body for RolloverBusinessDate for application/json ContentType.
+type RolloverBusinessDateJSONRequestBody = RolloverBusinessDate
+
 // RequestCuifMappingsLoadJSONRequestBody defines body for RequestCuifMappingsLoad for application/json ContentType.
 type RequestCuifMappingsLoadJSONRequestBody = LoadCuifMappings
 
@@ -1284,6 +1311,12 @@ type ServerInterface interface {
 	// RejectRequest Reject a request
 	// (POST /v1/approvals/{id}/rejection)
 	RejectRequest(w http.ResponseWriter, r *http.Request, id ID)
+	// GetBusinessDate Read the business date
+	// (GET /v1/business-date)
+	GetBusinessDate(w http.ResponseWriter, r *http.Request)
+	// RolloverBusinessDate Roll the business date over
+	// (POST /v1/business-date/rollover)
+	RolloverBusinessDate(w http.ResponseWriter, r *http.Request, params RolloverBusinessDateParams)
 	// RequestCuifMappingsLoad Request the load of a file of CUIF mappings
 	// (POST /v1/cuif-mappings)
 	RequestCuifMappingsLoad(w http.ResponseWriter, r *http.Request, params RequestCuifMappingsLoadParams)
@@ -1561,6 +1594,65 @@ func (siw *ServerInterfaceWrapper) RejectRequest(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RejectRequest(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetBusinessDate operation middleware
+func (siw *ServerInterfaceWrapper) GetBusinessDate(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetBusinessDate(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RolloverBusinessDate operation middleware
+func (siw *ServerInterfaceWrapper) RolloverBusinessDate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RolloverBusinessDateParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RolloverBusinessDate(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3211,6 +3303,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/webhook-endpoints", wrapper.RegisterWebhookEndpoint)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transfers", wrapper.CreateTransfer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/gmf-exemption", wrapper.CreateGMFExemption)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/business-date", wrapper.GetBusinessDate)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/business-date/rollover", wrapper.RolloverBusinessDate)
 
 	return m
 }
@@ -3555,6 +3649,172 @@ type RejectRequestdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response RejectRequestdefaultApplicationProblemPlusJSONResponse) VisitRejectRequestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBusinessDateRequestObject struct {
+}
+
+type GetBusinessDateResponseObject interface {
+	VisitGetBusinessDateResponse(w http.ResponseWriter) error
+}
+
+type GetBusinessDate200JSONResponse BusinessDate
+
+func (response GetBusinessDate200JSONResponse) VisitGetBusinessDateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBusinessDate404ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetBusinessDate404ApplicationProblemPlusJSONResponse) VisitGetBusinessDateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBusinessDatedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetBusinessDatedefaultApplicationProblemPlusJSONResponse) VisitGetBusinessDateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RolloverBusinessDateRequestObject struct {
+	Params RolloverBusinessDateParams
+	Body   *RolloverBusinessDateJSONRequestBody
+}
+
+type RolloverBusinessDateResponseObject interface {
+	VisitRolloverBusinessDateResponse(w http.ResponseWriter) error
+}
+
+type RolloverBusinessDate200JSONResponse BusinessDateRollover
+
+func (response RolloverBusinessDate200JSONResponse) VisitRolloverBusinessDateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RolloverBusinessDate400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RolloverBusinessDate400ApplicationProblemPlusJSONResponse) VisitRolloverBusinessDateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RolloverBusinessDate404ApplicationProblemPlusJSONResponse Problem
+
+func (response RolloverBusinessDate404ApplicationProblemPlusJSONResponse) VisitRolloverBusinessDateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RolloverBusinessDate409ApplicationProblemPlusJSONResponse Problem
+
+func (response RolloverBusinessDate409ApplicationProblemPlusJSONResponse) VisitRolloverBusinessDateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RolloverBusinessDate413ApplicationProblemPlusJSONResponse Problem
+
+func (response RolloverBusinessDate413ApplicationProblemPlusJSONResponse) VisitRolloverBusinessDateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RolloverBusinessDate422ApplicationProblemPlusJSONResponse Problem
+
+func (response RolloverBusinessDate422ApplicationProblemPlusJSONResponse) VisitRolloverBusinessDateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RolloverBusinessDatedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RolloverBusinessDatedefaultApplicationProblemPlusJSONResponse) VisitRolloverBusinessDateResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -6737,6 +6997,12 @@ type StrictServerInterface interface {
 	// RejectRequest Reject a request
 	// (POST /v1/approvals/{id}/rejection)
 	RejectRequest(ctx context.Context, request RejectRequestRequestObject) (RejectRequestResponseObject, error)
+	// GetBusinessDate Read the business date
+	// (GET /v1/business-date)
+	GetBusinessDate(ctx context.Context, request GetBusinessDateRequestObject) (GetBusinessDateResponseObject, error)
+	// RolloverBusinessDate Roll the business date over
+	// (POST /v1/business-date/rollover)
+	RolloverBusinessDate(ctx context.Context, request RolloverBusinessDateRequestObject) (RolloverBusinessDateResponseObject, error)
 	// RequestCuifMappingsLoad Request the load of a file of CUIF mappings
 	// (POST /v1/cuif-mappings)
 	RequestCuifMappingsLoad(ctx context.Context, request RequestCuifMappingsLoadRequestObject) (RequestCuifMappingsLoadResponseObject, error)
@@ -6992,6 +7258,63 @@ func (sh *strictHandler) RejectRequest(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RejectRequestResponseObject); ok {
 		if err := validResponse.VisitRejectRequestResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetBusinessDate operation middleware
+func (sh *strictHandler) GetBusinessDate(w http.ResponseWriter, r *http.Request) {
+	var request GetBusinessDateRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetBusinessDate(ctx, request.(GetBusinessDateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetBusinessDate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetBusinessDateResponseObject); ok {
+		if err := validResponse.VisitGetBusinessDateResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RolloverBusinessDate operation middleware
+func (sh *strictHandler) RolloverBusinessDate(w http.ResponseWriter, r *http.Request, params RolloverBusinessDateParams) {
+	var request RolloverBusinessDateRequestObject
+
+	request.Params = params
+
+	var body RolloverBusinessDateJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RolloverBusinessDate(ctx, request.(RolloverBusinessDateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RolloverBusinessDate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RolloverBusinessDateResponseObject); ok {
+		if err := validResponse.VisitRolloverBusinessDateResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

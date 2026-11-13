@@ -133,9 +133,9 @@ func bounds(ctx context.Context, s PeriodCloser, entity ids.ID, period string) (
 	if err != nil {
 		return domain.Date{}, domain.Date{}, err
 	}
-	if time.Date(today.Year, today.Month, today.Day, 0, 0, 0, 0, time.UTC).Before(next) {
-		return domain.Date{}, domain.Date{}, fmt.Errorf("%w: %s, and the business date is %04d-%02d-%02d", ErrPeriodNotEnded, period,
-			today.Year, today.Month, today.Day)
+	from, to = domain.DateOf(start), domain.DateOf(next)
+	if to.After(today) {
+		return domain.Date{}, domain.Date{}, fmt.Errorf("%w: %s, and the business date is %s", ErrPeriodNotEnded, period, today)
 	}
-	return domain.Date{Year: start.Year(), Month: start.Month(), Day: 1}, domain.Date{Year: next.Year(), Month: next.Month(), Day: 1}, nil
+	return from, to, nil
 }

@@ -82,8 +82,9 @@ su sujeto y la diferencia en unidades menores. Los controles corren cada 15 min:
 
 Hoy nada liquida la cuenta clearing del rail: el primer pago saliente abre `rail_accounts_at_zero` en
 cuanto cierra su día y lo reabre en cada corrida hasta que se liquide. Todo break abierto de la entidad
-bloquea el cierre de periodo. Los días cierran con el rollover de la fecha de negocio, que hoy no dispara
-ningún proceso de producción.
+bloquea el cierre de periodo. Los días cierran con el rollover de la fecha de negocio
+(`POST /v1/business-date/rollover`), que el programador de tareas del operador llama con un cliente `system`
+al final de cada día hábil.
 
 ## Hot accounts lentas
 

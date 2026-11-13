@@ -4,16 +4,21 @@ package calendar
 
 import (
 	"context"
+	"time"
 
 	pg "github.com/DrewGGM/aluna/internal/calendar/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/calendar/internal/app"
 	"github.com/DrewGGM/aluna/internal/calendar/internal/domain"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
 // Date is a calendar day, with no time or zone.
 type Date = domain.Date
+
+// ParseDate reads a date yyyy-mm-dd, as Date.String writes it, or ErrInvalidDate.
+func ParseDate(s string) (Date, error) { return domain.ParseDate(s) }
 
 // Convention is how a date that falls on a non-business day is moved.
 type Convention = domain.Convention
@@ -39,18 +44,43 @@ const (
 // Calendar errors.
 var (
 	ErrLegalEntityNotFound = app.ErrLegalEntityNotFound
+	ErrInvalidLegalEntity  = app.ErrInvalidLegalEntity
 	ErrStaleBusinessDate   = app.ErrStaleBusinessDate
+	ErrBusinessDateAhead   = app.ErrBusinessDateAhead
+	ErrInvalidDate         = domain.ErrInvalidDate
 	ErrPeriodClosed        = app.ErrPeriodClosed
 	ErrInvalidPeriod       = app.ErrInvalidPeriod
 	ErrPeriodNotEnded      = app.ErrPeriodNotEnded
 )
 
-// Service is the calendar facade. It holds no state: each operation receives the connection or the
-// transaction it runs in.
-type Service struct{}
+// typeRolled is the event of a rollover (architecture §8).
+const typeRolled = "aluna.calendar.business-date.rolled.v1"
 
-// New creates the calendar service.
-func New() *Service { return &Service{} }
+// Events publishes calendar events; outbox.Outbox implements it.
+type Events interface {
+	Emit(ctx context.Context, tx postgres.Tx, e outbox.Event) error
+}
+
+// Service is the calendar facade. Each operation receives the connection or the transaction it runs in.
+type Service struct {
+	events Events
+	now    func() time.Time
+}
+
+// New creates the calendar service; it publishes its events to events, and now is the clock the rollover checks
+// the day against.
+func New(events Events, now func() time.Time) *Service { return &Service{events: events, now: now} }
+
+// LegalEntity is a legal entity to register: its ID, its name, its first business date and its functional currency.
+type LegalEntity = app.LegalEntity
+
+// CreateLegalEntity registers e over q; or ErrInvalidLegalEntity if its date is not a business day or is after the
+// day it is at now in America/Bogota, its currency is unknown or its name is empty. Only the tables' owner can:
+// aluna_app has no INSERT on the entities, so whoever operates the deployment registers them (aluna entity create),
+// never the API.
+func CreateLegalEntity(ctx context.Context, q postgres.Querier, e LegalEntity, now time.Time) error {
+	return app.CreateLegalEntity(ctx, pg.NewStore(q), e, now)
+}
 
 // BusinessDate is the business date of the legal entity. A use case reads it when its transaction starts
 // and uses it for everything it posts: the read does not block the rollover. q can be the pool or a Tx.
@@ -58,11 +88,30 @@ func (s *Service) BusinessDate(ctx context.Context, q postgres.Querier, legalEnt
 	return pg.NewStore(q).BusinessDate(ctx, legalEntity)
 }
 
-// Rollover advances, within tx, the entity's business date from expected to the next business day and
-// returns the new one. If the date is no longer expected (another rollover advanced it), it is
-// ErrStaleBusinessDate and nothing changes.
+// Rollover advances, within tx, the entity's business date from expected to the next business day, emits
+// aluna.calendar.business-date.rolled.v1 and returns the new one. If the business date is not expected (another
+// rollover advanced it, or the caller is behind), it is ErrStaleBusinessDate; if expected has not started yet in
+// America/Bogota, ErrBusinessDateAhead. Either way nothing changes.
 func (s *Service) Rollover(ctx context.Context, tx postgres.Tx, legalEntity ids.ID, expected Date) (Date, error) {
-	return app.Rollover(ctx, pg.NewStore(tx), legalEntity, expected)
+	next, err := app.Rollover(ctx, pg.NewStore(tx), legalEntity, expected, s.now())
+	if err != nil {
+		return Date{}, err
+	}
+	err = s.events.Emit(ctx, tx, outbox.Event{
+		Type: typeRolled, Subject: "business-dates/" + legalEntity.String(), LegalEntityID: legalEntity, SchemaVersion: 1,
+		Data: rolledPayload{ClosedBusinessDate: expected.String(), BusinessDate: next.String()},
+	})
+	if err != nil {
+		return Date{}, err
+	}
+	return next, nil
+}
+
+// rolledPayload carries the day the rollover closed, which the end-of-day processes run on, and the new business
+// date; the entity travels in the envelope.
+type rolledPayload struct {
+	ClosedBusinessDate string `json:"closed_business_date"`
+	BusinessDate       string `json:"business_date"`
 }
 
 // AdjustDate moves d to the business day that convention c dictates (a business day stays): a product's

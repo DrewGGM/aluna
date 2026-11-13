@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/approvals"
@@ -127,7 +128,7 @@ func TestAReversalIsNotReversed(t *testing.T) {
 // TestAnUnexpectedLedgerErrorIsNotARejection: a ledger error that is not a business rule (here, the canceled
 // context) goes up without being wrapped in ErrCommandRejected: the request does not end up failed.
 func TestAnUnexpectedLedgerErrorIsNotARejection(t *testing.T) {
-	exec := reverseOnApproval(ledger.New(calendar.New(), failingEvents{}))
+	exec := reverseOnApproval(ledger.New(calendar.New(failingEvents{}, time.Now), failingEvents{}))
 	payload, err := json.Marshal(reversalRequest{TransactionID: ids.New(), Reason: "test"})
 	if err != nil {
 		t.Fatal(err)

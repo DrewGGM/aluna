@@ -74,6 +74,11 @@ commands:
                              their anchors in ALUNA_AUDIT_ANCHOR_DIR
   migrate up|down|status     applies, rolls back the latest or lists the migrations on
                              ALUNA_DATABASE_URL
+  entity create [--id ID] --name NAME --business-date YYYY-MM-DD --currency CODE
+                             registers a legal entity on ALUNA_DATABASE_URL, as the tables' owner,
+                             with its first business date (a business day) and its functional
+                             currency, and prints its ID (ID, or a new one), the legal_entity_id of
+                             its users' tokens
   healthcheck                exits with 0 if the api on ALUNA_HTTP_ADDR answers /healthz, for the
                              container's HEALTHCHECK
   version                    prints the version
@@ -97,6 +102,8 @@ func run(args []string, stdout io.Writer) int {
 		return migrateCommand(rest, stdout)
 	case "audit":
 		return auditCommand(rest, stdout)
+	case "entity":
+		return entityCommand(rest, stdout)
 	}
 	if len(rest) != 0 { // the other commands take no arguments
 		return printUsage()
@@ -357,7 +364,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 		return httpapi.API{}, fmt.Errorf("configure the outbox: %w", err)
 	}
 	keys := idempotency.NewStore(pool)
-	calendarSvc := calendar.New()
+	calendarSvc := calendar.New(events, time.Now)
 	ledgerSvc := ledger.New(calendarSvc, events)
 	complianceSvc := compliance.New(events)
 	partySvc := party.New(events, complianceSvc.PartyScreener())
@@ -380,8 +387,9 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 		ComplianceHandlers:     httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
 		PaymentHandlers:        httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: httpapi.NewReconciliationHandlers(reconciliation.New(events), uow, keys, pool),
-		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(events), reconciliation.New(events), requests, uow, keys, pool),
+		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(calendarSvc, events), reconciliation.New(events), requests, uow, keys, pool),
 		WebhookHandlers:        httpapi.NewWebhookHandlers(webhooks.New(), uow, pool),
+		CalendarHandlers:       httpapi.NewCalendarHandlers(calendarSvc, uow, keys, pool),
 	}, nil
 }
 
@@ -511,7 +519,7 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality,
 	if err != nil {
 		return nil, err
 	}
-	calendarSvc := calendar.New()
+	calendarSvc := calendar.New(events, time.Now)
 	ledgerSvc := ledger.New(calendarSvc, events)
 	productSvc := products.New(events)
 	complianceSvc := compliance.New(events)
@@ -525,7 +533,7 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality,
 	cfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
 		Audit: records, Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
-		Accounting: accounting.New(events), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
+		Accounting: accounting.New(calendarSvc, events), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)

@@ -298,7 +298,7 @@ func newEntity(t *testing.T, c cluster, anchors string) *entity {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.ledger = ledger.New(calendar.New(), events)
+	e.ledger = ledger.New(calendar.New(events, time.Now), events)
 	e.inTx(t, func(tx postgres.Tx) error {
 		cash, err := e.account(t, tx, "1105", ledger.KindAsset)
 		if err != nil {
@@ -399,7 +399,7 @@ func (e *entity) resume(t *testing.T, c cluster, at progress, anchors string) *e
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.ledger = ledger.New(calendar.New(), events)
+	r.ledger = ledger.New(calendar.New(events, time.Now), events)
 	return &r
 }
 

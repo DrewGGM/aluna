@@ -89,9 +89,10 @@ func worldOf(t *testing.T, file string, clearing bool) world {
 	}
 	screening := compliance.New(events)
 	parties, catalog := party.New(events, screening.PartyScreener()), products.New(events)
-	w.ledger = ledger.New(calendar.New(), events)
-	w.pricing = pricing.New(catalog, calendar.New(), pricing.SingleAccount)
-	w.deposits = deposits.New(w.ledger, parties, catalog, calendar.New(), w.pricing, events)
+	cal := calendar.New(events, time.Now)
+	w.ledger = ledger.New(cal, events)
+	w.pricing = pricing.New(catalog, cal, pricing.SingleAccount)
+	w.deposits = deposits.New(w.ledger, parties, catalog, cal, w.pricing, events)
 	w.rail = newTestRail(t)
 	if w.payments, err = payments.New(w.ledger, w.deposits, screening, w.pricing, events, testPool, w.rail); err != nil {
 		t.Fatal(err)

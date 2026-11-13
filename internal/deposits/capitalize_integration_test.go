@@ -34,7 +34,7 @@ func (w world) expense(t *testing.T) ids.ID {
 // rollUntil rolls the world's business date over until it is after day.
 func (w world) rollUntil(t *testing.T, day calendar.Date) {
 	t.Helper()
-	cal := calendar.New()
+	cal := w.calendar
 	for {
 		var today calendar.Date
 		inTx(t, func(tx postgres.Tx) error {

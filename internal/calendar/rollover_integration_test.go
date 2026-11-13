@@ -3,8 +3,10 @@
 package calendar_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -22,9 +24,19 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
 
+var testPool *pgxpool.Pool
+
+// testEvents is the tests' outbox and cal the calendar that emits to it; they are created on first use, once the
+// database exists.
 var (
-	testPool *pgxpool.Pool
-	cal      = calendar.New()
+	testEvents = sync.OnceValue(func() *outbox.Outbox {
+		events, err := outbox.New(testPool)
+		if err != nil {
+			panic(err)
+		}
+		return events
+	})
+	cal = sync.OnceValue(func() *calendar.Service { return calendar.New(testEvents(), time.Now) })
 )
 
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
@@ -51,7 +63,7 @@ func rollover(t *testing.T, entity ids.ID, expected calendar.Date) (calendar.Dat
 	var next calendar.Date
 	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
 		var err error
-		next, err = cal.Rollover(t.Context(), tx, entity, expected)
+		next, err = cal().Rollover(t.Context(), tx, entity, expected)
 		return err
 	})
 	return next, err
@@ -59,7 +71,7 @@ func rollover(t *testing.T, entity ids.ID, expected calendar.Date) (calendar.Dat
 
 func businessDate(t *testing.T, entity ids.ID) calendar.Date {
 	t.Helper()
-	d, err := cal.BusinessDate(t.Context(), testPool, entity)
+	d, err := cal().BusinessDate(t.Context(), testPool, entity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,9 +111,98 @@ func TestARepeatedRolloverIsStale(t *testing.T) {
 	}
 }
 
+// TestARolloverEmitsItsEvent: a rollover emits aluna.calendar.business-date.rolled.v1 with the date it closed and the
+// new one, in its transaction: a stale rollover, or one whose transaction rolls back, emits nothing.
+func TestARolloverEmitsItsEvent(t *testing.T) {
+	friday := calendar.Date{Year: 2025, Month: time.June, Day: 27}
+	entity := newEntity(t, friday)
+	errRolledBack := errors.New("rolled back")
+	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
+		if _, err := cal().Rollover(t.Context(), tx, entity, friday); err != nil {
+			return err
+		}
+		return errRolledBack
+	})
+	if !errors.Is(err, errRolledBack) {
+		t.Fatal(err)
+	}
+
+	if _, err := rollover(t, entity, friday); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rollover(t, entity, friday); !errors.Is(err, calendar.ErrStaleBusinessDate) {
+		t.Fatalf("second rollover = %v, want ErrStaleBusinessDate", err)
+	}
+
+	want := []rolledEvent{{
+		Type: "aluna.calendar.business-date.rolled.v1", Subject: "business-dates/" + entity.String(), SchemaVersion: 1,
+		Payload: rolledPayload{ClosedBusinessDate: "2025-06-27", BusinessDate: "2025-07-01"},
+	}}
+	if got := rolledEvents(t, entity); !slices.Equal(got, want) {
+		t.Fatalf("events = %+v, want %+v", got, want)
+	}
+}
+
+// TestARolloverWaitsForItsDay: on Thursday in America/Bogota, by the calendar's clock, Friday does not close yet; the
+// business date stays and nothing is emitted.
+func TestARolloverWaitsForItsDay(t *testing.T) {
+	friday := calendar.Date{Year: 2025, Month: time.June, Day: 27}
+	entity := newEntity(t, friday)
+	thursday := calendar.New(testEvents(), func() time.Time { return time.Date(2025, time.June, 27, 4, 0, 0, 0, time.UTC) })
+
+	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
+		_, err := thursday.Rollover(t.Context(), tx, entity, friday)
+		return err
+	})
+
+	if !errors.Is(err, calendar.ErrBusinessDateAhead) {
+		t.Fatalf("Rollover = %v, want ErrBusinessDateAhead", err)
+	}
+	if got := businessDate(t, entity); got != friday || len(rolledEvents(t, entity)) != 0 {
+		t.Fatalf("business date = %v with events %+v, want %v and none", got, rolledEvents(t, entity), friday)
+	}
+}
+
+type rolledEvent struct {
+	Type, Subject string
+	SchemaVersion int
+	Payload       rolledPayload
+}
+
+type rolledPayload struct {
+	ClosedBusinessDate string `json:"closed_business_date"`
+	BusinessDate       string `json:"business_date"`
+}
+
+// rolledEvents are the events emitted about entity, oldest first.
+func rolledEvents(t *testing.T, entity ids.ID) []rolledEvent {
+	t.Helper()
+	rows, err := testPool.Query(t.Context(), `SELECT type, subject, schema_version, payload FROM infra.outbox
+		WHERE legal_entity_id = $1 ORDER BY id`, entity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []rolledEvent
+	for rows.Next() {
+		var e rolledEvent
+		var payload []byte
+		if err := rows.Scan(&e.Type, &e.Subject, &e.SchemaVersion, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(payload, &e.Payload); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return events
+}
+
 func TestAnUnknownEntityHasNoBusinessDate(t *testing.T) {
 	unknown := ids.New()
-	if _, err := cal.BusinessDate(t.Context(), testPool, unknown); !errors.Is(err, calendar.ErrLegalEntityNotFound) {
+	if _, err := cal().BusinessDate(t.Context(), testPool, unknown); !errors.Is(err, calendar.ErrLegalEntityNotFound) {
 		t.Errorf("BusinessDate = %v, want ErrLegalEntityNotFound", err)
 	}
 	if _, err := rollover(t, unknown, calendar.Date{Year: 2025, Month: time.July, Day: 7}); !errors.Is(err, calendar.ErrLegalEntityNotFound) {
@@ -144,7 +245,7 @@ func TestAPostingKeepsTheDateItRead(t *testing.T) {
 	var posted ids.ID
 	go func() {
 		done <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
-			day, err := cal.BusinessDate(t.Context(), tx, entity)
+			day, err := cal().BusinessDate(t.Context(), tx, entity)
 			read <- day
 			if err != nil {
 				return err
@@ -226,7 +327,7 @@ func postAfter(t *testing.T, entity, cash, deposit ids.ID, wait <-chan struct{},
 	t.Helper()
 	var p postedOn
 	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
-		day, err := cal.BusinessDate(t.Context(), tx, entity)
+		day, err := cal().BusinessDate(t.Context(), tx, entity)
 		if read != nil {
 			read.Done()
 		}
@@ -262,13 +363,7 @@ func checkPostedOnTheDateRead(t *testing.T, entity ids.ID, posted []postedOn, at
 
 // testLedger is the ledger over the tests' calendar, with its events going to the outbox; it is created
 // on first use, once the database exists.
-var testLedger = sync.OnceValue(func() *ledger.Service {
-	events, err := outbox.New(testPool)
-	if err != nil {
-		panic(err)
-	}
-	return ledger.New(cal, events)
-})
+var testLedger = sync.OnceValue(func() *ledger.Service { return ledger.New(cal(), testEvents()) })
 
 // postOn posts, within tx, a deposit with business date day, as a use case will.
 func postOn(t *testing.T, tx postgres.Tx, entity, cash, deposit ids.ID, day calendar.Date) (ids.ID, error) {

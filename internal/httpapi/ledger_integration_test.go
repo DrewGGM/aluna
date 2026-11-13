@@ -80,7 +80,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	if err != nil {
 		t.Fatal(err)
 	}
-	calendarSvc := calendar.New()
+	calendarSvc := calendar.New(events, time.Now)
 	ledgerSvc := ledger.New(calendarSvc, events)
 	complianceSvc := compliance.New(events)
 	partySvc := party.New(events, complianceSvc.PartyScreener())
@@ -104,8 +104,9 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 		ComplianceHandlers:     NewComplianceHandlers(complianceSvc, requests, uow, keys),
 		PaymentHandlers:        NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: NewReconciliationHandlers(reconciliation.New(events), uow, keys, testPool),
-		AccountingHandlers:     NewAccountingHandlers(accounting.New(events), reconciliation.New(events), requests, uow, keys, testPool),
+		AccountingHandlers:     NewAccountingHandlers(accounting.New(calendarSvc, events), reconciliation.New(events), requests, uow, keys, testPool),
 		WebhookHandlers:        NewWebhookHandlers(webhooks.New(), uow, testPool),
+		CalendarHandlers:       NewCalendarHandlers(calendarSvc, uow, keys, testPool),
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},

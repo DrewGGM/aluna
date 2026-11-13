@@ -27,15 +27,19 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Run(m, &testPool)) }
 
 var entity = ids.New()
 
-// svc is the tests' ledger, with its events going to the outbox; it is created the first time, once the
-// database exists.
-var svc = sync.OnceValue(func() *ledger.Service {
-	events, err := outbox.New(testPool)
-	if err != nil {
-		panic(err)
-	}
-	return ledger.New(calendar.New(), events)
-})
+// testEvents, testCalendar and svc are the tests' outbox, calendar and ledger, with their events going to the
+// outbox; they are created the first time, once the database exists.
+var (
+	testEvents = sync.OnceValue(func() *outbox.Outbox {
+		events, err := outbox.New(testPool)
+		if err != nil {
+			panic(err)
+		}
+		return events
+	})
+	testCalendar = sync.OnceValue(func() *calendar.Service { return calendar.New(testEvents(), time.Now) })
+	svc          = sync.OnceValue(func() *ledger.Service { return ledger.New(testCalendar(), testEvents()) })
+)
 
 func cop(t *testing.T) money.Currency {
 	t.Helper()

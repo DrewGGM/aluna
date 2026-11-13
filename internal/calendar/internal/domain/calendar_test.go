@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -119,7 +120,7 @@ func holidaysGen(t *rapid.T, from Date) func(Date) bool {
 	extra := rapid.SliceOfN(rapid.IntRange(-20, 40), 0, 10).Draw(t, "nonBusinessDays")
 	return func(d Date) bool {
 		for _, off := range extra {
-			if from.addDays(off) == d {
+			if from.AddDays(off) == d {
 				return true
 			}
 		}
@@ -129,7 +130,7 @@ func holidaysGen(t *rapid.T, from Date) func(Date) bool {
 
 func dateGen(t *rapid.T) Date {
 	day := rapid.IntRange(0, 365*120).Draw(t, "day")
-	return Date{1990, time.January, 1}.addDays(day)
+	return Date{1990, time.January, 1}.AddDays(day)
 }
 
 // TestAdjustProperties: Following and Preceding return the first business day forward or backward;
@@ -154,7 +155,7 @@ func TestAdjustProperties(t *testing.T) {
 			t.Fatalf("ModifiedFollowing(%v) = %v, want %v", from, got, want)
 		}
 		if got.Month != from.Month {
-			for d := from; d.Month == from.Month; d = d.addDays(1) {
+			for d := from; d.Month == from.Month; d = d.AddDays(1) {
 				if IsBusinessDay(d, isHoliday) {
 					t.Fatalf("ModifiedFollowing(%v) = %v changed month, but %v is a business day", from, got, d)
 				}
@@ -169,9 +170,37 @@ func checkNearest(t *rapid.T, from, got Date, step int, isHoliday func(Date) boo
 	if !IsBusinessDay(got, isHoliday) {
 		t.Fatalf("Adjust(%v, step %d) = %v, not a business day", from, step, got)
 	}
-	for d := from; d != got; d = d.addDays(step) {
+	for d := from; d != got; d = d.AddDays(step) {
 		if IsBusinessDay(d, isHoliday) {
 			t.Fatalf("Adjust(%v, step %d) = %v, but %v is an earlier business day", from, step, got, d)
 		}
+	}
+}
+
+// TestADateIsReadAsItIsWritten: ParseDate reads what String writes, yyyy-mm-dd, and nothing else.
+func TestADateIsReadAsItIsWritten(t *testing.T) {
+	d, err := ParseDate("2026-10-30")
+	if want := (Date{Year: 2026, Month: time.October, Day: 30}); err != nil || d != want || d.String() != "2026-10-30" {
+		t.Fatalf("ParseDate = %v, %v; want %v", d, err, want)
+	}
+	for _, s := range []string{"", "30/10/2026", "2026-10-30T00:00:00Z", "2026-02-30", "2026-1-5"} {
+		if _, err := ParseDate(s); !errors.Is(err, ErrInvalidDate) {
+			t.Errorf("ParseDate(%q) = %v, want ErrInvalidDate", s, err)
+		}
+	}
+}
+
+// TestTodayIsBogotasDay: at 23:00 on October 29 in Bogota it is already October 30 in UTC, and today is the 29th.
+func TestTodayIsBogotasDay(t *testing.T) {
+	for now, want := range map[time.Time]Date{
+		time.Date(2026, time.October, 30, 4, 0, 0, 0, time.UTC): {2026, time.October, 29},
+		time.Date(2026, time.October, 30, 5, 0, 0, 0, time.UTC): {2026, time.October, 30},
+	} {
+		if got := Today(now); got != want {
+			t.Errorf("Today(%v) = %v, want %v", now, got, want)
+		}
+	}
+	if got, want := (Date{2026, time.December, 31}).AddDays(1), (Date{2027, time.January, 1}); got != want {
+		t.Errorf("AddDays(1) = %v, want %v", got, want)
 	}
 }

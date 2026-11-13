@@ -58,7 +58,7 @@ func newDeps(t *testing.T) jobs.Deps {
 	if err != nil {
 		t.Fatal(err)
 	}
-	calendarSvc := calendar.New()
+	calendarSvc := calendar.New(events, time.Now)
 	ledgerSvc := ledger.New(calendarSvc, events)
 	productSvc := products.New(events)
 	pricingSvc := pricing.New(productSvc, calendarSvc, pricing.SingleAccount)
@@ -73,7 +73,7 @@ func newDeps(t *testing.T) jobs.Deps {
 		Audit:      records,
 		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(testPool), Outbox: events,
 		Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
-		Accounting: accounting.New(events), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
+		Accounting: accounting.New(calendarSvc, events), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
 	}
 }
 

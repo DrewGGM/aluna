@@ -36,7 +36,7 @@ func newGLWorld(t *testing.T) glWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := glWorld{entity: ids.New(), s: accounting.New(events)}
+	w := glWorld{entity: ids.New()}
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
 			VALUES ($1, 'Entity', '2026-03-02', 'COP')`, w.entity)
@@ -45,7 +45,8 @@ func newGLWorld(t *testing.T) glWorld {
 	if w.cop, err = money.CurrencyOf("COP"); err != nil {
 		t.Fatal(err)
 	}
-	w.ledger = ledger.New(calendar.New(), events)
+	cal := calendar.New(events, time.Now)
+	w.ledger, w.s = ledger.New(cal, events), accounting.New(cal, events)
 	if err := load(t, w.s, w.entity, mappings(t, "A.CASH.,110505,2026-03-02,2030-01-01\ndeposits/,210505,2026-03-02,2030-01-01\n")); err != nil {
 		t.Fatal(err)
 	}

@@ -167,7 +167,7 @@ func TestPeriodStatusOfTheCalendar(t *testing.T) {
 		{Year: 2025, Month: time.May, Day: 15}:   calendar.PeriodClosing,
 		{Year: 2025, Month: time.August, Day: 1}: calendar.PeriodOpen,
 	} {
-		if got, err := calendar.New().PeriodStatus(t.Context(), testPool, entity, d); err != nil || got != want {
+		if got, err := testCalendar().PeriodStatus(t.Context(), testPool, entity, d); err != nil || got != want {
 			t.Errorf("PeriodStatus(%v) = %q, %v; want %q", d, got, err, want)
 		}
 	}

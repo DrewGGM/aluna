@@ -44,6 +44,29 @@ func (q *Queries) BusinessDate(ctx context.Context, id ids.ID) (time.Time, error
 	return business_date, err
 }
 
+const createLegalEntity = `-- name: CreateLegalEntity :exec
+INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
+VALUES ($1, $2, $3, $4)
+`
+
+type CreateLegalEntityParams struct {
+	ID                 ids.ID
+	Name               string
+	BusinessDate       time.Time
+	FunctionalCurrency string
+}
+
+// Only the tables' owner runs it: aluna_app has no INSERT, so the application never creates entities.
+func (q *Queries) CreateLegalEntity(ctx context.Context, arg CreateLegalEntityParams) error {
+	_, err := q.db.Exec(ctx, createLegalEntity,
+		arg.ID,
+		arg.Name,
+		arg.BusinessDate,
+		arg.FunctionalCurrency,
+	)
+	return err
+}
+
 const lockPeriod = `-- name: LockPeriod :exec
 SELECT pg_advisory_xact_lock(calendar.period_lock_key($1, $2))
 `

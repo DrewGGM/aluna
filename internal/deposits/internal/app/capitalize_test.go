@@ -1,11 +1,19 @@
 package app
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
+	"github.com/DrewGGM/aluna/internal/outbox"
+	"github.com/DrewGGM/aluna/internal/postgres"
 )
+
+// discard publishes nothing: adjusting a date emits no event.
+type discard struct{}
+
+func (discard) Emit(context.Context, postgres.Tx, outbox.Event) error { return nil }
 
 func day(year int, month time.Month, d int) calendar.Date {
 	return calendar.Date{Year: year, Month: month, Day: d}
@@ -15,7 +23,7 @@ func day(year int, month time.Month, d int) calendar.Date {
 // moved to a business day as the product's convention says (Colombian holidays); the date moved forward
 // lands in the next period and still capitalizes the one it closes. Any other day capitalizes nothing.
 func TestTheCapitalizationDateIsThePeriodsLastDayAdjusted(t *testing.T) {
-	adjust := calendar.New().AdjustDate
+	adjust := calendar.New(discard{}, time.Now).AdjustDate
 	for name, c := range map[string]struct {
 		day        calendar.Date
 		frequency  string
@@ -48,7 +56,7 @@ func TestTheCapitalizationDateIsThePeriodsLastDayAdjusted(t *testing.T) {
 
 // TestAnUnknownFrequencyIsAnError: a frequency the definition does not allow is not taken for a period.
 func TestAnUnknownFrequencyIsAnError(t *testing.T) {
-	if _, _, err := capitalizationOn(day(2026, time.April, 30), "weekly", calendar.Following, calendar.New().AdjustDate); err == nil {
+	if _, _, err := capitalizationOn(day(2026, time.April, 30), "weekly", calendar.Following, calendar.New(discard{}, time.Now).AdjustDate); err == nil {
 		t.Fatal("weekly capitalization accepted, want an error")
 	}
 }

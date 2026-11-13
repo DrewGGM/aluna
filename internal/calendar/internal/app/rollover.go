@@ -17,7 +17,10 @@ var (
 	ErrLegalEntityNotFound = errors.New("legal entity not found")
 	// ErrStaleBusinessDate means a rollover whose expected date is no longer the business date: another
 	// rollover advanced it.
-	ErrStaleBusinessDate = errors.New("business date is no longer the expected one")
+	ErrStaleBusinessDate = errors.New("business date is not the expected one")
+	// ErrBusinessDateAhead means a business date that has not started yet, to close or to start an entity on: the
+	// business date would run ahead of the calendar.
+	ErrBusinessDateAhead = errors.New("business date is after today")
 )
 
 // Store persists the business date of each legal entity.
@@ -31,9 +34,14 @@ type Store interface {
 
 // Rollover advances the entity's business date from expected to the next business day (FR-13). It is a
 // conditional UPDATE: it does not block postings that already read the date, and a second rollover with
-// the same expected is ErrStaleBusinessDate instead of advancing two days.
-func Rollover(ctx context.Context, store Store, entity ids.ID, expected domain.Date) (domain.Date, error) {
-	next := domain.Adjust(dayAfter(expected), domain.Following, isColombianHoliday)
+// the same expected is ErrStaleBusinessDate instead of advancing two days. A day closes once it has started in
+// America/Bogota at now: closing a later one is ErrBusinessDateAhead, so the business date never runs ahead of the
+// calendar.
+func Rollover(ctx context.Context, store Store, entity ids.ID, expected domain.Date, now time.Time) (domain.Date, error) {
+	if today := domain.Today(now); expected.After(today) {
+		return domain.Date{}, fmt.Errorf("%w: %s, today is %s", ErrBusinessDateAhead, expected, today)
+	}
+	next := domain.Adjust(expected.AddDays(1), domain.Following, isColombianHoliday)
 	advanced, err := store.AdvanceBusinessDate(ctx, entity, expected, next)
 	if err != nil {
 		return domain.Date{}, err
@@ -45,14 +53,7 @@ func Rollover(ctx context.Context, store Store, entity ids.ID, expected domain.D
 	if err != nil {
 		return domain.Date{}, err
 	}
-	return domain.Date{}, fmt.Errorf("%w: is %s, expected %s", ErrStaleBusinessDate, iso(current), iso(expected))
-}
-
-func iso(d domain.Date) string { return fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day) }
-
-func dayAfter(d domain.Date) domain.Date {
-	t := time.Date(d.Year, d.Month, d.Day+1, 0, 0, 0, 0, time.UTC)
-	return domain.Date{Year: t.Year(), Month: t.Month(), Day: t.Day()}
+	return domain.Date{}, fmt.Errorf("%w: is %s, expected %s", ErrStaleBusinessDate, current, expected)
 }
 
 // AdjustDate moves d to the business day that c dictates, on the entities' holiday calendar.

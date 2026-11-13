@@ -126,8 +126,8 @@ type journey struct {
 	accounts                      map[string]string // ledger account ids by code
 }
 
-// newJourney builds aluna, migrates a fresh database with it, creates the entity on October 30 as the tables' owner
-// (no API creates entities, Q-136) and starts aluna api.
+// newJourney builds aluna, migrates a fresh database with it, creates the entity on October 30 with aluna entity create
+// and starts aluna api.
 func newJourney(t *testing.T) *journey {
 	t.Helper()
 	bin := buildAluna(t)
@@ -148,12 +148,7 @@ func newJourney(t *testing.T) *journey {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	j := &journey{bin: bin, appDSN: appDSN, entity: ids.New(), pool: pool, uow: postgres.NewUnitOfWork(pool), jobs: newJobs(t, pool)}
-	pgtest.AsOwner(t, pool, func(tx pgx.Tx) error {
-		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
-			VALUES ($1, 'Entity', '2026-10-30', 'COP')`, j.entity)
-		return err
-	})
+	j := &journey{bin: bin, appDSN: appDSN, entity: createEntity(t, bin, dsn), pool: pool, uow: postgres.NewUnitOfWork(pool), jobs: newJobs(t, pool)}
 	issuer, sign := rolesIssuer(t, j.entity)
 	j.sign = sign
 	addr := freeAddr(t)
@@ -164,10 +159,26 @@ func newJourney(t *testing.T) *journey {
 	return j
 }
 
+// createEntity registers, with aluna entity create as the tables' owner of dsn, the journey's entity on October 30.
+func createEntity(t *testing.T, bin, dsn string) ids.ID {
+	t.Helper()
+	cmd := alunaCmd(t, bin, []string{"ALUNA_DATABASE_URL=" + dsn}, "entity", "create", "--name", "Entity", "--business-date", october30.String(), "--currency", "COP")
+	var errOut bytes.Buffer
+	cmd.Stderr = &errOut
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("aluna entity create: %v\n%s", err, errOut.String())
+	}
+	entity, err := ids.Parse(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatalf("aluna entity create printed %q: %v", out, err)
+	}
+	return entity
+}
+
 // jobs are the time-driven jobs of the worker, run by the test when the journey needs them: the worker runs them on
-// intervals of minutes to an hour, and nothing in production rolls the business date over yet (Q-136).
+// intervals of minutes to an hour.
 type jobs struct {
-	calendar       *calendar.Service
 	deposits       *deposits.Service
 	accounting     *accounting.Service
 	reconciliation *reconciliation.Service
@@ -181,12 +192,12 @@ func newJobs(t *testing.T, pool *pgxpool.Pool) jobs {
 	if err != nil {
 		t.Fatal(err)
 	}
-	calendarSvc, productSvc, complianceSvc := calendar.New(), products.New(events), compliance.New(events)
+	calendarSvc, productSvc, complianceSvc := calendar.New(events, time.Now), products.New(events), compliance.New(events)
 	pricingSvc := pricing.New(productSvc, calendarSvc, pricing.SingleAccount)
 	depositSvc := deposits.New(ledger.New(calendarSvc, events), party.New(events, complianceSvc.PartyScreener()), productSvc, calendarSvc,
 		pricingSvc, events)
 	return jobs{
-		calendar: calendarSvc, deposits: depositSvc, accounting: accounting.New(events), reconciliation: reconciliation.New(events), webhooks: webhooks.New(),
+		deposits: depositSvc, accounting: accounting.New(calendarSvc, events), reconciliation: reconciliation.New(events), webhooks: webhooks.New(),
 	}
 }
 
@@ -464,21 +475,17 @@ func (j *journey) receiveFromTheRail(t *testing.T, a depositAccount, units int64
 	}
 }
 
-// do runs fn in a transaction of the journey's database, as the api's role.
-func (j *journey) do(t *testing.T, fn func(tx postgres.Tx) error) {
-	t.Helper()
-	if err := j.uow.Do(t.Context(), fn); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// rollover advances the entity's business date from today to the next business day.
+// rollover has the operator's scheduler, a system client, close today and advance the entity's business date to the
+// next business day, as it does at the end of each business day.
 func (j *journey) rollover(t *testing.T, today calendar.Date) {
 	t.Helper()
-	j.do(t, func(tx postgres.Tx) error {
-		_, err := j.jobs.calendar.Rollover(t.Context(), tx, j.entity, today)
-		return err
-	})
+	var rolled struct {
+		Closed string `json:"closed_business_date"`
+	}
+	expect(t, j.as("scheduler", "system"), http.MethodPost, "/v1/business-date/rollover", `{"business_date":"`+today.String()+`"}`, http.StatusOK, &rolled)
+	if rolled.Closed != today.String() {
+		t.Fatalf("the rollover closed %s, want %s", rolled.Closed, today)
+	}
 }
 
 // capitalize runs the accrual of the closed days, which capitalizes October's interest into a on October 30, and

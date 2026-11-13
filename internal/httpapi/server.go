@@ -27,6 +27,7 @@ type API struct {
 	*ReconciliationHandlers
 	*AccountingHandlers
 	*WebhookHandlers
+	*CalendarHandlers
 }
 
 var _ gen.StrictServerInterface = API{}

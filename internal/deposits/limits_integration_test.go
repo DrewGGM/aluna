@@ -118,7 +118,7 @@ func steps(t *testing.T, each ...func() error) {
 func (w world) rollover(t *testing.T, from calendar.Date) {
 	t.Helper()
 	inTx(t, func(tx postgres.Tx) error {
-		_, err := calendar.New().Rollover(t.Context(), tx, w.entity, from)
+		_, err := w.calendar.Rollover(t.Context(), tx, w.entity, from)
 		return err
 	})
 }

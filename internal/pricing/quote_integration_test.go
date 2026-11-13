@@ -58,7 +58,7 @@ func worldOf(t *testing.T, file string, m pricing.Modality, day string) world {
 		t.Fatal(err)
 	}
 	catalog := products.New(discard{})
-	w := world{entity: ids.New(), pricing: pricing.New(catalog, calendar.New(), m)}
+	w := world{entity: ids.New(), pricing: pricing.New(catalog, calendar.New(discard{}, time.Now), m)}
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
 			VALUES ($1, 'Entity', $2, 'COP')`, w.entity, day)

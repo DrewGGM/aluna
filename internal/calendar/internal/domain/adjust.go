@@ -2,7 +2,14 @@
 // dates to business days.
 package domain
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"time"
+)
+
+// ErrInvalidDate means a text that is not a date yyyy-mm-dd.
+var ErrInvalidDate = errors.New("invalid date")
 
 // Date is a calendar day, with no time or zone.
 type Date struct {
@@ -11,12 +18,28 @@ type Date struct {
 	Day   int
 }
 
+// String is d as yyyy-mm-dd, the API's and the events' format.
+func (d Date) String() string { return fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day) }
+
+// ParseDate reads a date as String writes it, yyyy-mm-dd, or ErrInvalidDate.
+func ParseDate(s string) (Date, error) {
+	t, err := time.Parse(time.DateOnly, s)
+	if err != nil {
+		return Date{}, fmt.Errorf("%w: %q is not yyyy-mm-dd", ErrInvalidDate, s)
+	}
+	return DateOf(t), nil
+}
+
+// DateOf is the day of t in its own location.
+func DateOf(t time.Time) Date { return Date{Year: t.Year(), Month: t.Month(), Day: t.Day()} }
+
+// After reports whether d is a later day than o.
+func (d Date) After(o Date) bool { return d.utc().After(o.utc()) }
+
 func (d Date) utc() time.Time { return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC) }
 
-func (d Date) addDays(n int) Date {
-	t := d.utc().AddDate(0, 0, n)
-	return Date{t.Year(), t.Month(), t.Day()}
-}
+// AddDays is the day n days after d (before it, if n is negative).
+func (d Date) AddDays(n int) Date { return DateOf(d.utc().AddDate(0, 0, n)) }
 
 // Convention is how a date that falls on a non-business day is moved.
 type Convention string
@@ -64,7 +87,7 @@ func Adjust(d Date, c Convention, isHoliday func(Date) bool) Date {
 // nearest is the first business day from d (inclusive), moving step days at a time.
 func nearest(d Date, step int, isHoliday func(Date) bool) Date {
 	for !IsBusinessDay(d, isHoliday) {
-		d = d.addDays(step)
+		d = d.AddDays(step)
 	}
 	return d
 }

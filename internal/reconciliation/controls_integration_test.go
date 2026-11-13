@@ -75,7 +75,7 @@ func newWorld(t *testing.T) world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.cop, w.ledger, w.recon = cop, ledger.New(calendar.New(), outboxOf), reconciliation.New(w.events)
+	w.cop, w.ledger, w.recon = cop, ledger.New(calendar.New(outboxOf, time.Now), outboxOf), reconciliation.New(w.events)
 	return w
 }
 

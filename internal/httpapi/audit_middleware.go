@@ -88,7 +88,7 @@ func (t *auditTrail) record(ctx context.Context, tx postgres.Tx, resp storedResp
 var summaryKeys = map[string]bool{
 	"id": true, "account_id": true, "counter_account_id": true, "amount": true, "captured": true, "currency": true,
 	"status": true, "kind": true, "balance_mode": true, "lower_limit": true, "value_date": true, "business_date": true,
-	"posted_at": true, "expires_at": true, "entries": true, "hold": true, "transaction": true,
+	"posted_at": true, "expires_at": true, "entries": true, "hold": true, "transaction": true, "closed_business_date": true,
 }
 
 // summaryOf is the summary of a JSON response. Numbers stay as json.Number: an amount in minor units never

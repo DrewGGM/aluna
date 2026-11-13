@@ -45,8 +45,10 @@ type Service struct {
 	events   Events
 }
 
-// New creates the service.
-func New(events Events) *Service { return &Service{calendar: calendar.New(), events: events} }
+// New creates the service; it reads the entities' business dates from cal and emits through events.
+func New(cal *calendar.Service, events Events) *Service {
+	return &Service{calendar: cal, events: events}
+}
 
 // mappings is app.Mappings over q.
 type mappings struct {

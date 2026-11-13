@@ -42,7 +42,7 @@ func newCuifWorld(t *testing.T) cuifWorld {
 	}
 	return cuifWorld{
 		entity: entity, a: apiServerAsRole(t, entity, events, "finance-a", "finance"), b: apiServerAsRole(t, entity, events, "finance-b", "finance"),
-		accounting: accounting.New(events),
+		accounting: accounting.New(calendar.New(events, time.Now), events),
 	}
 }
 

@@ -201,7 +201,7 @@ func newRailSide(t *testing.T) railSide {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.DiscardHandler)
-	calendarSvc, complianceSvc, productSvc := calendar.New(), compliance.New(events), products.New(events)
+	calendarSvc, complianceSvc, productSvc := calendar.New(events, time.Now), compliance.New(events), products.New(events)
 	ledgerSvc, pricingSvc := ledger.New(calendarSvc, events), pricing.New(productSvc, calendarSvc, pricing.SingleAccount)
 	depositSvc := deposits.New(ledgerSvc, party.New(events, complianceSvc.PartyScreener()), productSvc, calendarSvc, pricingSvc, events)
 	r.rail = payments.NewSimulatedRail(inbox.URL, railSecret, inbox.Client(), log)

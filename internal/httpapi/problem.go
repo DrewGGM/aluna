@@ -207,6 +207,11 @@ var problems = []struct {
 	{accounting.ErrMappingOverlap, conflict("mapping_overlap", "Another mapping of the pattern holds in that period")},
 	{accounting.ErrNotProjected, Problem{Status: http.StatusNotFound, Code: "gl_day_not_projected", Title: "The day has no projection of the GL: it is open, it had no transactions, or it is before the entity's first CUIF mapping"}},
 	{accounting.ErrDayUnmapped, conflict("gl_day_unmapped", "An account of the day has no CUIF mapping in force, so the day has no GL")},
+	// calendar
+	{errNoBusinessDateToClose, invalidRequest("Missing business date", "A rollover carries business_date, the business date to close, yyyy-mm-dd.")},
+	{calendar.ErrLegalEntityNotFound, Problem{Status: http.StatusNotFound, Code: "legal_entity_not_found", Title: "The token's legal entity is not registered"}},
+	{calendar.ErrStaleBusinessDate, conflict("business_date_stale", "The business date is not the one expected")},
+	{calendar.ErrBusinessDateAhead, unprocessable("business_date_ahead", "The business date to close has not started yet in America/Bogota")},
 	// close of a period
 	{calendar.ErrInvalidPeriod, invalidRequest("Invalid period", "A period is a month, yyyy-mm.")},
 	{calendar.ErrPeriodNotEnded, unprocessable("period_not_ended", "The period has not ended: the business date is in it or before it")},

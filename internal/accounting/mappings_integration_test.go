@@ -57,7 +57,7 @@ func newService(t *testing.T) *accounting.Service {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return accounting.New(events)
+	return accounting.New(calendar.New(events, time.Now), events)
 }
 
 func load(t *testing.T, s *accounting.Service, entity ids.ID, m []accounting.Mapping) error {

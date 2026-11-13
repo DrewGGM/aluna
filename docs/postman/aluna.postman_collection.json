@@ -172,6 +172,79 @@
       ]
     },
     {
+      "name": "business-date",
+      "item": [
+        {
+          "name": "Read the business date",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/business-date",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "business-date"
+              ]
+            },
+            "description": "The entity's current business date (FR-13, ADR-0006): the day its postings are booked on until the next rollover. An entity of the token that is not registered is 404 `legal_entity_not_found`.\n\nPermission: `calendar.business_date.read`"
+          }
+        },
+        {
+          "name": "Roll the business date over",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"business_date\": \"2026-10-30\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/business-date/rollover",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "business-date",
+                "rollover"
+              ]
+            },
+            "description": "Closes the entity's business date `business_date`, advances it to the next business day (FR-13, ADR-0006) and emits `aluna.calendar.business-date.rolled.v1`. The operator's scheduler calls it at the end of each business day with a `system` client. It does not wait for the postings in flight: those that already read the closed date keep it. A day closes once it has started in America/Bogota: a `business_date` after today there is 422 `business_date_ahead`, so the business date never runs ahead of the calendar. If the business date is not `business_date` (another rollover advanced it, or the caller is behind), it is 409 `business_date_stale`; `GET /v1/business-date` says which one it is. Either way nothing changes. A body without `business_date` is 400, and an entity of the token that is not registered is 404 `legal_entity_not_found`. Idempotent by `Idempotency-Key`: a retry with the same key gets the same response without advancing again.\n\nPermission: `calendar.business_date.rollover`"
+          }
+        }
+      ]
+    },
+    {
       "name": "cuif-mappings",
       "item": [
         {

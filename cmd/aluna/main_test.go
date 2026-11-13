@@ -56,6 +56,12 @@ func TestRunWithoutValidCommandPrintsUsage(t *testing.T) {
 		"verify without blocks":        {"audit", "verify"},
 		"verify reversed range":        {"audit", "verify", "--from", "3", "--to", "2"},
 		"verify with extra arguments":  {"audit", "verify", "--from", "1", "--to", "2", "extra"},
+		"entity without subcommand":    {"entity"},
+		"unknown entity subcommand":    {"entity", "delete"},
+		"create without name":          {"entity", "create", "--business-date", "2026-10-30", "--currency", "COP"},
+		"create without business date": {"entity", "create", "--name", "Entity", "--currency", "COP"},
+		"create without currency":      {"entity", "create", "--name", "Entity", "--business-date", "2026-10-30"},
+		"create with extra arguments":  {"entity", "create", "--name", "Entity", "--business-date", "2026-10-30", "--currency", "COP", "extra"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -180,6 +186,29 @@ func TestMigrateNeedsDatabaseURL(t *testing.T) {
 
 	if code != 1 || !strings.Contains(errOut.String(), "ALUNA_DATABASE_URL") {
 		t.Fatalf("code = %d, stderr = %q", code, errOut.String())
+	}
+}
+
+// TestEntityCreateChecksItsFlags: a business date that is not yyyy-mm-dd or an ID that is not a UUID exits with 1
+// before connecting to the database.
+func TestEntityCreateChecksItsFlags(t *testing.T) {
+	t.Setenv("ALUNA_DATABASE_URL", "postgres://nobody@127.0.0.1:1/aluna")
+	cases := map[string][]string{
+		"--business-date": {"--business-date", "30/10/2026", "--currency", "COP"},
+		"--id":            {"--id", "123", "--business-date", "2026-10-30", "--currency", "COP"},
+	}
+	for flag, args := range cases {
+		t.Run(flag, func(t *testing.T) {
+			defer func(w io.Writer) { stderr = w }(stderr)
+			var errOut bytes.Buffer
+			stderr = &errOut
+
+			code := run(append([]string{"entity", "create", "--name", "Entity"}, args...), io.Discard)
+
+			if code != 1 || !strings.Contains(errOut.String(), flag) {
+				t.Fatalf("code = %d, stderr = %q", code, errOut.String())
+			}
+		})
 	}
 }
 

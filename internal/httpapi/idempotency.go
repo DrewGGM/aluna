@@ -168,6 +168,11 @@ func (r storedResponse) VisitRequestReversalResponse(w http.ResponseWriter) erro
 // VisitApproveRequestResponse writes the stored response of POST /v1/approvals/{id}/approval.
 func (r storedResponse) VisitApproveRequestResponse(w http.ResponseWriter) error { return r.write(w) }
 
+// VisitRolloverBusinessDateResponse writes the stored response of POST /v1/business-date/rollover.
+func (r storedResponse) VisitRolloverBusinessDateResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitRejectRequestResponse writes the response of POST /v1/approvals/{id}/rejection.
 func (r storedResponse) VisitRejectRequestResponse(w http.ResponseWriter) error { return r.write(w) }
 

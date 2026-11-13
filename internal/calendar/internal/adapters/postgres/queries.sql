@@ -22,3 +22,8 @@ ON CONFLICT (legal_entity_id, period) DO UPDATE SET status = 'closing' WHERE cal
 -- name: MarkPeriodClosed :exec
 UPDATE calendar.periods SET status = 'closed', closed_by = @closed_by
 WHERE legal_entity_id = @legal_entity_id AND period = @period;
+
+-- Only the tables' owner runs it: aluna_app has no INSERT, so the application never creates entities.
+-- name: CreateLegalEntity :exec
+INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
+VALUES (@id, @name, @business_date, @functional_currency);

@@ -329,7 +329,7 @@ func TestTheLastCustomerActivityIsTheBusinessDate(t *testing.T) {
 	a, b := w.active(t), w.active(t)
 	monday, tuesday := calendar.Date{Year: 2026, Month: time.March, Day: 2}, calendar.Date{Year: 2026, Month: time.March, Day: 3}
 	inTx(t, func(tx postgres.Tx) error {
-		_, err := calendar.New().Rollover(t.Context(), tx, w.entity, monday)
+		_, err := w.calendar.Rollover(t.Context(), tx, w.entity, monday)
 		return err
 	})
 

@@ -34,6 +34,14 @@ var (
 	chiquinquiraSince = 2026
 )
 
+// bogota is the entities' zone, America/Bogota: calendar.legal_entities has a timezone column, America/Bogota by
+// default, and every entity is Colombian today. Colombia has kept UTC-5 all year since 1993, so a fixed zone gives the
+// same day without depending on a time zone database in the image.
+var bogota = time.FixedZone("America/Bogota", -5*60*60)
+
+// Today is the day it is at now in America/Bogota, the entities' day.
+func Today(now time.Time) Date { return DateOf(now.In(bogota)) }
+
 // ColombianHolidays are Colombia's national holidays in year (Law 51 of 1983 and Law 2578 of 2026), in
 // order. Two holidays that fall on the same Monday (Sacred Heart and Saints Peter and Paul in some years)
 // are a single date. The rules hold since 1984, when Law 51 took effect.
@@ -50,10 +58,10 @@ func ColombianHolidays(year int) []Date {
 	}
 	e := easter(year)
 	for _, offset := range easterHolidays {
-		days = append(days, e.addDays(offset))
+		days = append(days, e.AddDays(offset))
 	}
 	for _, offset := range easterMondayHolidays {
-		days = append(days, nextMonday(e.addDays(offset)))
+		days = append(days, nextMonday(e.AddDays(offset)))
 	}
 	slices.SortFunc(days, func(a, b Date) int { return a.utc().Compare(b.utc()) })
 	return slices.Compact(days)
@@ -61,7 +69,7 @@ func ColombianHolidays(year int) []Date {
 
 // nextMonday is d if it is a Monday; otherwise, the following Monday.
 func nextMonday(d Date) Date {
-	return d.addDays((int(time.Monday) - int(d.utc().Weekday()) + 7) % 7)
+	return d.AddDays((int(time.Monday) - int(d.utc().Weekday()) + 7) % 7)
 }
 
 // easter is Easter Sunday in the Gregorian calendar (the anonymous Meeus/Jones/Butcher algorithm).

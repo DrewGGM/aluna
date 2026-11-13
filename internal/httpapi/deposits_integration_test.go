@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -59,8 +60,8 @@ func newDepositWorld(t *testing.T) depositWorld {
 		ts: apiServerWith(t, entity, events), entity: entity, parties: party.New(events, compliance.New(events).PartyScreener()),
 		products: products.New(events),
 	}
-	w.deposits = deposits.New(ledger.New(calendar.New(), events), w.parties, w.products, calendar.New(),
-		pricing.New(w.products, calendar.New(), pricing.SingleAccount), events)
+	cal := calendar.New(events, time.Now)
+	w.deposits = deposits.New(ledger.New(cal, events), w.parties, w.products, cal, pricing.New(w.products, cal, pricing.SingleAccount), events)
 	var vault gen.LedgerAccount
 	if status := call(t, w.ts, http.MethodPost, "/v1/ledger-accounts",
 		`{"code":"A.CASH.VAULT","kind":"asset","currency":"COP","balance_mode":"sync"}`, &vault); status != http.StatusCreated {

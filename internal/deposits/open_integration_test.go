@@ -47,6 +47,7 @@ const author = "product-designer"
 type world struct {
 	entity   ids.ID
 	events   *recorder
+	calendar *calendar.Service
 	ledger   *ledger.Service
 	parties  *party.Service
 	products *products.Service
@@ -84,9 +85,10 @@ func newWorldWith(t *testing.T, day string, events deposits.Events) world {
 			VALUES ($1, 'Entity', $2, 'COP')`, w.entity, day)
 		return err
 	})
-	w.ledger, w.parties, w.products = ledger.New(calendar.New(), events), party.New(events, screenedClear{}), products.New(events)
-	w.pricing = pricing.New(w.products, calendar.New(), pricing.SingleAccount)
-	w.deposits = deposits.New(w.ledger, w.parties, w.products, calendar.New(), w.pricing, events)
+	w.calendar = calendar.New(events, time.Now)
+	w.ledger, w.parties, w.products = ledger.New(w.calendar, events), party.New(events, screenedClear{}), products.New(events)
+	w.pricing = pricing.New(w.products, w.calendar, pricing.SingleAccount)
+	w.deposits = deposits.New(w.ledger, w.parties, w.products, w.calendar, w.pricing, events)
 	return w
 }
 

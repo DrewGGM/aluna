@@ -72,7 +72,8 @@ func TestPostingLoad(t *testing.T) {
 	if out, err := alunaCmd(t, bin, []string{"ALUNA_DATABASE_URL=" + dsn}, "migrate", "up").CombinedOutput(); err != nil {
 		t.Fatalf("aluna migrate up: %v\n%s", err, out)
 	}
-	// as the tables' owner, because no API creates entities (Q-136); the worker's jobs then run over it during the load
+	// as the tables' owner with SQL, not aluna entity create: the load runs on any day, a weekend or a holiday included,
+	// with today as the business date; the worker's jobs then run over it during the load
 	entity := ids.New()
 	if err := execOn(t.Context(), dsn, `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
 		VALUES ($1, 'Load', current_date, 'COP')`, entity); err != nil {

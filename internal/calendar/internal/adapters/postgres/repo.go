@@ -20,6 +20,7 @@ var (
 	_ app.Store        = (*Store)(nil)
 	_ app.PeriodStore  = (*Store)(nil)
 	_ app.PeriodCloser = (*Store)(nil)
+	_ app.EntityStore  = (*Store)(nil)
 )
 
 // Store implements calendar persistence over a connection or a transaction.
@@ -39,7 +40,7 @@ func (s *Store) BusinessDate(ctx context.Context, entity ids.ID) (domain.Date, e
 	if err != nil {
 		return domain.Date{}, fmt.Errorf("read business date: %w", err)
 	}
-	return domain.Date{Year: d.Year(), Month: d.Month(), Day: d.Day()}, nil
+	return domain.DateOf(d), nil
 }
 
 // AdvanceBusinessDate changes the business date from expected to next if it is still expected.
@@ -49,6 +50,17 @@ func (s *Store) AdvanceBusinessDate(ctx context.Context, entity ids.ID, expected
 		return false, fmt.Errorf("advance business date: %w", err)
 	}
 	return n == 1, nil
+}
+
+// CreateLegalEntity stores e.
+func (s *Store) CreateLegalEntity(ctx context.Context, e app.LegalEntity) error {
+	err := s.q.CreateLegalEntity(ctx, sqlcgen.CreateLegalEntityParams{
+		ID: e.ID, Name: e.Name, BusinessDate: dateOf(e.BusinessDate), FunctionalCurrency: e.Currency,
+	})
+	if err != nil {
+		return fmt.Errorf("create legal entity: %w", err)
+	}
+	return nil
 }
 
 // PeriodStatus reads the status of the entity's yyyy-mm period; found is false if it has no row.

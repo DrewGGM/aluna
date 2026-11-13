@@ -18,9 +18,9 @@ a una tasa constante de 300 postings/s durante 10 minutos.
 - `aluna api` y `aluna worker` como procesos, compilados sin `-race` (como se despliegan), conectados con el
   rol `aluna_app` a una base nueva migrada con `aluna migrate up`. El worker corre sus jobs como en
   producción: agrega los saldos async, publica el outbox y sella la auditoría mientras entra la carga.
-- Una entidad legal creada como dueño de las tablas, porque ninguna API crea entidades (Q-136), con fecha de
-  negocio de hoy: los jobs del worker que recorren entidades (controles, GL, causación) corren sobre ella
-  durante la carga.
+- Una entidad legal creada con SQL como dueño de las tablas, con fecha de negocio de hoy: la prueba corre
+  cualquier día, también un fin de semana o un festivo, y `aluna entity create` solo acepta un día hábil. Los
+  jobs del worker que recorren entidades (controles, GL, causación) corren sobre ella durante la carga.
 - Tokens de un emisor OIDC de prueba (`oidctest`) con el rol `operator` de esa entidad.
 - Las cuentas siguen QS-3: 1.000 clientes sync (pasivos con un sobregiro amplio: el límite se valida en cada
   posting, pero no hace falta fondearlos), una cuenta settlement async (activo) y una de ingresos async,

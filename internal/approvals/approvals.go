@@ -14,6 +14,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/access"
 	pg "github.com/DrewGGM/aluna/internal/approvals/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
@@ -80,15 +81,21 @@ type registration struct {
 	exec       Executor
 }
 
+// Events publishes the requests' events; outbox.Outbox implements it.
+type Events interface {
+	Emit(ctx context.Context, tx postgres.Tx, e outbox.Event) error
+}
+
 // Service stores and decides requests; each module registers its kinds during wiring.
 type Service struct {
 	policy *access.Policy
 	kinds  map[string]registration
+	events Events
 }
 
 // New creates the service; policy says who can approve each kind.
-func New(policy *access.Policy) *Service {
-	return &Service{policy: policy, kinds: map[string]registration{}}
+func New(policy *access.Policy, events Events) *Service {
+	return &Service{policy: policy, kinds: map[string]registration{}, events: events}
 }
 
 // RegisterKind registers kind: whoever approves or rejects it needs permission with scope all, and
@@ -97,7 +104,8 @@ func (s *Service) RegisterKind(kind, permission string, exec Executor) {
 	s.kinds[kind] = registration{permission: permission, exec: exec}
 }
 
-// Request stores, in tx, a pending request of kind with payload, made by maker in its entity.
+// Request stores, in tx, a pending request of kind with payload, made by maker in its entity, and emits
+// aluna.approvals.request.created.v1.
 func (s *Service) Request(ctx context.Context, tx postgres.Tx, kind string, payload any, maker access.Principal) (Request, error) {
 	if _, ok := s.kinds[kind]; !ok {
 		return Request{}, fmt.Errorf("%w: %s", ErrUnknownKind, kind)
@@ -110,12 +118,13 @@ func (s *Service) Request(ctx context.Context, tx postgres.Tx, kind string, payl
 	if err != nil {
 		return Request{}, err
 	}
-	return requestOf(row), nil
+	return s.emit(ctx, tx, row)
 }
 
 // Approve approves request id in tx: it runs its Executor with the original payload and, if it succeeds,
-// leaves it approved with the result, in the same transaction. If the command is rejected
-// (ErrCommandRejected), it undoes what it did and leaves the request failed with the error.
+// leaves it approved with the result, in the same transaction, and emits aluna.approvals.request.approved.v1.
+// If the command is rejected (ErrCommandRejected), it undoes what it did and leaves the request failed with the
+// error, with no event.
 func (s *Service) Approve(ctx context.Context, tx postgres.Tx, id ids.ID, checker access.Principal) (Request, error) {
 	row, k, err := s.lockForDecision(ctx, tx, id, checker)
 	if err != nil {
@@ -143,7 +152,7 @@ func (s *Service) Approve(ctx context.Context, tx postgres.Tx, id ids.ID, checke
 	if err != nil {
 		return Request{}, err
 	}
-	return requestOf(decided), nil
+	return s.emit(ctx, tx, decided)
 }
 
 // failureText is a rejected command's error as it is stored: UTF-8 text with no NUL (PostgreSQL does not
@@ -156,7 +165,8 @@ func failureText(err error) string {
 	return text
 }
 
-// Reject rejects request id in tx with reason; the command does not run.
+// Reject rejects request id in tx with reason, and emits aluna.approvals.request.rejected.v1; the command does
+// not run.
 func (s *Service) Reject(ctx context.Context, tx postgres.Tx, id ids.ID, checker access.Principal, reason string) (Request, error) {
 	if strings.TrimSpace(reason) == "" {
 		return Request{}, ErrNoReason
@@ -168,7 +178,7 @@ func (s *Service) Reject(ctx context.Context, tx postgres.Tx, id ids.ID, checker
 	if err != nil {
 		return Request{}, err
 	}
-	return requestOf(decided), nil
+	return s.emit(ctx, tx, decided)
 }
 
 // lockForDecision locks request id for checker to decide it. It must exist in checker's entity and be of a
@@ -210,6 +220,42 @@ func (s *Service) permitted(checker access.Principal, kind string) (registration
 		return registration{}, fmt.Errorf("%w: %s only with scope own", access.ErrForbidden, k.permission)
 	}
 	return k, nil
+}
+
+// Events of the requests (architecture §8).
+const (
+	typeCreated  = "aluna.approvals.request.created.v1"
+	typeApproved = "aluna.approvals.request.approved.v1"
+	typeRejected = "aluna.approvals.request.rejected.v1"
+)
+
+// statusEvents is the event of a request that has just taken each status. Failed has none: its command was undone,
+// so approved would announce an effect that never happened, and a failure is no event of architecture §8.
+var statusEvents = map[Status]string{StatusPending: typeCreated, StatusApproved: typeApproved, StatusRejected: typeRejected}
+
+// emit emits, in tx, the event of request row, just stored or decided, and returns the request.
+func (s *Service) emit(ctx context.Context, tx postgres.Tx, row pg.Row) (Request, error) {
+	r := requestOf(row)
+	typ, ok := statusEvents[r.Status]
+	if !ok {
+		return r, nil
+	}
+	err := s.events.Emit(ctx, tx, outbox.Event{
+		Type: typ, Subject: "approvals/" + r.ID.String(), LegalEntityID: r.LegalEntityID, SchemaVersion: 1,
+		Data: requestPayload{RequestID: r.ID, Kind: r.Kind, Status: r.Status},
+	})
+	if err != nil {
+		return Request{}, err
+	}
+	return r, nil
+}
+
+// requestPayload leaves out the request's payload and result, which carry the business data of the command, and its
+// maker and checker: every integrator receives the event, and a staff subject must not reach them.
+type requestPayload struct {
+	RequestID ids.ID `json:"request_id"`
+	Kind      string `json:"kind"`
+	Status    Status `json:"status"`
 }
 
 // List is the most recent requests of entity (up to 100); with status, only those in that state.

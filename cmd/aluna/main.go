@@ -369,7 +369,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 	if err != nil {
 		return httpapi.API{}, err
 	}
-	requests := approvals.New(policy)
+	requests := approvals.New(policy, events)
 	return httpapi.API{
 		LedgerHandlers:         httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
 		ApprovalHandlers:       httpapi.NewApprovalHandlers(requests, uow, keys, pool),
@@ -380,7 +380,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 		ComplianceHandlers:     httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
 		PaymentHandlers:        httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: httpapi.NewReconciliationHandlers(reconciliation.New(events), uow, keys, pool),
-		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(), reconciliation.New(events), requests, uow, keys, pool),
+		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(events), reconciliation.New(events), requests, uow, keys, pool),
 		WebhookHandlers:        httpapi.NewWebhookHandlers(webhooks.New(), uow, pool),
 	}, nil
 }
@@ -525,7 +525,7 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality,
 	cfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
 		Audit: records, Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
-		Accounting: accounting.New(), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
+		Accounting: accounting.New(events), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)

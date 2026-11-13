@@ -100,7 +100,8 @@ func TestAnInactiveAccountTurnsDormant(t *testing.T) {
 		AND to_status = 'dormant' AND actor = 'deposits.dormancy'`, quiet.ID); n != 1 {
 		t.Fatalf("%d recorded changes to dormant, want 1 by the dormancy job", n)
 	}
-	want := "deposit-accounts/" + quiet.ID.String() + ` {"account_id":"` + quiet.ID.String() + `","last_customer_activity_on":"2026-03-02"}`
+	want := "deposit-accounts/" + quiet.ID.String() + ` {"account_id":"` + quiet.ID.String() +
+		`","previous_status":"active","status":"dormant","last_customer_activity_on":"2026-03-02"}`
 	if got := w.dormantEvents(t); len(got) != 1 || got[0] != want {
 		t.Fatalf("dormant events = %v, want once %s", got, want)
 	}

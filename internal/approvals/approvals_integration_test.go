@@ -20,6 +20,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
@@ -48,9 +49,14 @@ type world struct {
 	maker, checker access.Principal
 }
 
-func newWorld(exec approvals.Executor) world {
+func newWorld(t *testing.T, exec approvals.Executor) world {
+	t.Helper()
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	entity := ids.New()
-	svc := approvals.New(testPolicy)
+	svc := approvals.New(testPolicy, events)
 	svc.RegisterKind(testKind, testPermission, exec)
 	return world{
 		svc:     svc,
@@ -99,7 +105,7 @@ func TestApproveRunsTheCommandWithTheOriginalPayload(t *testing.T) {
 	var gotPayload string
 	var gotChecker access.Principal
 	runs := 0
-	w := newWorld(func(_ context.Context, _ postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
+	w := newWorld(t, func(_ context.Context, _ postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
 		runs++
 		gotPayload, gotChecker = string(payload), checker
 		return json.RawMessage(`{"posted": true}`), nil
@@ -122,7 +128,7 @@ func TestApproveRunsTheCommandWithTheOriginalPayload(t *testing.T) {
 func TestACommandWithoutResult(t *testing.T) {
 	for name, result := range map[string]json.RawMessage{"nil": nil, "empty": {}} {
 		t.Run(name, func(t *testing.T) {
-			w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
+			w := newWorld(t, func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
 				return result, nil
 			})
 			r := w.request(t, map[string]any{})
@@ -138,7 +144,7 @@ func TestACommandWithoutResult(t *testing.T) {
 
 // TestALongRejectionIsTruncated: up to 2 KB of a rejected command's error is stored.
 func TestALongRejectionIsTruncated(t *testing.T) {
-	w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
+	w := newWorld(t, func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
 		return nil, fmt.Errorf("%w: %s", approvals.ErrCommandRejected, strings.Repeat("€", 3000))
 	})
 	r := w.request(t, map[string]any{})
@@ -158,7 +164,7 @@ func TestALongRejectionIsTruncated(t *testing.T) {
 
 // TestARequestExpiresInSevenDays: a pending request expires 7 days after it is created.
 func TestARequestExpiresInSevenDays(t *testing.T) {
-	r := newWorld(succeed).request(t, map[string]any{})
+	r := newWorld(t, succeed).request(t, map[string]any{})
 
 	if life := r.ExpiresAt.Sub(r.CreatedAt); life != 7*24*time.Hour || r.Status != approvals.StatusPending {
 		t.Fatalf("the %s request expires %s after creation, want pending for 7 days", r.Status, life)
@@ -168,7 +174,7 @@ func TestARequestExpiresInSevenDays(t *testing.T) {
 // TestTheMakerCannotDecide (AB-5, TH-4): the maker neither approves nor rejects their request, and the
 // database prevents it even if the service did not check.
 func TestTheMakerCannotDecide(t *testing.T) {
-	w := newWorld(succeed)
+	w := newWorld(t, succeed)
 	r := w.request(t, map[string]any{})
 
 	_, approveErr := w.approve(t, r.ID, w.maker)
@@ -203,7 +209,7 @@ func pgCode(err error) string {
 // managed to do is undone and the request ends up failed with the error; it cannot be approved again.
 func TestARejectedCommandLeavesTheRequestFailed(t *testing.T) {
 	var w world
-	w = newWorld(func(ctx context.Context, tx postgres.Tx, _ json.RawMessage, checker access.Principal) (json.RawMessage, error) {
+	w = newWorld(t, func(ctx context.Context, tx postgres.Tx, _ json.RawMessage, checker access.Principal) (json.RawMessage, error) {
 		if _, err := w.svc.Request(ctx, tx, testKind, map[string]any{"effect": "partial"}, checker); err != nil {
 			return nil, err
 		}
@@ -237,7 +243,7 @@ func TestARejectedCommandLeavesTheRequestFailed(t *testing.T) {
 func TestAnUnexpectedErrorKeepsTheRequestPending(t *testing.T) {
 	down := errors.New("the dependency does not respond")
 	fail := true
-	w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
+	w := newWorld(t, func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
 		if fail {
 			return nil, down
 		}
@@ -262,7 +268,7 @@ func TestAnUnexpectedErrorKeepsTheRequestPending(t *testing.T) {
 // failed: the whole approval is retried and, once the conflict clears, it ends up approved.
 func TestAConflictIsRetriedNotFailed(t *testing.T) {
 	attempts := 0
-	w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
+	w := newWorld(t, func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
 		attempts++
 		if attempts == 1 {
 			return nil, &pgconn.PgError{Code: "40001"}
@@ -281,7 +287,7 @@ func TestAConflictIsRetriedNotFailed(t *testing.T) {
 // TestADecidedRequestDoesNotChange: approving or rejecting twice gives ErrNotPending, and the database does
 // not allow changing or deleting a decided request, nor what was requested in a pending one.
 func TestADecidedRequestDoesNotChange(t *testing.T) {
-	w := newWorld(succeed)
+	w := newWorld(t, succeed)
 	decided := w.request(t, map[string]any{})
 	if _, err := w.reject(t, decided.ID, w.checker, "not applicable"); err != nil {
 		t.Fatal(err)
@@ -325,7 +331,7 @@ func ownerExec(t *testing.T, sql string) error {
 // TestAnExpiredRequestCannotBeDecided: after 7 days a pending request expires: it is neither approved nor
 // rejected, not even via SQL, and List shows it as expired.
 func TestAnExpiredRequestCannotBeDecided(t *testing.T) {
-	w := newWorld(succeed)
+	w := newWorld(t, succeed)
 	expired := ids.New()
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO approvals.requests (id, legal_entity_id, kind, payload, maker, created_at, expires_at)
@@ -354,7 +360,7 @@ func TestAnExpiredRequestCannotBeDecided(t *testing.T) {
 // TestOnlyACheckerWithThePermissionDecides: whoever holds the kind's permission with scope all, in the same
 // entity, approves; a kind nobody registered cannot be requested.
 func TestOnlyACheckerWithThePermissionDecides(t *testing.T) {
-	w := newWorld(succeed)
+	w := newWorld(t, succeed)
 	r := w.request(t, map[string]any{})
 	cases := map[string]struct {
 		checker access.Principal
@@ -383,7 +389,7 @@ func TestOnlyACheckerWithThePermissionDecides(t *testing.T) {
 // rejected and the command does not run.
 func TestRejectionNeedsAReason(t *testing.T) {
 	runs := 0
-	w := newWorld(func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
+	w := newWorld(t, func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
 		runs++
 		return nil, nil
 	})
@@ -403,12 +409,12 @@ func TestRejectionNeedsAReason(t *testing.T) {
 // TestListFiltersByStatusAndEntity: List only sees the requested entity, newest first, and filters by
 // state.
 func TestListFiltersByStatusAndEntity(t *testing.T) {
-	w := newWorld(succeed)
+	w := newWorld(t, succeed)
 	first, second := w.request(t, map[string]any{}), w.request(t, map[string]any{})
 	if _, err := w.approve(t, first.ID, w.checker); err != nil {
 		t.Fatal(err)
 	}
-	newWorld(succeed).request(t, map[string]any{}) // from another entity
+	newWorld(t, succeed).request(t, map[string]any{}) // from another entity
 
 	all, errAll := w.svc.List(t.Context(), testPool, w.maker.LegalEntityID, "")
 	pending, errPending := w.svc.List(t.Context(), testPool, w.maker.LegalEntityID, approvals.StatusPending)

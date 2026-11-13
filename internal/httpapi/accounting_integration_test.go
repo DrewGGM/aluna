@@ -23,8 +23,9 @@ import (
 
 // cuifWorld is a new entity with two finance subjects: the maker and the checker.
 type cuifWorld struct {
-	entity ids.ID
-	a, b   *httptest.Server
+	entity     ids.ID
+	a, b       *httptest.Server
+	accounting *accounting.Service
 }
 
 func newCuifWorld(t *testing.T) cuifWorld {
@@ -41,6 +42,7 @@ func newCuifWorld(t *testing.T) cuifWorld {
 	}
 	return cuifWorld{
 		entity: entity, a: apiServerAsRole(t, entity, events, "finance-a", "finance"), b: apiServerAsRole(t, entity, events, "finance-b", "finance"),
+		accounting: accounting.New(events),
 	}
 }
 
@@ -54,7 +56,7 @@ func cuifBody(rows string) string {
 
 func (w cuifWorld) mapped(t *testing.T, account string) (string, error) {
 	t.Helper()
-	return accounting.New().MapToCUIF(t.Context(), testPool, w.entity, account, calendar.Date{Year: 2026, Month: time.March, Day: 2})
+	return w.accounting.MapToCUIF(t.Context(), testPool, w.entity, account, calendar.Date{Year: 2026, Month: time.March, Day: 2})
 }
 
 // TestAFileOfMappingsLoadsWithMakerChecker (FR-36, FR-39): nothing holds until someone else approves it, and the maker

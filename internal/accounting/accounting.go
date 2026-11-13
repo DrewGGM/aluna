@@ -12,6 +12,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/accounting/internal/domain"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
@@ -33,11 +34,19 @@ var (
 // ErrInvalidMapping if a row is not valid, and ErrMappingOverlap if two of them overlap.
 func ParseMappings(file io.Reader) ([]Mapping, error) { return domain.ParseMappings(file) }
 
-// Service keeps the mappings.
-type Service struct{ calendar *calendar.Service }
+// Events publishes accounting events; outbox.Outbox implements it.
+type Events interface {
+	Emit(ctx context.Context, tx postgres.Tx, e outbox.Event) error
+}
+
+// Service keeps the mappings and closes periods.
+type Service struct {
+	calendar *calendar.Service
+	events   Events
+}
 
 // New creates the service.
-func New() *Service { return &Service{calendar: calendar.New()} }
+func New(events Events) *Service { return &Service{calendar: calendar.New(), events: events} }
 
 // mappings is app.Mappings over q.
 type mappings struct {

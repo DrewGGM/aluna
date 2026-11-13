@@ -93,7 +93,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	if err != nil {
 		t.Fatal(err)
 	}
-	requests := approvals.New(policy)
+	requests := approvals.New(policy, events)
 	api := API{
 		LedgerHandlers:         NewLedgerHandlers(ledgerSvc, requests, uow, keys, testPool),
 		ApprovalHandlers:       NewApprovalHandlers(requests, uow, keys, testPool),
@@ -104,7 +104,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 		ComplianceHandlers:     NewComplianceHandlers(complianceSvc, requests, uow, keys),
 		PaymentHandlers:        NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: NewReconciliationHandlers(reconciliation.New(events), uow, keys, testPool),
-		AccountingHandlers:     NewAccountingHandlers(accounting.New(), reconciliation.New(events), requests, uow, keys, testPool),
+		AccountingHandlers:     NewAccountingHandlers(accounting.New(events), reconciliation.New(events), requests, uow, keys, testPool),
 		WebhookHandlers:        NewWebhookHandlers(webhooks.New(), uow, testPool),
 	}
 	cfg := ServerConfig{

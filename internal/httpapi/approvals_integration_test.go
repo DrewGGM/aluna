@@ -17,6 +17,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/audit"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
@@ -37,7 +38,11 @@ func newApprovalWorld(t *testing.T) approvalWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := approvalWorld{svc: approvals.New(policy), entity: ids.New(), runs: new(int)}
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := approvalWorld{svc: approvals.New(policy, events), entity: ids.New(), runs: new(int)}
 	w.svc.RegisterKind(testApprovalKind, "ledger.transactions.post",
 		func(context.Context, postgres.Tx, json.RawMessage, access.Principal) (json.RawMessage, error) {
 			*w.runs++

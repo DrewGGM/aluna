@@ -73,7 +73,7 @@ func newDeps(t *testing.T) jobs.Deps {
 		Audit:      records,
 		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(testPool), Outbox: events,
 		Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
-		Accounting: accounting.New(), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
+		Accounting: accounting.New(events), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
 	}
 }
 

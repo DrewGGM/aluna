@@ -186,7 +186,7 @@ func newJobs(t *testing.T, pool *pgxpool.Pool) jobs {
 	depositSvc := deposits.New(ledger.New(calendarSvc, events), party.New(events, complianceSvc.PartyScreener()), productSvc, calendarSvc,
 		pricingSvc, events)
 	return jobs{
-		calendar: calendarSvc, deposits: depositSvc, accounting: accounting.New(), reconciliation: reconciliation.New(events), webhooks: webhooks.New(),
+		calendar: calendarSvc, deposits: depositSvc, accounting: accounting.New(events), reconciliation: reconciliation.New(events), webhooks: webhooks.New(),
 	}
 }
 

@@ -75,9 +75,15 @@ var (
 	ErrMinimumWageTooLow = domain.ErrMinimumWageTooLow
 )
 
-// Events of deposit accounts (architecture §8): an opened account and a capitalization posted.
+// Events of deposit accounts (architecture §8): an opened account, its status changes and a capitalization
+// posted.
 const (
 	typeOpened      = "aluna.deposits.account.opened.v1"
+	typeActivated   = "aluna.deposits.account.activated.v1"
+	typeDormant     = "aluna.deposits.account.dormant.v1"
+	typeFrozen      = "aluna.deposits.account.frozen.v1"
+	typeUnfrozen    = "aluna.deposits.account.unfrozen.v1"
+	typeClosed      = "aluna.deposits.account.closed.v1"
 	typeCapitalized = "aluna.deposits.interest.capitalized.v1"
 )
 
@@ -131,12 +137,13 @@ type openedPayload struct {
 }
 
 // ChangeStatus moves, within tx, account accountID of the entity to status to, recording actor (a subject)
-// as who did it: ErrInvalidTransition if the diagram does not allow it, ErrKYCNotSatisfied to activate a
-// pending account whose party's KYC is not approved, and closing needs no pending holds and a posted balance
-// of 0 (ErrPendingHolds, ErrNotEmpty). Every movement of the account's money locks the account first (see
-// app.ChangeStatus), or a close could leave it closed with a balance.
+// as who did it, and emits the event of the change (aluna.deposits.account.activated.v1, .frozen.v1,
+// .unfrozen.v1, .dormant.v1 or .closed.v1): ErrInvalidTransition if the diagram does not allow it,
+// ErrKYCNotSatisfied to activate a pending account whose party's KYC is not approved, and closing needs no
+// pending holds and a posted balance of 0 (ErrPendingHolds, ErrNotEmpty). Every movement of the account's
+// money locks the account first (see app.ChangeStatus), or a close could leave it closed with a balance.
 func (s *Service) ChangeStatus(ctx context.Context, tx postgres.Tx, entity, accountID ids.ID, to Status, actor string) error {
-	return app.ChangeStatus(ctx, statusChanges{Store: pg.NewStore(tx), s: s, tx: tx}, entity, accountID, to, actor)
+	return app.ChangeStatus(ctx, statusChanges{s.statusWriter(tx)}, entity, accountID, to, actor)
 }
 
 // Deposit posts, within tx, cash into an active account of the entity from its product's cash account and
@@ -267,12 +274,8 @@ func (o opening) CreateLedgerAccount(ctx context.Context, in ledger.CreateAccoun
 	return o.s.ledger.CreateAccount(ctx, o.tx, in)
 }
 
-// statusChanges is app.StatusChanges over tx; the store gives LockAccount and SetStatus.
-type statusChanges struct {
-	pg.Store
-	s  *Service
-	tx postgres.Tx
-}
+// statusChanges is app.StatusChanges over tx; the store gives LockAccount.
+type statusChanges struct{ statusWriter }
 
 func (c statusChanges) Balance(ctx context.Context, ledgerAccountID ids.ID) (ledger.Balance, error) {
 	return c.s.ledger.Balance(ctx, c.tx, ledgerAccountID)
@@ -284,6 +287,55 @@ func (c statusChanges) BusinessDate(ctx context.Context, entity ids.ID) (calenda
 
 func (c statusChanges) KYCStatus(ctx context.Context, entity, partyID ids.ID) (party.KYCStatus, error) {
 	return c.s.kycStatus(ctx, c.tx, entity, partyID)
+}
+
+// statusWriter writes the status changes of accounts over tx, for both app.StatusChanges and app.Dormancy; the
+// store gives what else they read.
+type statusWriter struct {
+	pg.Store
+	s  *Service
+	tx postgres.Tx
+}
+
+func (s *Service) statusWriter(tx postgres.Tx) statusWriter {
+	return statusWriter{Store: pg.NewStore(tx), s: s, tx: tx}
+}
+
+// SetStatus moves account a to status to, with a's last customer activity, records the change with its actor
+// and emits the event of a going from its status to to.
+func (w statusWriter) SetStatus(ctx context.Context, a Account, to Status, actor string) error {
+	if err := w.Store.SetStatus(ctx, a, to, actor); err != nil {
+		return err
+	}
+	typ, data := statusEvent(a, to)
+	return w.s.events.Emit(ctx, w.tx, outbox.Event{
+		Type: typ, Subject: "deposit-accounts/" + a.ID.String(), LegalEntityID: a.LegalEntityID, SchemaVersion: 1, Data: data,
+	})
+}
+
+// statusEvent is the type and the payload of the event of account a going from its status to to. Every one
+// carries the account and both statuses; dormant adds the last customer activity. Back to active is unfrozen
+// from frozen and activated otherwise: a pending account by its KYC, a dormant one by its customer coming back.
+func statusEvent(a Account, to Status) (string, any) {
+	change := statusPayload{AccountID: a.ID, PreviousStatus: a.Status, Status: to}
+	switch {
+	case to == Dormant:
+		return typeDormant, dormantPayload{statusPayload: change, LastCustomerActivityOn: isoDate(a.LastCustomerActivityOn)}
+	case to == Frozen:
+		return typeFrozen, change
+	case to == Closed:
+		return typeClosed, change
+	case a.Status == Frozen:
+		return typeUnfrozen, change
+	default:
+		return typeActivated, change
+	}
+}
+
+type statusPayload struct {
+	AccountID      ids.ID `json:"account_id"`
+	PreviousStatus Status `json:"previous_status"`
+	Status         Status `json:"status"`
 }
 
 func (s *Service) movements(tx postgres.Tx) movements {

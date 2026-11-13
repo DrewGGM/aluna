@@ -88,15 +88,15 @@ type StatusChanges interface {
 	Balance(ctx context.Context, ledgerAccountID ids.ID) (ledger.Balance, error)
 	KYCStatus(ctx context.Context, entity, partyID ids.ID) (party.KYCStatus, error)
 	BusinessDate(ctx context.Context, entity ids.ID) (calendar.Date, error)
-	// SetStatus moves account a to status to, with a's last customer activity, and records the change with
-	// its actor.
+	// SetStatus moves account a to status to, with a's last customer activity, records the change with its
+	// actor and emits the event of a going from its status to to.
 	SetStatus(ctx context.Context, a domain.Account, to domain.Status, actor string) error
 }
 
-// ChangeStatus moves account id of the entity to status to, recording actor as who did it, if the diagram
-// allows it (else domain.ErrInvalidTransition). Activating a pending account needs its party's KYC
-// approved (else ErrKYCNotSatisfied); closing it needs no pending holds and a posted balance of 0. Moving it
-// to active records the business date as its last customer activity.
+// ChangeStatus moves account id of the entity to status to, recording actor as who did it, and emits the
+// event of the change, if the diagram allows it (else domain.ErrInvalidTransition). Activating a pending
+// account needs its party's KYC approved (else ErrKYCNotSatisfied); closing it needs no pending holds and a
+// posted balance of 0. Moving it to active records the business date as its last customer activity.
 //
 // The close reads the ledger balance under the account's lock, not the balance's: it holds only if every
 // movement of the account's money (postings, holds, captures) first locks the account the same way, checks

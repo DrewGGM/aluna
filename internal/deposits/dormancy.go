@@ -8,14 +8,9 @@ import (
 	"github.com/DrewGGM/aluna/internal/calendar"
 	pg "github.com/DrewGGM/aluna/internal/deposits/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/deposits/internal/app"
-	"github.com/DrewGGM/aluna/internal/deposits/internal/domain"
 	"github.com/DrewGGM/aluna/internal/ids"
-	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
-
-// typeDormant is the event of an account that turned dormant (architecture §8).
-const typeDormant = "aluna.deposits.account.dormant.v1"
 
 // MarkDormant marks dormant, in every entity, the active accounts whose customer has not moved them for more
 // than their product's dormancy days, counted to the entity's business date (FR-27), in batches of batch
@@ -95,8 +90,7 @@ func (s *Service) markVersionDormant(ctx context.Context, uow *postgres.UnitOfWo
 		var last ids.ID
 		err := uow.Do(ctx, func(tx postgres.Tx) error { // a retried batch starts again from the same after
 			var err error
-			d := dormancy{Store: pg.NewStore(tx), s: s, tx: tx}
-			n, last, err = app.MarkDormantBatch(ctx, d, entity, version, today, days, after, batch)
+			n, last, err = app.MarkDormantBatch(ctx, s.statusWriter(tx), entity, version, today, days, after, batch)
 			return err
 		})
 		if err != nil {
@@ -109,24 +103,9 @@ func (s *Service) markVersionDormant(ctx context.Context, uow *postgres.UnitOfWo
 	}
 }
 
-// dormancy is app.Dormancy over tx; the store gives Inactive and SetStatus.
-type dormancy struct {
-	pg.Store
-	s  *Service
-	tx postgres.Tx
-}
-
-func (d dormancy) EmitDormant(ctx context.Context, a domain.Account) error {
-	return d.s.events.Emit(ctx, d.tx, outbox.Event{
-		Type: typeDormant, Subject: "deposit-accounts/" + a.ID.String(), LegalEntityID: a.LegalEntityID, SchemaVersion: 1,
-		Data: dormantPayload{
-			AccountID:              a.ID,
-			LastCustomerActivityOn: isoDate(a.LastCustomerActivityOn),
-		},
-	})
-}
-
+// dormantPayload is the status change plus the last customer activity that made the account
+// dormant.
 type dormantPayload struct {
-	AccountID              ids.ID `json:"account_id"`
+	statusPayload
 	LastCustomerActivityOn string `json:"last_customer_activity_on"`
 }

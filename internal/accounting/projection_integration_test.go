@@ -32,16 +32,16 @@ type glWorld struct {
 
 func newGLWorld(t *testing.T) glWorld {
 	t.Helper()
-	w := glWorld{entity: ids.New(), s: accounting.New()}
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := glWorld{entity: ids.New(), s: accounting.New(events)}
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
 			VALUES ($1, 'Entity', '2026-03-02', 'COP')`, w.entity)
 		return err
 	})
-	events, err := outbox.New(testPool)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if w.cop, err = money.CurrencyOf("COP"); err != nil {
 		t.Fatal(err)
 	}

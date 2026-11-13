@@ -18,8 +18,9 @@ type Dormancy interface {
 	// after, up to batch active accounts of the entity with product version versionID whose last customer
 	// activity is before before.
 	Inactive(ctx context.Context, entity, versionID ids.ID, before calendar.Date, after ids.ID, batch int) ([]domain.Account, error)
+	// SetStatus moves account a to status to, with a's last customer activity, records the change with its
+	// actor and emits the event of a going from its status to to.
 	SetStatus(ctx context.Context, a domain.Account, to domain.Status, actor string) error
-	EmitDormant(ctx context.Context, a domain.Account) error
 }
 
 // dormantBefore is the day before which an account's last customer activity makes it dormant on day today,
@@ -41,9 +42,6 @@ func MarkDormantBatch(ctx context.Context, s Dormancy, entity, versionID ids.ID,
 	}
 	for _, a := range inactive {
 		if err := s.SetStatus(ctx, a, domain.Dormant, dormancyActor); err != nil {
-			return 0, after, err
-		}
-		if err := s.EmitDormant(ctx, a); err != nil {
 			return 0, after, err
 		}
 	}

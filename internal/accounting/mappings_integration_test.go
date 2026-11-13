@@ -18,6 +18,7 @@ import (
 	pg "github.com/DrewGGM/aluna/internal/accounting/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
@@ -49,6 +50,16 @@ func newEntity(t *testing.T) ids.ID {
 	return entity
 }
 
+// newService is the service over the outbox.
+func newService(t *testing.T) *accounting.Service {
+	t.Helper()
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return accounting.New(events)
+}
+
 func load(t *testing.T, s *accounting.Service, entity ids.ID, m []accounting.Mapping) error {
 	t.Helper()
 	return postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error { return s.LoadMappings(t.Context(), tx, entity, m) })
@@ -66,7 +77,7 @@ func on(t *testing.T, s string) calendar.Date {
 // TestAnAccountMapsByItsMostSpecificPatternInForce (FR-36): a period ends the day before the next, and another entity
 // has its own mappings.
 func TestAnAccountMapsByItsMostSpecificPatternInForce(t *testing.T) {
-	s, entity, other := accounting.New(), newEntity(t), ids.New()
+	s, entity, other := newService(t), newEntity(t), ids.New()
 	err := load(t, s, entity, mappings(t, "L.,210000,2026-01-01,2030-01-01\nL.TAX.GMF,244500,2026-01-01,2028-01-01\nL.TAX.GMF,2445000001,2028-01-01,2030-01-01\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +103,7 @@ func TestAnAccountMapsByItsMostSpecificPatternInForce(t *testing.T) {
 // TestMappingsOfAPatternDoNotOverlap: checking says so before the load, and the load itself refuses it, leaving none
 // of its file; a period that only touches is fine.
 func TestMappingsOfAPatternDoNotOverlap(t *testing.T) {
-	s, entity := accounting.New(), newEntity(t)
+	s, entity := newService(t), newEntity(t)
 	if err := load(t, s, entity, mappings(t, "L.,210000,2026-01-01,2027-01-01\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +133,7 @@ func TestMappingsOfAPatternDoNotOverlap(t *testing.T) {
 
 // TestAnotherPatternDoesNotOverlap: a period is taken by pattern.
 func TestAnotherPatternDoesNotOverlap(t *testing.T) {
-	s, entity := accounting.New(), newEntity(t)
+	s, entity := newService(t), newEntity(t)
 	if err := load(t, s, entity, mappings(t, "L.,210000,2026-01-01,2027-01-01\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +162,7 @@ func TestTheDatabaseRefusesAnOverlapToo(t *testing.T) {
 
 // TestAMappingCannotStartInThePast: checking and loading both refuse it, by the entity's business date.
 func TestAMappingCannotStartInThePast(t *testing.T) {
-	s, entity := accounting.New(), newEntity(t)
+	s, entity := newService(t), newEntity(t)
 	past := mappings(t, "L.,210000,2025-12-31,2027-01-01\n")
 	if err := s.CheckMappings(t.Context(), testPool, entity, past); !errors.Is(err, accounting.ErrInvalidMapping) {
 		t.Errorf("CheckMappings = %v, want ErrInvalidMapping", err)
@@ -166,7 +177,7 @@ func TestAMappingCannotStartInThePast(t *testing.T) {
 
 // TestAMappingDoesNotChange: not by the application's role, and not by the owner.
 func TestAMappingDoesNotChange(t *testing.T) {
-	s, entity := accounting.New(), newEntity(t)
+	s, entity := newService(t), newEntity(t)
 	if err := load(t, s, entity, mappings(t, "L.,210000,2026-01-01,2027-01-01\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +222,7 @@ func TestTheExampleFileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := load(t, accounting.New(), newEntity(t), parsed); err != nil {
+	if err := load(t, newService(t), newEntity(t), parsed); err != nil {
 		t.Fatal(err)
 	}
 }

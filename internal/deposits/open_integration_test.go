@@ -66,18 +66,27 @@ func (screenedClear) ScreenParty(context.Context, postgres.Tx, party.Party) (boo
 	return true, nil
 }
 
-// newWorldOn is a world whose business date is day.
+// newWorldOn is a world whose business date is day, whose events w.events keeps.
 func newWorldOn(t *testing.T, day string) world {
 	t.Helper()
-	w := world{entity: ids.New(), events: &recorder{}}
+	events := &recorder{}
+	w := newWorldWith(t, day, events)
+	w.events = events
+	return w
+}
+
+// newWorldWith is a world whose business date is day and whose modules emit their events to events.
+func newWorldWith(t *testing.T, day string, events deposits.Events) world {
+	t.Helper()
+	w := world{entity: ids.New()}
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
 			VALUES ($1, 'Entity', $2, 'COP')`, w.entity, day)
 		return err
 	})
-	w.ledger, w.parties, w.products = ledger.New(calendar.New(), w.events), party.New(w.events, screenedClear{}), products.New(w.events)
+	w.ledger, w.parties, w.products = ledger.New(calendar.New(), events), party.New(events, screenedClear{}), products.New(events)
 	w.pricing = pricing.New(w.products, calendar.New(), pricing.SingleAccount)
-	w.deposits = deposits.New(w.ledger, w.parties, w.products, calendar.New(), w.pricing, w.events)
+	w.deposits = deposits.New(w.ledger, w.parties, w.products, calendar.New(), w.pricing, events)
 	return w
 }
 

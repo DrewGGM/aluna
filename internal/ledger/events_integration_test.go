@@ -3,19 +3,17 @@
 package ledger_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
 
 const (
@@ -27,40 +25,10 @@ const (
 	evExpired  = "aluna.ledger.hold.expired.v1"
 )
 
-type event struct {
-	Type          string
-	LegalEntityID ids.ID
-	Data          map[string]any
-}
-
-// eventsAbout are the outbox events about subject, in the order they were emitted.
-func eventsAbout(t *testing.T, subject string) []event {
-	t.Helper()
-	rows, err := testPool.Query(t.Context(), `SELECT type, legal_entity_id, payload FROM infra.outbox
-		WHERE subject = $1 ORDER BY created_at, id`, subject)
-	if err != nil {
-		t.Fatal(err)
-	}
-	events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (event, error) {
-		var e event
-		var payload []byte
-		if err := row.Scan(&e.Type, &e.LegalEntityID, &payload); err != nil {
-			return event{}, err
-		}
-		dec := json.NewDecoder(bytes.NewReader(payload))
-		dec.UseNumber() // amounts are compared as the JSON text, without going through float
-		return e, dec.Decode(&e.Data)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return events
-}
-
 // expectTypes checks that the events about subject are, in order, those of types want, and returns them.
-func expectTypes(t *testing.T, subject string, want ...string) []event {
+func expectTypes(t *testing.T, subject string, want ...string) []pgtest.Event {
 	t.Helper()
-	events := eventsAbout(t, subject)
+	events := pgtest.EventsAbout(t, testPool, subject)
 	var got []string
 	for _, e := range events {
 		got = append(got, e.Type)
@@ -72,7 +40,7 @@ func expectTypes(t *testing.T, subject string, want ...string) []event {
 }
 
 // expectEntity checks that every event belongs to legal entity want.
-func expectEntity(t *testing.T, events []event, want ids.ID) {
+func expectEntity(t *testing.T, events []pgtest.Event, want ids.ID) {
 	t.Helper()
 	for _, e := range events {
 		if e.LegalEntityID != want {

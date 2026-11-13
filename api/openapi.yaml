@@ -803,6 +803,35 @@ paths:
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/accounting-periods/{period}/closure:
+    post:
+      operationId: requestPeriodClose
+      summary: Request the close of an accounting period
+      description: >-
+        Asks to close a month of the entity (FR-37, US-14) and answers 202 with an `accounting.period_close`
+        maker-checker request. When someone else with `accounting.periods.close` approves it, the period goes closing,
+        its trial balance must sum zero in every currency and no reconciliation break may be open, and it is closed:
+        from then on a posting with a business date in it is 409 `period_closed`. If a check fails, the request is
+        left `failed` with why and the period stays open. A closed period never reopens. A period that is not a
+        month is 400; one the business date has not left is 422 `period_not_ended`; one closed already is 409
+        `period_closed`. Idempotent by `Idempotency-Key`.
+      x-aluna-permission: accounting.periods.close
+      parameters:
+        - name: period
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[0-9]{4}-[0-9]{2}$"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Close request created, pending approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/general-ledger/daily:
     get:
       operationId: getDailyGL

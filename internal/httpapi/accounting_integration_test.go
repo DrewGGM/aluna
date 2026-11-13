@@ -174,3 +174,72 @@ func TestOnlyFinanceLoadsMappings(t *testing.T) {
 		t.Fatalf("operator = %d %s, want 403", r.status, r.body)
 	}
 }
+
+// postingOn is the body of a posting in COP between the accounts, with business date on.
+func postingOn(t *testing.T, debit, credit, on string) string {
+	t.Helper()
+	return strings.Replace(postingBody(t, debit, credit, 100, 100, ""), `"business_date":"`+postingValueDate, `"business_date":"`+on, 1)
+}
+
+// TestAPeriodClosesWithMakerChecker (FR-37, US-14): nothing closes until someone else approves it, and from then on a
+// posting with a business date in the period is 409 period_closed.
+func TestAPeriodClosesWithMakerChecker(t *testing.T) {
+	w := newCuifWorld(t)
+	ts := apiServer(t, w.entity)
+	cash, deposit := createAccount(t, ts, "asset"), createAccount(t, ts, "liability")
+	if r := postWithKey(t, ts, ids.New().String(), postingOn(t, cash, deposit, "2026-02-27")); r.status != http.StatusCreated {
+		t.Fatalf("posting in February = %d %s", r.status, r.body)
+	}
+
+	requested := postTo(t, w.a, "/v1/accounting-periods/2026-02/closure", ids.New().String(), "")
+	if requested.status != http.StatusAccepted {
+		t.Fatalf("request = %d %s", requested.status, requested.body)
+	}
+	if r := postWithKey(t, ts, ids.New().String(), postingOn(t, cash, deposit, "2026-02-27")); r.status != http.StatusCreated {
+		t.Fatalf("posting in February before the approval = %d %s", r.status, r.body)
+	}
+	approved := decodeApproval(t, postTo(t, w.b, "/v1/approvals/"+decodeApproval(t, requested).ID+"/approval", ids.New().String(), ""))
+	var by string
+	if err := testPool.QueryRow(t.Context(), `SELECT closed_by FROM calendar.periods WHERE legal_entity_id = $1 AND period = '2026-02'`, w.entity).Scan(&by); err != nil {
+		t.Fatal(err)
+	}
+	if approved.Status != "approved" || string(approved.Result) != `{"period":"2026-02","status":"closed"}` || by != "finance-b" {
+		t.Fatalf("approval = %+v, closed by %s", approved, by)
+	}
+
+	expectProblem(t, "posting in February", postWithKey(t, ts, ids.New().String(), postingOn(t, cash, deposit, "2026-02-28")), http.StatusConflict, "period_closed")
+	if r := postWithKey(t, ts, ids.New().String(), postingOn(t, cash, deposit, "2026-03-02")); r.status != http.StatusCreated {
+		t.Fatalf("posting in March = %d %s", r.status, r.body)
+	}
+	expectProblem(t, "closing it again", postTo(t, w.a, "/v1/accounting-periods/2026-02/closure", ids.New().String(), ""), http.StatusConflict, "period_closed")
+	expectProblem(t, "closing the business month", postTo(t, w.a, "/v1/accounting-periods/2026-03/closure", ids.New().String(), ""),
+		http.StatusUnprocessableEntity, "period_not_ended")
+	expectProblem(t, "closing month 13", postTo(t, w.a, "/v1/accounting-periods/2026-13/closure", ids.New().String(), ""), http.StatusBadRequest, "invalid_request")
+}
+
+// TestAPeriodWithABreakOpenStaysOpen: the approval leaves the request failed with why, which the API does not show, and
+// the period takes postings.
+func TestAPeriodWithABreakOpenStaysOpen(t *testing.T) {
+	w := newCuifWorld(t)
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO recon.breaks (id, legal_entity_id, control, subject, currency, difference_units)
+			VALUES ($1, $2, 'trial_balance', 'COP', 'COP', 1)`, ids.New(), w.entity)
+		return err
+	})
+	requested := decodeApproval(t, postTo(t, w.a, "/v1/accounting-periods/2026-02/closure", ids.New().String(), ""))
+
+	failed := decodeApproval(t, postTo(t, w.b, "/v1/approvals/"+requested.ID+"/approval", ids.New().String(), ""))
+
+	var why string
+	if err := testPool.QueryRow(t.Context(), `SELECT error FROM approvals.requests WHERE id = $1`, failed.ID).Scan(&why); err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != "failed" || !strings.Contains(why, "breaks open") {
+		t.Fatalf("approval = %+v failed with %q, want failed for the breaks", failed, why)
+	}
+	ts := apiServer(t, w.entity)
+	cash, deposit := createAccount(t, ts, "asset"), createAccount(t, ts, "liability")
+	if r := postWithKey(t, ts, ids.New().String(), postingOn(t, cash, deposit, "2026-02-28")); r.status != http.StatusCreated {
+		t.Fatalf("posting in February = %d %s", r.status, r.body)
+	}
+}

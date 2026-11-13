@@ -369,7 +369,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 		ComplianceHandlers:     httpapi.NewComplianceHandlers(complianceSvc, requests, uow, keys),
 		PaymentHandlers:        httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: httpapi.NewReconciliationHandlers(reconciliation.New(events), uow, keys, pool),
-		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(), requests, uow, keys, pool),
+		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(), reconciliation.New(events), requests, uow, keys, pool),
 	}, nil
 }
 

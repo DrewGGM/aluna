@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/DrewGGM/aluna/internal/calendar/internal/adapters/postgres/sqlcgen"
 	"github.com/DrewGGM/aluna/internal/calendar/internal/app"
@@ -16,8 +17,9 @@ import (
 )
 
 var (
-	_ app.Store       = (*Store)(nil)
-	_ app.PeriodStore = (*Store)(nil)
+	_ app.Store        = (*Store)(nil)
+	_ app.PeriodStore  = (*Store)(nil)
+	_ app.PeriodCloser = (*Store)(nil)
 )
 
 // Store implements calendar persistence over a connection or a transaction.
@@ -59,6 +61,28 @@ func (s *Store) PeriodStatus(ctx context.Context, entity ids.ID, period string) 
 		return "", false, fmt.Errorf("read period %s: %w", period, err)
 	}
 	return app.PeriodStatus(status), true, nil
+}
+
+// MarkClosing moves the entity's period from open, or no row, to closing; false if it was not open. It holds the
+// period's lock until the transaction ends, so no posting gets into the period meanwhile.
+func (s *Store) MarkClosing(ctx context.Context, entity ids.ID, period string) (bool, error) {
+	if err := s.q.LockPeriod(ctx, sqlcgen.LockPeriodParams{LegalEntityID: entity, Period: period}); err != nil {
+		return false, fmt.Errorf("lock period %s: %w", period, err)
+	}
+	n, err := s.q.MarkPeriodClosing(ctx, sqlcgen.MarkPeriodClosingParams{LegalEntityID: entity, Period: period})
+	if err != nil {
+		return false, fmt.Errorf("start closing period %s: %w", period, err)
+	}
+	return n == 1, nil
+}
+
+// MarkClosed moves the entity's closing period to closed, by who; the database allows it only from closing.
+func (s *Store) MarkClosed(ctx context.Context, entity ids.ID, period, by string) error {
+	err := s.q.MarkPeriodClosed(ctx, sqlcgen.MarkPeriodClosedParams{LegalEntityID: entity, Period: period, ClosedBy: pgtype.Text{String: by, Valid: true}})
+	if err != nil {
+		return fmt.Errorf("close period %s: %w", period, err)
+	}
+	return nil
 }
 
 func dateOf(d domain.Date) time.Time { return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC) }

@@ -59,6 +59,7 @@ finance:
     - ledger.transactions.read
     - ledger.transactions.reverse
     - accounting.cuif_mappings.load
+    - accounting.periods.close
     - accounting.gl.read
     - reconciliation.statements.import
     - reconciliation.breaks.read

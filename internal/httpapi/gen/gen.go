@@ -1002,6 +1002,11 @@ type ID = openapi_types.UUID
 // IdempotencyKey defines model for IdempotencyKey.
 type IdempotencyKey = string
 
+// RequestPeriodCloseParams defines parameters for RequestPeriodClose.
+type RequestPeriodCloseParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListApprovalsParams defines parameters for ListApprovals.
 type ListApprovalsParams struct {
 	Status *ApprovalStatus `form:"status,omitempty" json:"status,omitempty"`
@@ -1209,6 +1214,9 @@ type CreateTransferJSONRequestBody = CreateTransfer
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// RequestPeriodClose Request the close of an accounting period
+	// (POST /v1/accounting-periods/{period}/closure)
+	RequestPeriodClose(w http.ResponseWriter, r *http.Request, period string, params RequestPeriodCloseParams)
 	// ListApprovals Maker-checker requests of the entity
 	// (GET /v1/approvals)
 	ListApprovals(w http.ResponseWriter, r *http.Request, params ListApprovalsParams)
@@ -1327,6 +1335,60 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// RequestPeriodClose operation middleware
+func (siw *ServerInterfaceWrapper) RequestPeriodClose(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "period" -------------
+	var period string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "period", r.PathValue("period"), &period, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "period", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RequestPeriodCloseParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestPeriodClose(w, r, period, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // ListApprovals operation middleware
 func (siw *ServerInterfaceWrapper) ListApprovals(w http.ResponseWriter, r *http.Request) {
@@ -2964,6 +3026,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/payment-orders", wrapper.CreatePaymentOrder)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/cuif-mappings", wrapper.RequestCuifMappingsLoad)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/accounting-periods/{period}/closure", wrapper.RequestPeriodClose)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/general-ledger/daily", wrapper.GetDailyGL)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/statements", wrapper.ImportStatement)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/reconciliation/breaks", wrapper.ListBreaks)
@@ -2975,6 +3038,90 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 }
 
 type ProblemApplicationProblemPlusJSONResponse Problem
+
+type RequestPeriodCloseRequestObject struct {
+	Period string `json:"period"`
+	Params RequestPeriodCloseParams
+}
+
+type RequestPeriodCloseResponseObject interface {
+	VisitRequestPeriodCloseResponse(w http.ResponseWriter) error
+}
+
+type RequestPeriodClose202JSONResponse Approval
+
+func (response RequestPeriodClose202JSONResponse) VisitRequestPeriodCloseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestPeriodClose400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RequestPeriodClose400ApplicationProblemPlusJSONResponse) VisitRequestPeriodCloseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestPeriodClose409ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestPeriodClose409ApplicationProblemPlusJSONResponse) VisitRequestPeriodCloseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestPeriodClose422ApplicationProblemPlusJSONResponse Problem
+
+func (response RequestPeriodClose422ApplicationProblemPlusJSONResponse) VisitRequestPeriodCloseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestPeriodClosedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RequestPeriodClosedefaultApplicationProblemPlusJSONResponse) VisitRequestPeriodCloseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type ListApprovalsRequestObject struct {
 	Params ListApprovalsParams
@@ -6206,6 +6353,9 @@ func (response CreateTransferdefaultApplicationProblemPlusJSONResponse) VisitCre
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// RequestPeriodClose Request the close of an accounting period
+	// (POST /v1/accounting-periods/{period}/closure)
+	RequestPeriodClose(ctx context.Context, request RequestPeriodCloseRequestObject) (RequestPeriodCloseResponseObject, error)
 	// ListApprovals Maker-checker requests of the entity
 	// (GET /v1/approvals)
 	ListApprovals(ctx context.Context, request ListApprovalsRequestObject) (ListApprovalsResponseObject, error)
@@ -6353,6 +6503,33 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// RequestPeriodClose operation middleware
+func (sh *strictHandler) RequestPeriodClose(w http.ResponseWriter, r *http.Request, period string, params RequestPeriodCloseParams) {
+	var request RequestPeriodCloseRequestObject
+
+	request.Period = period
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestPeriodClose(ctx, request.(RequestPeriodCloseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestPeriodClose")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestPeriodCloseResponseObject); ok {
+		if err := validResponse.VisitRequestPeriodCloseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // ListApprovals operation middleware

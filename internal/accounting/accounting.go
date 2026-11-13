@@ -1,6 +1,6 @@
-// Package accounting is the facade of the mapping of the internal accounts to CUIF codes (FR-36, ADR-0011): the
-// journal keeps its internal codes, and what they are in the regulator's catalog changes by period without
-// touching it.
+// Package accounting is the facade of the mapping of the internal accounts to CUIF codes (FR-36, ADR-0011), of the
+// daily GL projected from the journal by them, and of the close of a period (FR-37): the journal keeps its internal
+// codes, and what they are in the regulator's catalog changes by period without touching it.
 package accounting
 
 import (
@@ -18,13 +18,15 @@ import (
 // Mapping says which CUIF code the internal accounts of a pattern are in a period.
 type Mapping = domain.Mapping
 
-// Errors of the mappings.
+// Errors of the mappings, the GL and the close of a period.
 var (
-	ErrInvalidMapping = domain.ErrInvalidMapping
-	ErrMappingOverlap = domain.ErrMappingOverlap
-	ErrNoMapping      = domain.ErrNoMapping
-	ErrNotProjected   = domain.ErrNotProjected
-	ErrDayUnmapped    = domain.ErrDayUnmapped
+	ErrInvalidMapping  = domain.ErrInvalidMapping
+	ErrMappingOverlap  = domain.ErrMappingOverlap
+	ErrNoMapping       = domain.ErrNoMapping
+	ErrNotProjected    = domain.ErrNotProjected
+	ErrDayUnmapped     = domain.ErrDayUnmapped
+	ErrPeriodNotSquare = domain.ErrPeriodNotSquare
+	ErrOpenBreaks      = domain.ErrOpenBreaks
 )
 
 // ParseMappings reads a CSV file of mappings, with the header pattern,cuif_code,valid_from,valid_to:

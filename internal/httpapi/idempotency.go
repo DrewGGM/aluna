@@ -129,6 +129,11 @@ func (r storedResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) e
 	return r.write(w)
 }
 
+// VisitRequestPeriodCloseResponse writes the response of POST /v1/accounting-periods/{period}/closure.
+func (r storedResponse) VisitRequestPeriodCloseResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitRequestCuifMappingsLoadResponse writes the response of POST /v1/cuif-mappings.
 func (r storedResponse) VisitRequestCuifMappingsLoadResponse(w http.ResponseWriter) error {
 	return r.write(w)

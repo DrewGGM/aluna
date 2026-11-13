@@ -41,6 +41,8 @@ var (
 	ErrLegalEntityNotFound = app.ErrLegalEntityNotFound
 	ErrStaleBusinessDate   = app.ErrStaleBusinessDate
 	ErrPeriodClosed        = app.ErrPeriodClosed
+	ErrInvalidPeriod       = app.ErrInvalidPeriod
+	ErrPeriodNotEnded      = app.ErrPeriodNotEnded
 )
 
 // Service is the calendar facade. It holds no state: each operation receives the connection or the
@@ -71,6 +73,27 @@ func (s *Service) AdjustDate(d Date, c Convention) Date { return app.AdjustDate(
 // touched is open. q can be the pool or a Tx.
 func (s *Service) PeriodStatus(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d Date) (PeriodStatus, error) {
 	return app.PeriodStatusOf(ctx, pg.NewStore(q), legalEntity, d)
+}
+
+// ValidatePeriod is ErrInvalidPeriod if period is not a month, yyyy-mm.
+func ValidatePeriod(period string) error {
+	_, err := app.ParsePeriod(period)
+	return err
+}
+
+// CheckPeriodClose reports whether the entity's period, yyyy-mm, can close (FR-37): ErrInvalidPeriod if it is not
+// a month, ErrPeriodNotEnded if the business date has not left it, ErrPeriodClosed if it is closed or closing. q can
+// be the pool or a Tx.
+func (s *Service) CheckPeriodClose(ctx context.Context, q postgres.Querier, legalEntity ids.ID, period string) error {
+	return app.CheckClose(ctx, pg.NewStore(q), legalEntity, period)
+}
+
+// ClosePeriod closes the entity's period within tx, by who (FR-37): with the errors of CheckPeriodClose, or
+// ErrPeriodClosed if another close took it, it goes closing; verify checks it from its first day to the first of the
+// next month, excluded, while no posting gets into it; and it is closed, so nothing posts in it any more. If verify
+// fails, its error comes back and tx must roll back, which leaves the period open.
+func (s *Service) ClosePeriod(ctx context.Context, tx postgres.Tx, legalEntity ids.ID, period, by string, verify func(ctx context.Context, from, to Date) error) error {
+	return app.ClosePeriod(ctx, pg.NewStore(tx), legalEntity, period, by, verify)
 }
 
 // EnsureOpen is ErrPeriodClosed if d falls in a closed period of the entity: the ledger asks for it

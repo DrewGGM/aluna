@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/ids"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const advanceBusinessDate = `-- name: AdvanceBusinessDate :execrows
@@ -41,6 +42,57 @@ func (q *Queries) BusinessDate(ctx context.Context, id ids.ID) (time.Time, error
 	var business_date time.Time
 	err := row.Scan(&business_date)
 	return business_date, err
+}
+
+const lockPeriod = `-- name: LockPeriod :exec
+SELECT pg_advisory_xact_lock(calendar.period_lock_key($1, $2))
+`
+
+type LockPeriodParams struct {
+	LegalEntityID ids.ID
+	Period        string
+}
+
+// Takes the period's advisory lock until the transaction ends, exclusive: the postings in flight in it end first,
+// and the rest wait for the close (migration 0029 takes it shared on every transaction).
+func (q *Queries) LockPeriod(ctx context.Context, arg LockPeriodParams) error {
+	_, err := q.db.Exec(ctx, lockPeriod, arg.LegalEntityID, arg.Period)
+	return err
+}
+
+const markPeriodClosed = `-- name: MarkPeriodClosed :exec
+UPDATE calendar.periods SET status = 'closed', closed_by = $1
+WHERE legal_entity_id = $2 AND period = $3
+`
+
+type MarkPeriodClosedParams struct {
+	ClosedBy      pgtype.Text
+	LegalEntityID ids.ID
+	Period        string
+}
+
+func (q *Queries) MarkPeriodClosed(ctx context.Context, arg MarkPeriodClosedParams) error {
+	_, err := q.db.Exec(ctx, markPeriodClosed, arg.ClosedBy, arg.LegalEntityID, arg.Period)
+	return err
+}
+
+const markPeriodClosing = `-- name: MarkPeriodClosing :execrows
+INSERT INTO calendar.periods (legal_entity_id, period, status) VALUES ($1, $2, 'closing')
+ON CONFLICT (legal_entity_id, period) DO UPDATE SET status = 'closing' WHERE calendar.periods.status = 'open'
+`
+
+type MarkPeriodClosingParams struct {
+	LegalEntityID ids.ID
+	Period        string
+}
+
+// A period without a row is open; one that is not open stays as it is, and no row changes.
+func (q *Queries) MarkPeriodClosing(ctx context.Context, arg MarkPeriodClosingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markPeriodClosing, arg.LegalEntityID, arg.Period)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const periodStatus = `-- name: PeriodStatus :one

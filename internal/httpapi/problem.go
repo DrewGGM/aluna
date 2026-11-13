@@ -13,6 +13,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/accounting"
 	"github.com/DrewGGM/aluna/internal/approvals"
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
@@ -204,6 +205,11 @@ var problems = []struct {
 	{accounting.ErrMappingOverlap, conflict("mapping_overlap", "Another mapping of the pattern holds in that period")},
 	{accounting.ErrNotProjected, Problem{Status: http.StatusNotFound, Code: "gl_day_not_projected", Title: "The day has no projection of the GL: it is open, it had no transactions, or it is before the entity's first CUIF mapping"}},
 	{accounting.ErrDayUnmapped, conflict("gl_day_unmapped", "An account of the day has no CUIF mapping in force, so the day has no GL")},
+	// close of a period
+	{calendar.ErrInvalidPeriod, invalidRequest("Invalid period", "A period is a month, yyyy-mm.")},
+	{calendar.ErrPeriodNotEnded, unprocessable("period_not_ended", "The period has not ended: the business date is in it or before it")},
+	{accounting.ErrPeriodNotSquare, conflict("period_not_square", "The period's trial balance does not sum zero")},
+	{accounting.ErrOpenBreaks, conflict("open_breaks", "A period does not close with reconciliation breaks open")},
 	// reconciliation
 	{reconciliation.ErrInvalidStatement, unprocessable("invalid_statement", "A statement is of a known rail, with a reference of up to 35 characters, a date and up to 5000 lines, each with an end-to-end id of up to 35, a positive amount, a direction and that date")},
 	{reconciliation.ErrDuplicateStatement, conflict("duplicate_statement", "That statement of the rail was already imported")},

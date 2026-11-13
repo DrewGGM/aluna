@@ -45,15 +45,13 @@ func TestNewTransaction(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			txID := ids.New()
-
-			tx, err := NewTransaction(NewTransactionInput{ID: txID, Entries: tc.entries})
+			tx, err := NewTransaction(tc.entries)
 
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
-			if err == nil && (tx.ID() != txID || !slices.Equal(tx.Entries(), tc.entries)) {
-				t.Fatalf("transaction = %v %v", tx.ID(), tx.Entries())
+			if err == nil && !slices.Equal(tx.Entries(), tc.entries) {
+				t.Fatalf("entries = %v", tx.Entries())
 			}
 		})
 	}
@@ -70,7 +68,7 @@ func TestUnbalancedErrorNamesTheFirstCurrency(t *testing.T) {
 		{ids.New(), money.New(2, usd)},
 	}
 	for range 50 {
-		_, err := NewTransaction(NewTransactionInput{ID: ids.New(), Entries: entries})
+		_, err := NewTransaction(entries)
 		if !errors.Is(err, ErrUnbalanced) || !strings.Contains(err.Error(), "COP sums to 3") {
 			t.Fatalf("error = %v, want it to name COP", err)
 		}
@@ -80,7 +78,7 @@ func TestUnbalancedErrorNamesTheFirstCurrency(t *testing.T) {
 func TestTransactionEntriesCannotBeChangedFromOutside(t *testing.T) {
 	cop := currency(t, "COP")
 	in := []EntryInput{{ids.New(), money.New(1, cop)}, {ids.New(), money.New(-1, cop)}}
-	tx, err := NewTransaction(NewTransactionInput{ID: ids.New(), Entries: in})
+	tx, err := NewTransaction(in)
 	if err != nil {
 		t.Fatal(err)
 	}

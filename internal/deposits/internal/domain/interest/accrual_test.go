@@ -39,11 +39,7 @@ func accrue(t *testing.T, state AccrualState, balance int64, tiers []products.Ra
 // rateOfADay is the rate of one day under ACT/365F.
 func rateOfADay(t *testing.T, ea string) money.Precise {
 	t.Helper()
-	r, err := rateForFraction(dec(t, ea), ratio(t, "1", "365"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return r
+	return rateOver(t, dec(t, ea), ratio(t, "1", "365"))
 }
 
 func product(t *testing.T, a, b money.Precise) money.Precise {

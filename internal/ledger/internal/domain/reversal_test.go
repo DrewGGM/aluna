@@ -21,7 +21,7 @@ func TestReversalEntriesInvertTheSignInOrder(t *testing.T) {
 	if err != nil || !slices.Equal(reversed, want) {
 		t.Fatalf("ReversalEntries = %+v, %v; want %+v", reversed, err, want)
 	}
-	if _, err := NewTransaction(NewTransactionInput{ID: ids.New(), Entries: reversed}); err != nil {
+	if _, err := NewTransaction(reversed); err != nil {
 		t.Fatalf("the reversal of a balanced transaction is balanced too: %v", err)
 	}
 }

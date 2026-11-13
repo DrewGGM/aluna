@@ -73,20 +73,17 @@ const secondsPerDay = 24 * 60 * 60
 
 func newYear(year int) int { return ordinal(calendar.Date{Year: year, Month: time.January, Day: 1}) }
 
-// fraction is days/basis with fractionScale decimals.
-func fraction(days, basis int) (money.Precise, error) { return quotient(days, basis, fractionScale) }
-
-// quotient is a/b with scale decimals, rounded half even.
-func quotient(a, b, scale int) (money.Precise, error) {
-	pa, err := integer(a)
+// fraction is days/basis with fractionScale decimals, rounded half even.
+func fraction(days, basis int) (money.Precise, error) {
+	d, err := integer(days)
 	if err != nil {
 		return money.Precise{}, err
 	}
-	pb, err := integer(b)
+	b, err := integer(basis)
 	if err != nil {
 		return money.Precise{}, err
 	}
-	return pa.Quo(pb, scale, money.HalfEven)
+	return d.Quo(b, fractionScale, money.HalfEven)
 }
 
 func integer(n int) (money.Precise, error) { return precise64(int64(n)) }

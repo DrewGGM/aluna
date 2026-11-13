@@ -149,7 +149,7 @@ func post(ctx context.Context, store PostingStore, guard PeriodGuard, in PostInp
 	if err := guard.EnsureOpen(ctx, rec.LegalEntityID, rec.BusinessDate); err != nil {
 		return Transaction{}, err
 	}
-	tx, err := domain.NewTransaction(domain.NewTransactionInput{ID: rec.ID, Entries: in.Entries})
+	tx, err := domain.NewTransaction(in.Entries)
 	if err != nil {
 		return Transaction{}, err
 	}

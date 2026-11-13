@@ -24,28 +24,21 @@ type EntryInput struct {
 	Amount    money.Amount
 }
 
-// NewTransactionInput is the data to build a transaction.
-type NewTransactionInput struct {
-	ID      ids.ID
-	Entries []EntryInput
-}
-
 // Transaction is a transaction that already satisfies double entry: at least two entries, none of them
 // zero, and a zero sum in each currency.
 type Transaction struct {
-	id      ids.ID
 	entries []EntryInput
 }
 
-// NewTransaction validates double entry and returns the transaction; money is neither created nor
-// destroyed.
-func NewTransaction(in NewTransactionInput) (Transaction, error) {
-	if len(in.Entries) < 2 {
-		return Transaction{}, fmt.Errorf("%w: has %d", ErrTooFewEntries, len(in.Entries))
+// NewTransaction validates double entry over entries and returns the transaction; money is neither created
+// nor destroyed.
+func NewTransaction(entries []EntryInput) (Transaction, error) {
+	if len(entries) < 2 {
+		return Transaction{}, fmt.Errorf("%w: has %d", ErrTooFewEntries, len(entries))
 	}
 	sums := map[money.Currency]money.Amount{}
 	var order []money.Currency // so the error always names the same currency
-	for i, e := range in.Entries {
+	for i, e := range entries {
 		if e.Amount.IsZero() {
 			return Transaction{}, fmt.Errorf("%w: entry %d", ErrZeroAmount, i)
 		}
@@ -66,11 +59,8 @@ func NewTransaction(in NewTransactionInput) (Transaction, error) {
 			return Transaction{}, fmt.Errorf("%w: %s sums to %d", ErrUnbalanced, cur.Code(), sum.Units())
 		}
 	}
-	return Transaction{id: in.ID, entries: slices.Clone(in.Entries)}, nil
+	return Transaction{entries: slices.Clone(entries)}, nil
 }
-
-// ID is the transaction's identifier.
-func (t Transaction) ID() ids.ID { return t.id }
 
 // Entries returns a copy of the entries: the validated transaction cannot be altered from outside.
 func (t Transaction) Entries() []EntryInput { return slices.Clone(t.entries) }

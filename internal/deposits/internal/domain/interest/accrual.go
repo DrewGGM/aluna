@@ -1,3 +1,6 @@
+// Package interest has the formulas of deposit interest (FR-25): day count conventions and the daily accrual,
+// where the effective annual rate (EA) is compounded over each day's year fraction and never divided (SFC: an EA
+// "is not divided by any denominator").
 package interest
 
 import (

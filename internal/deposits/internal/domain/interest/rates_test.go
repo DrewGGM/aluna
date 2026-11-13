@@ -135,90 +135,80 @@ func TestAYearFractionNeedsAnOrderedSpan(t *testing.T) {
 	}
 }
 
-// TestEA2682IsNMV24 (SFC concepto 18759): 26.82 % EA is 24 % nominal monthly, within 0.01 point.
-func TestEA2682IsNMV24(t *testing.T) {
-	got, err := NominalFromEA(dec(t, "0.2682"), 12)
+// rateOver is rateForFraction(ea, f), which must not fail.
+func rateOver(t *testing.T, ea, f money.Precise) money.Precise {
+	t.Helper()
+	r, err := rateForFraction(ea, f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !near(t, got, "0.24", "0.0001") {
-		t.Fatalf("NMV of 26.82 %% EA = %s, want 0.24 ± 0.0001", got)
+	return r
+}
+
+// TestEA2682IsNMV24 (SFC concepto 18759): 26.82 % EA is 24 % nominal monthly, within 0.01 point: twelve times the
+// rate of a month.
+func TestEA2682IsNMV24(t *testing.T) {
+	monthly := rateOver(t, dec(t, "0.2682"), ratio(t, "1", "12"))
+	nominal, err := monthly.Mul(dec(t, "12"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !near(t, nominal, "0.24", "0.0001") {
+		t.Fatalf("NMV of 26.82 %% EA = %s, want 0.24 ± 0.0001", nominal)
 	}
 }
 
 // TestAnEAIsNeverDividedBy12: 12 % EA is 0.9489 % a month and 2.8737 % a quarter, compounded, and not 1 %
 // or 3 %.
 func TestAnEAIsNeverDividedBy12(t *testing.T) {
-	got, err := PeriodicRateFromEA(dec(t, "0.12"), 12)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !near(t, got, "0.009489", "0.000001") {
+	ea := dec(t, "0.12")
+	if got := rateOver(t, ea, ratio(t, "1", "12")); !near(t, got, "0.009489", "0.000001") {
 		t.Fatalf("monthly rate of 12 %% EA = %s, want 0.9489 %% (never 12 %% / 12 = 1 %%)", got)
 	}
-	quarterly, err := PeriodicRateFromEA(dec(t, "0.12"), 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !near(t, quarterly, "0.028737", "0.000001") {
-		t.Fatalf("quarterly rate of 12 %% EA = %s, want 2.8737 %% (never 12 %% / 4 = 3 %%)", quarterly)
+	if got := rateOver(t, ea, ratio(t, "1", "4")); !near(t, got, "0.028737", "0.000001") {
+		t.Fatalf("quarterly rate of 12 %% EA = %s, want 2.8737 %% (never 12 %% / 4 = 3 %%)", got)
 	}
 }
 
-// TestADailyRateCompoundsToTheEA: compounding the daily rate over the basis gives back the EA to 30
-// decimals, for 365 and 360 days: precise enough for interest to the cent on any balance.
+// TestADailyRateCompoundsToTheEA: compounding the rate of a day over the year gives back the EA to 28 decimals,
+// under ACT/365F and ACT/360: precise enough for interest to the cent on any balance. The day's fraction is rounded
+// at fractionScale (5e-31 at most) and the power amplifies that about 22 times, hence 2e-29.
 func TestADailyRateCompoundsToTheEA(t *testing.T) {
-	for _, basis := range []int{365, 360} {
-		daily, err := DailyRateFromEA(dec(t, "0.06"), basis)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for dc, basis := range map[products.DayCount]int{products.ACT365F: 365, products.ACT360: 360} {
+		daily := rateOver(t, dec(t, "0.06"), yearFraction(t, dc, day(2026, 3, 2), day(2026, 3, 3)))
 		year, err := sum(t, daily, dec(t, "1")).Pow(dec(t, strconv.Itoa(basis)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !near(t, year, "1.06", "0.000000000000000000000000000001") {
-			t.Errorf("(1 + daily)^%d = %s, want 1.06", basis, year)
+		if !near(t, year, "1.06", "0.00000000000000000000000000002") {
+			t.Errorf("(1 + daily)^%d under %s = %s, want 1.06", basis, dc, year)
 		}
 	}
 }
 
 // TestTheRateOfADayFollowsItsConvention: under 30E/360 the 30th to the 31st weighs 0 and the 28th of
 // February to the 1st of March weighs 3 days, so the rate of the day is the EA compounded over that
-// fraction; a whole year gives the EA.
+// fraction, the same as three days of a 360-day basis compounded one after the other; a whole year gives the EA.
 func TestTheRateOfADayFollowsItsConvention(t *testing.T) {
 	ea := dec(t, "0.06")
-	none, errNone := rateForFraction(ea, yearFraction(t, products.E30360, day(2026, 3, 30), day(2026, 3, 31)))
-	three, errThree := rateForFraction(ea, yearFraction(t, products.E30360, day(2026, 2, 28), day(2026, 3, 1)))
-	year, errYear := rateForFraction(ea, dec(t, "1"))
-	daily, errDaily := DailyRateFromEA(ea, 360)
-	if err := errors.Join(errNone, errThree, errYear, errDaily); err != nil {
-		t.Fatal(err)
-	}
-	threeDays, err := sum(t, daily, dec(t, "1")).Pow(dec(t, "3"))
+	none := rateOver(t, ea, yearFraction(t, products.E30360, day(2026, 3, 30), day(2026, 3, 31)))
+	three := rateOver(t, ea, yearFraction(t, products.E30360, day(2026, 2, 28), day(2026, 3, 1)))
+	year := rateOver(t, ea, dec(t, "1"))
+	threeDays, err := sum(t, rateOver(t, ea, ratio(t, "1", "360")), dec(t, "1")).Pow(dec(t, "3"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if none.Cmp(money.Precise{}) != 0 || year.Cmp(ea) != 0 || !near(t, sum(t, three, dec(t, "1")), threeDays.String(), "0.000000000000000000000000000001") {
+	if none.Cmp(money.Precise{}) != 0 || year.Cmp(ea) != 0 ||
+		!near(t, sum(t, three, dec(t, "1")), threeDays.String(), "0.000000000000000000000000000001") {
 		t.Fatalf("rate of 0 days = %s, of 3 days = %s (want %s - 1), of a year = %s (want 0.06)", none, three, threeDays, year)
 	}
 }
 
-// TestRatesNeedAValidBasisAndPeriod: a basis that is not 365 or 360, a period count that is not
-// positive and an EA of -100 % or less are errors.
-func TestRatesNeedAValidBasisAndPeriod(t *testing.T) {
-	if _, err := DailyRateFromEA(dec(t, "0.06"), 366); !errors.Is(err, ErrInvalidBasis) {
-		t.Errorf("basis 366 = %v, want ErrInvalidBasis", err)
-	}
-	for _, n := range []int{0, -12} {
-		if _, err := PeriodicRateFromEA(dec(t, "0.06"), n); !errors.Is(err, ErrInvalidPeriods) {
-			t.Errorf("%d periods = %v, want ErrInvalidPeriods", n, err)
+// TestAnEAOfMinus100PercentHasNoRate: (1 + ea) must be positive to be raised to a fraction.
+func TestAnEAOfMinus100PercentHasNoRate(t *testing.T) {
+	for _, ea := range []string{"-1", "-1.5"} {
+		if _, err := rateForFraction(dec(t, ea), ratio(t, "1", "12")); !errors.Is(err, ErrInvalidRate) {
+			t.Errorf("EA of %s = %v, want ErrInvalidRate", ea, err)
 		}
-		if _, err := NominalFromEA(dec(t, "0.06"), n); !errors.Is(err, ErrInvalidPeriods) {
-			t.Errorf("nominal over %d periods = %v, want ErrInvalidPeriods", n, err)
-		}
-	}
-	if _, err := PeriodicRateFromEA(dec(t, "-1"), 12); !errors.Is(err, ErrInvalidRate) {
-		t.Errorf("EA of -100 %% = %v, want ErrInvalidRate", err)
 	}
 }

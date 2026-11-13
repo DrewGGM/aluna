@@ -378,7 +378,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 	}
 	requests := approvals.New(policy, events)
 	return httpapi.API{
-		LedgerHandlers:         httpapi.NewLedgerHandlers(ledgerSvc, requests, uow, keys, pool),
+		LedgerHandlers:         httpapi.NewLedgerHandlers(ledgerSvc, depositSvc, requests, uow, keys, pool),
 		ApprovalHandlers:       httpapi.NewApprovalHandlers(requests, uow, keys, pool),
 		PartyHandlers:          httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
 		ProductHandlers:        httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),

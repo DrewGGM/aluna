@@ -357,6 +357,46 @@ func (q *Queries) EntriesOf(ctx context.Context, transactionID ids.ID) ([]Entrie
 	return items, nil
 }
 
+const holdOf = `-- name: HoldOf :one
+SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at
+FROM ledger.holds
+WHERE id = $1 AND legal_entity_id = $2
+`
+
+type HoldOfParams struct {
+	ID            ids.ID
+	LegalEntityID ids.ID
+}
+
+type HoldOfRow struct {
+	ID               ids.ID
+	AccountID        ids.ID
+	CounterAccountID ids.ID
+	Currency         string
+	Amount           int64
+	CapturedAmount   int64
+	Status           string
+	ExpiresAt        time.Time
+}
+
+// Reads the hold without locking it: its accounts never change, so whoever must lock something else first (the
+// deposit accounts of a capture) can read them before LockHold.
+func (q *Queries) HoldOf(ctx context.Context, arg HoldOfParams) (HoldOfRow, error) {
+	row := q.db.QueryRow(ctx, holdOf, arg.ID, arg.LegalEntityID)
+	var i HoldOfRow
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.CounterAccountID,
+		&i.Currency,
+		&i.Amount,
+		&i.CapturedAmount,
+		&i.Status,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
 const insertAccount = `-- name: InsertAccount :exec
 INSERT INTO ledger.accounts (id, legal_entity_id, code, kind, currency, balance_mode, lower_limit)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

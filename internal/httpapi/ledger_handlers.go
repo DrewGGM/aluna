@@ -12,6 +12,7 @@ import (
 
 	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/approvals"
+	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -38,17 +39,19 @@ const (
 // LedgerHandlers implements the contract's ledger operations (api/openapi.yaml).
 type LedgerHandlers struct {
 	ledger    *ledger.Service
+	deposits  *deposits.Service
 	approvals *approvals.Service
 	commands  commands
 	reader    postgres.Querier
 }
 
 // NewLedgerHandlers creates the ledger handlers and registers in a the reversal request kind, which goes
-// through maker-checker. keys stores the responses of the commands with Idempotency-Key; reader serves the
+// through maker-checker. A posting on the ledger account of a deposit account first locks it through d and is
+// refused if it is not active. keys stores the responses of the commands with Idempotency-Key; reader serves the
 // reads outside a transaction. The legal entity of each request is that of its token (FR-41).
-func NewLedgerHandlers(l *ledger.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *LedgerHandlers {
-	a.RegisterKind(reversalKind, reversalPermission, reverseOnApproval(l))
-	return &LedgerHandlers{ledger: l, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
+func NewLedgerHandlers(l *ledger.Service, d *deposits.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *LedgerHandlers {
+	a.RegisterKind(reversalKind, reversalPermission, reverseOnApproval(l, d))
+	return &LedgerHandlers{ledger: l, deposits: d, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
 // CreateLedgerAccount creates an account of the token's entity.
@@ -174,12 +177,19 @@ func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransa
 		}
 		entries[i] = ledger.EntryInput{AccountID: ids.ID(e.AccountId), Amount: amount}
 	}
+	accounts := make([]ids.ID, len(entries))
+	for i, e := range entries {
+		accounts[i] = e.AccountID
+	}
 	in := ledger.PostInput{
 		LegalEntityID: p.LegalEntityID, Code: req.Body.Code, ValueDate: req.Body.ValueDate.Time,
 		BusinessDate: req.Body.BusinessDate.Time, Source: req.Body.Source, ExternalRef: req.Body.ExternalRef,
 		Actor: manualActor, Channel: manualChannel, RuleVersion: manualRuleVersion, Entries: entries,
 	}
 	resp, err := h.commands.idempotent(ctx, p, postTransaction, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		if err := h.deposits.LockActiveHeldIn(ctx, tx, p.LegalEntityID, accounts); err != nil {
+			return nil, err
+		}
 		posted, err := h.ledger.Post(ctx, tx, in)
 		if err != nil {
 			return nil, err
@@ -252,10 +262,22 @@ func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestRev
 }
 
 // reverseOnApproval is the Executor of reversalKind: it posts the payload's reversal in the entity of the
-// approver, who becomes its actor. A ledger rejection (a 4xx from its problems table: already reversed,
-// period closed, insufficient funds) leaves the request failed; any other error goes up.
-func reverseOnApproval(l *ledger.Service) approvals.Executor {
+// approver, who becomes its actor, after locking the deposit accounts it touches. A ledger rejection (a 4xx from
+// its problems table: already reversed, period closed, insufficient funds) or a deposit account that is no longer
+// active leaves the request failed; any other error goes up.
+func reverseOnApproval(l *ledger.Service, d *deposits.Service) approvals.Executor {
 	return onApproval("reversal", func(ctx context.Context, tx postgres.Tx, r reversalRequest, checker access.Principal) (gen.Transaction, error) {
+		original, err := l.Transaction(ctx, tx, checker.LegalEntityID, r.TransactionID)
+		if err != nil {
+			return gen.Transaction{}, err
+		}
+		accounts := make([]ids.ID, len(original.Entries))
+		for i, e := range original.Entries {
+			accounts[i] = e.AccountID
+		}
+		if err := d.LockActiveHeldIn(ctx, tx, checker.LegalEntityID, accounts); err != nil {
+			return gen.Transaction{}, err
+		}
 		in := ledger.ReverseInput{LegalEntityID: checker.LegalEntityID, TransactionID: r.TransactionID, Reason: r.Reason, Actor: checker.Subject}
 		if r.BusinessDate != nil {
 			in.BusinessDate = r.BusinessDate.Time
@@ -325,6 +347,9 @@ func (h *LedgerHandlers) PlaceHold(ctx context.Context, req gen.PlaceHoldRequest
 		Amount: amount, ExpiresAt: req.Body.ExpiresAt,
 	}
 	resp, err := h.commands.idempotent(ctx, p, placeHold, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		if err := h.deposits.LockActiveHeldIn(ctx, tx, p.LegalEntityID, []ids.ID{in.AccountID, in.CounterAccountID}); err != nil {
+			return nil, err
+		}
 		placed, err := h.ledger.PlaceHold(ctx, tx, in)
 		if err != nil {
 			return nil, err
@@ -357,6 +382,13 @@ func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldReq
 		BusinessDate: req.Body.BusinessDate.Time, Actor: manualActor, Channel: manualChannel,
 	}
 	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		hold, err := h.ledger.Hold(ctx, tx, p.LegalEntityID, in.HoldID)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.deposits.LockActiveHeldIn(ctx, tx, p.LegalEntityID, []ids.ID{hold.AccountID(), hold.CounterAccountID()}); err != nil {
+			return nil, err
+		}
 		captured, posted, err := h.ledger.CaptureHold(ctx, tx, in)
 		if err != nil {
 			return nil, err

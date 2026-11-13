@@ -340,6 +340,18 @@ func (s *Store) InsertHold(ctx context.Context, entity ids.ID, h app.Hold) error
 	return nil
 }
 
+// Hold reads the entity's hold without locking it.
+func (s *Store) Hold(ctx context.Context, entity, id ids.ID) (app.Hold, error) {
+	r, err := s.q.HoldOf(ctx, sqlcgen.HoldOfParams{ID: id, LegalEntityID: entity})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.Hold{}, fmt.Errorf("%w: %s", app.ErrHoldNotFound, id)
+	}
+	if err != nil {
+		return app.Hold{}, fmt.Errorf("read hold: %w", err)
+	}
+	return restoredHold(sqlcgen.LockHoldRow(r))
+}
+
 // LockHold locks the entity's hold (FOR UPDATE) and restores it.
 func (s *Store) LockHold(ctx context.Context, entity, id ids.ID) (app.Hold, error) {
 	r, err := s.q.LockHold(ctx, sqlcgen.LockHoldParams{ID: id, LegalEntityID: entity})

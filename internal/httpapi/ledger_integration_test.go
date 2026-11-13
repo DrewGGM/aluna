@@ -95,7 +95,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	}
 	requests := approvals.New(policy, events)
 	api := API{
-		LedgerHandlers:         NewLedgerHandlers(ledgerSvc, requests, uow, keys, testPool),
+		LedgerHandlers:         NewLedgerHandlers(ledgerSvc, depositSvc, requests, uow, keys, testPool),
 		ApprovalHandlers:       NewApprovalHandlers(requests, uow, keys, testPool),
 		PartyHandlers:          NewPartyHandlers(partySvc, requests, uow, keys, testPool),
 		ProductHandlers:        NewProductHandlers(productSvc, requests, uow, keys, testPool),

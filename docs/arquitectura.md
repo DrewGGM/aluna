@@ -174,6 +174,11 @@ si falla, la solicitud queda `failed`. La API no dice por qué: la causa queda e
 y solo se lee en la base. Quien pidió no puede decidir su propia solicitud (403 `self_approval_forbidden`), y
 una solicitud vence a los 7 días. Los asientos manuales (`POST /v1/transactions`) no pasan por maker-checker.
 
+Un asiento manual, un hold, su captura o una reversa que toque la cuenta del ledger de una cuenta de depósito
+bloquea primero esa cuenta, como cualquier movimiento de depósitos, y se rechaza con 409 `account_not_active`
+si no está activa (congelada, inactiva o cerrada): el dinero de una cuenta congelada solo se mueve después de
+descongelarla, y un asiento no se cruza con el cierre de la cuenta.
+
 ## Eventos
 
 Cada evento se escribe en `infra.outbox` en la transacción de su efecto, como CloudEvent con las extensiones

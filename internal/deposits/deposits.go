@@ -220,6 +220,24 @@ func (s *Service) LockActive(ctx context.Context, tx postgres.Tx, entity, id ids
 	return a, nil
 }
 
+// LockActiveHeldIn locks until tx ends, in id order as a transfer does, the deposit accounts of the entity held in
+// any of ledgerAccounts, and is ErrAccountNotActive if one is not active; a ledger account no deposit account is
+// held in is left alone. Whatever posts or holds on ledger accounts without going through this module calls it
+// first, as every movement locks its account: so it moves no money of a frozen, dormant or closed account and does
+// not race a close.
+func (s *Service) LockActiveHeldIn(ctx context.Context, tx postgres.Tx, entity ids.ID, ledgerAccounts []ids.ID) error {
+	held, err := pg.NewStore(tx).LockHeldIn(ctx, entity, ledgerAccounts)
+	if err != nil {
+		return err
+	}
+	for _, a := range held {
+		if a.Status != Active {
+			return fmt.Errorf("%w: account %s is %s", ErrAccountNotActive, a.ID, a.Status)
+		}
+	}
+	return nil
+}
+
 // LockAccount locks deposit account id of the entity until tx ends, as ChangeStatus does, and returns it, or
 // ErrAccountNotFound: whoever decides by its status decides on a status nobody changes before tx ends.
 func (s *Service) LockAccount(ctx context.Context, tx postgres.Tx, entity, id ids.ID) (Account, error) {

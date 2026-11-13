@@ -24,10 +24,8 @@ dinero real. Antes hay que reemplazar cuatro piezas de desarrollo:
 
 Límites conocidos: el rol `channel` aún no ve recursos propios (todo le responde 404); los casos de
 screening de pagos no se pueden resolver; las transferencias recibidas por llave van a la cuenta de suspense
-porque no hay directorio de llaves; los asientos manuales (`POST /v1/transactions`, roles `operator`,
-`finance` y `system`) no pasan por maker-checker; y esos asientos y los holds (`POST /v1/holds` y su captura)
-no revisan el estado de una cuenta de depósito, así que también mueven o retienen dinero de una cuenta
-congelada o cerrada.
+porque no hay directorio de llaves; y los asientos manuales (`POST /v1/transactions`, roles `operator`,
+`finance` y `system`) no pasan por maker-checker.
 
 | Etapa | Qué entregó |
 |---|---|

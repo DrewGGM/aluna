@@ -88,7 +88,8 @@ paths:
         Idempotent by `Idempotency-Key` (7 days): the same payload with the same key receives the
         original response (also a business 4xx) without posting again; another payload is 422
         `idempotency_key_reused` and a request that has not finished, 409 `request_in_progress`. A 5xx is
-        not stored: it can be retried with the same key.
+        not stored: it can be retried with the same key. An entry on the ledger account of a deposit account
+        that is not active (frozen, dormant or closed) is 409 `account_not_active`.
       x-aluna-permission: ledger.transactions.post
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -133,7 +134,8 @@ paths:
         Creates a maker-checker `ledger.reversal` request and answers 202 with it. The reversal is posted
         (its entries with the opposite sign) when another person with `ledger.transactions.reverse`
         approves it in `POST /v1/approvals/{id}/approval`; if the ledger rejects it then (already
-        reversed, period closed, insufficient funds), the request ends up `failed`. The reversal of a
+        reversed, period closed, insufficient funds) or it touches a deposit account that is no longer
+        active, the request ends up `failed`. The reversal of a
         reversal is rejected when requested (409 `reversal_of_reversal`). Idempotent by
         `Idempotency-Key`.
       x-aluna-permission: ledger.transactions.reverse
@@ -162,7 +164,8 @@ paths:
       summary: Hold funds of an account
       description: >-
         Creates a pending hold on a sync account: the amount stops being available until it is captured,
-        released or expires. Idempotent by `Idempotency-Key`, like `POST /v1/transactions`.
+        released or expires. Idempotent by `Idempotency-Key`, like `POST /v1/transactions`. A hold on, or
+        against, the ledger account of a deposit account that is not active is 409 `account_not_active`.
       x-aluna-permission: ledger.holds.place
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -189,7 +192,8 @@ paths:
       summary: Capture a hold, fully or partially
       description: >-
         Posts the requested amount from the hold's account to its counterpart and releases the rest. A hold
-        that is no longer pending answers 409 `hold_not_pending`; an expired one, 409 `hold_expired`; an
+        that is no longer pending answers 409 `hold_not_pending`; an expired one, 409 `hold_expired`; one on
+        the ledger account of a deposit account that is no longer active, 409 `account_not_active`; an
         amount larger than the held one, 422 `amount_exceeds_hold`.
       x-aluna-permission: ledger.holds.capture
       parameters:

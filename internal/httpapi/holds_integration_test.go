@@ -128,12 +128,16 @@ func TestTheSameKeyOnTwoHoldsCapturesBoth(t *testing.T) {
 	}
 }
 
+// holdBody is the body of a hold of units on account against counter, expiring in an hour.
+func holdBody(account, counter string, units int64) string {
+	return fmt.Sprintf(`{"account_id":%q,"counter_account_id":%q,"amount":{"amount":%d,"currency":"COP"},"expires_at":%q}`,
+		account, counter, units, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+}
+
 // placeHoldOver creates over HTTP a hold of units on account, expiring in an hour.
 func placeHoldOver(t *testing.T, ts *httptest.Server, account, counter string, units int64) gen.Hold {
 	t.Helper()
-	body := fmt.Sprintf(`{"account_id":%q,"counter_account_id":%q,"amount":{"amount":%d,"currency":"COP"},"expires_at":%q}`,
-		account, counter, units, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
-	r := postTo(t, ts, "/v1/holds", ids.New().String(), body)
+	r := postTo(t, ts, "/v1/holds", ids.New().String(), holdBody(account, counter, units))
 	var hold gen.Hold
 	if r.status != http.StatusCreated || json.Unmarshal(r.body, &hold) != nil || hold.Status != gen.HoldStatusPending {
 		t.Fatalf("create hold = %d %s", r.status, r.body)

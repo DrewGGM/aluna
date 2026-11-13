@@ -60,6 +60,20 @@ func (s Store) LockAccount(ctx context.Context, entity, id ids.ID) (domain.Accou
 	return scan(id, s.q.QueryRow(ctx, selectAccount+` WHERE id = $1 AND legal_entity_id = $2 FOR UPDATE`, id, entity))
 }
 
+// LockHeldIn locks (FOR UPDATE), in id order, the accounts of the entity held in any of ledgerAccounts.
+func (s Store) LockHeldIn(ctx context.Context, entity ids.ID, ledgerAccounts []ids.ID) ([]domain.Account, error) {
+	rows, err := s.q.Query(ctx, selectAccount+` WHERE legal_entity_id = $1 AND ledger_account_id = ANY($2)
+		ORDER BY id FOR UPDATE`, entity, ledgerAccounts)
+	if err != nil {
+		return nil, fmt.Errorf("lock the deposit accounts held in %v: %w", ledgerAccounts, err)
+	}
+	held, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Account, error) { return scan(ids.ID{}, row) })
+	if err != nil {
+		return nil, fmt.Errorf("lock the deposit accounts held in %v: %w", ledgerAccounts, err)
+	}
+	return held, nil
+}
+
 // SetStatus moves account a to status to, with a's last customer activity, and records the change with its
 // actor.
 func (s Store) SetStatus(ctx context.Context, a domain.Account, to domain.Status, actor string) error {

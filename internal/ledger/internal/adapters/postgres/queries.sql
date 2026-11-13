@@ -96,6 +96,13 @@ SELECT clock_timestamp()::timestamptz AS now;
 INSERT INTO ledger.holds (id, legal_entity_id, account_id, counter_account_id, currency, amount, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7);
 
+-- Reads the hold without locking it: its accounts never change, so whoever must lock something else first (the
+-- deposit accounts of a capture) can read them before LockHold.
+-- name: HoldOf :one
+SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at
+FROM ledger.holds
+WHERE id = @id AND legal_entity_id = @legal_entity_id;
+
 -- Locks the hold before the balances (ADR-0004). Another entity's hold looks the same as a missing one.
 -- name: LockHold :one
 SELECT id, account_id, counter_account_id, currency, amount, captured_amount, status, expires_at

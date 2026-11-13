@@ -128,7 +128,8 @@ func TestAReversalIsNotReversed(t *testing.T) {
 // TestAnUnexpectedLedgerErrorIsNotARejection: a ledger error that is not a business rule (here, the canceled
 // context) goes up without being wrapped in ErrCommandRejected: the request does not end up failed.
 func TestAnUnexpectedLedgerErrorIsNotARejection(t *testing.T) {
-	exec := reverseOnApproval(ledger.New(calendar.New(failingEvents{}, time.Now), failingEvents{}))
+	// nil deposits: the canceled context already fails reading the transaction to reverse, before its accounts are locked.
+	exec := reverseOnApproval(ledger.New(calendar.New(failingEvents{}, time.Now), failingEvents{}), nil)
 	payload, err := json.Marshal(reversalRequest{TransactionID: ids.New(), Reason: "test"})
 	if err != nil {
 		t.Fatal(err)

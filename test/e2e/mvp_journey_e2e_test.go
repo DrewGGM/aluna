@@ -5,8 +5,6 @@ package e2e
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -21,8 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/coreos/go-oidc/v3/oidc/oidctest"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -40,6 +36,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/products"
 	"github.com/DrewGGM/aluna/internal/reconciliation"
 	"github.com/DrewGGM/aluna/internal/webhooks"
+	"github.com/DrewGGM/aluna/test/harness"
 )
 
 // The journey's business days: the entity starts on Friday 2026-10-30, October's last business day, and its
@@ -114,31 +111,28 @@ func TestMVPJourney(t *testing.T) {
 	j.corruptAndExpectBreaks(t, a)
 }
 
-// journey is the running api of a new entity, the database it shares with the jobs the test runs in its own
-// process, and who signs the tokens of the entity's people.
+// journey is the running api of a new entity and the database it shares with the jobs the test runs in its own
+// process.
 type journey struct {
-	bin, appDSN, apiURL, railAddr string
-	entity                        ids.ID
-	sign                          func(subject, role string) string
-	pool                          *pgxpool.Pool
-	uow                           *postgres.UnitOfWork
-	jobs                          jobs
-	accounts                      map[string]string // ledger account ids by code
+	bin, appDSN, railAddr string
+	api                   runningAPI
+	pool                  *pgxpool.Pool
+	uow                   *postgres.UnitOfWork
+	jobs                  jobs
+	accounts              map[string]string // ledger account ids by code
 }
 
 // newJourney builds aluna, migrates a fresh database with it, creates the entity on October 30 with aluna entity create
 // and starts aluna api.
 func newJourney(t *testing.T) *journey {
 	t.Helper()
-	bin := buildAluna(t)
+	bin := harness.Build(t, "-race")
 	dsn, cleanup, err := pgtest.StartEmpty(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(cleanup)
-	if out, err := alunaCmd(t, bin, []string{"ALUNA_DATABASE_URL=" + dsn}, "migrate", "up").CombinedOutput(); err != nil {
-		t.Fatalf("aluna migrate up: %v\n%s", err, out)
-	}
+	harness.Migrate(t, bin, dsn)
 	appDSN, err := pgtest.AppDSN(dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -148,21 +142,15 @@ func newJourney(t *testing.T) *journey {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	j := &journey{bin: bin, appDSN: appDSN, entity: createEntity(t, bin, dsn), pool: pool, uow: postgres.NewUnitOfWork(pool), jobs: newJobs(t, pool)}
-	issuer, sign := rolesIssuer(t, j.entity)
-	j.sign = sign
-	addr := freeAddr(t)
-	j.railAddr, j.apiURL = freeAddr(t), "http://"+addr
-	start(t, bin, "api", "ALUNA_HTTP_ADDR="+addr, "ALUNA_RAIL_ADDR="+j.railAddr, "ALUNA_DATABASE_URL="+appDSN,
-		"ALUNA_OIDC_ISSUER="+issuer, "ALUNA_OIDC_AUDIENCE="+audience, "ALUNA_SIMBREB_SECRET="+journeyRailSecret)
-	waitReady(t, j.apiURL+"/readyz")
+	j := &journey{bin: bin, appDSN: appDSN, railAddr: harness.FreeAddr(t), pool: pool, uow: postgres.NewUnitOfWork(pool), jobs: newJobs(t, pool)}
+	j.api = startAPI(t, bin, appDSN, j.railAddr, journeyRailSecret, createEntity(t, bin, dsn))
 	return j
 }
 
 // createEntity registers, with aluna entity create as the tables' owner of dsn, the journey's entity on October 30.
 func createEntity(t *testing.T, bin, dsn string) ids.ID {
 	t.Helper()
-	cmd := alunaCmd(t, bin, []string{"ALUNA_DATABASE_URL=" + dsn}, "entity", "create", "--name", "Entity", "--business-date", october30.String(), "--currency", "COP")
+	cmd := harness.Command(t, bin, []string{"ALUNA_DATABASE_URL=" + dsn}, "entity", "create", "--name", "Entity", "--business-date", october30.String(), "--currency", "COP")
 	var errOut bytes.Buffer
 	cmd.Stderr = &errOut
 	out, err := cmd.Output()
@@ -201,91 +189,9 @@ func newJobs(t *testing.T, pool *pgxpool.Pool) jobs {
 	}
 }
 
-// rolesIssuer is a test OIDC issuer and a function that signs the token of subject with role, all of entity.
-func rolesIssuer(t *testing.T, entity ids.ID) (issuer string, sign func(subject, role string) string) {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ts := serveIssuer(t, &oidctest.Server{PublicKeys: []oidctest.PublicKey{{PublicKey: key.Public(), KeyID: "k1", Algorithm: oidc.RS256}}})
-	return ts.URL, func(subject, role string) string {
-		now := time.Now()
-		claims, err := json.Marshal(map[string]any{
-			"iss": ts.URL, "aud": audience, "sub": subject, "iat": now.Unix(), "exp": now.Add(15 * time.Minute).Unix(),
-			"legal_entity_id": entity.String(), "roles": []string{role},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return oidctest.SignIDToken(key, "k1", oidc.RS256, string(claims))
-	}
-}
-
-// start runs aluna command with env and returns what kills it and waits for it to exit. It also dies with the test,
-// and if the test fails its log is printed.
-func start(t *testing.T, bin, command string, env ...string) (stop func()) {
-	t.Helper()
-	cmd := alunaCmd(t, bin, env, command)
-	var logs bytes.Buffer // os/exec does not write to Stdout and Stderr concurrently if they are the same writer
-	cmd.Stdout, cmd.Stderr = &logs, &logs
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	wait := sync.OnceValue(cmd.Wait)
-	t.Cleanup(func() {
-		wait() //nolint:errcheck,gosec // the process dies with the test context
-		if t.Failed() {
-			t.Logf("aluna %s log:\n%s", command, logs.String())
-		}
-	})
-	return func() {
-		if err := cmd.Process.Kill(); err != nil {
-			t.Fatal(err)
-		}
-		wait() //nolint:errcheck,gosec // killed on purpose
-	}
-}
-
 // as is the api with the session of subject, who has role.
 func (j *journey) as(subject, role string) runningAPI {
-	return runningAPI{base: j.apiURL, token: j.sign(subject, role)}
-}
-
-// expect makes the request as a, fails the test unless it answers want and decodes the response into out if it is not
-// nil.
-func expect(t *testing.T, a runningAPI, method, path, body string, want int, out any) {
-	t.Helper()
-	var raw json.RawMessage
-	if status := call(t, a, method, path, body, &raw); status != want {
-		t.Fatalf("%s %s = %d %s, want %d", method, path, status, raw, want)
-	}
-	if out == nil {
-		return
-	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
-	}
-}
-
-// makerChecker has maker request path with body (202 pending), checks that the maker cannot approve it and has checker
-// approve it, and returns what the approved command returned.
-func makerChecker(t *testing.T, maker, checker runningAPI, path, body string) json.RawMessage {
-	t.Helper()
-	var request struct{ ID, Status string }
-	expect(t, maker, http.MethodPost, path, body, http.StatusAccepted, &request)
-	approval := "/v1/approvals/" + request.ID + "/approval"
-	var self struct{ Code string }
-	expect(t, maker, http.MethodPost, approval, "", http.StatusForbidden, &self)
-	var approved struct {
-		Status string
-		Result json.RawMessage
-	}
-	expect(t, checker, http.MethodPost, approval, "", http.StatusOK, &approved)
-	if request.Status != "pending" || self.Code != "self_approval_forbidden" || approved.Status != "approved" {
-		t.Fatalf("%s: requested %s, the maker approving %s, the checker %s %s", path, request.Status, self.Code, approved.Status, approved.Result)
-	}
-	return approved.Result
+	return j.api.as(subject, role)
 }
 
 // loadCUIFMappings loads cuifMappings with finance's maker-checker.
@@ -413,7 +319,7 @@ func (j *journey) quotedTransfer(t *testing.T, a, b depositAccount, units int64)
 // the journey run only when the test runs them.
 func (j *journey) payThroughTheRail(t *testing.T, a depositAccount, units int64) {
 	t.Helper()
-	stop := start(t, j.bin, "worker", "ALUNA_DATABASE_URL="+j.appDSN, "ALUNA_AUDIT_ANCHOR_DIR="+t.TempDir(),
+	stop := harness.Start(t, j.bin, "worker", "ALUNA_DATABASE_URL="+j.appDSN, "ALUNA_AUDIT_ANCHOR_DIR="+t.TempDir(),
 		"ALUNA_SIMBREB_SECRET="+journeyRailSecret, "ALUNA_SIMBREB_NOTIFY_URL=http://"+j.railAddr)
 	defer stop()
 	before := j.balance(t, a.LedgerAccountID)
@@ -455,7 +361,7 @@ func (j *journey) receiveFromTheRail(t *testing.T, a depositAccount, units int64
 	ref := strconv.FormatInt(time.Now().UnixNano(), 10)
 	body := fmt.Sprintf(`{"creditor_agent":%q,"end_to_end_id":"BANKX%s","instr_id":"INSTR1","tx_id":"TX1","rail_ref":"SIMIN%s",`+
 		`"debtor_agent":"BANKXCOBB","amount":%d,"currency":"COP","settlement_date":"2026-10-30","creditor":{"account_number":%q}}`,
-		j.entity, ref, ref, units, a.ID)
+		j.api.entity, ref, ref, units, a.ID)
 	id, timestamp := "SIMIN"+ref, strconv.FormatInt(time.Now().Unix(), 10)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+j.railAddr+"/v1/rails/simbreb/transfers", strings.NewReader(body))
 	if err != nil {

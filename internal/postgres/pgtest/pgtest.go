@@ -1,8 +1,9 @@
-//go:build integration || e2e
+//go:build integration || e2e || load || restore
 
-// Package pgtest sets up the database for a package's integration and E2E tests. Each package gets its
-// own database: in CI packages run in parallel against the same server and must not see each other's
-// data or migrations.
+// Package pgtest sets up the database for a package's integration, E2E and load tests, and gives the
+// restore drill, which runs its own clusters, the application role's DSN. Each package gets its own
+// database: in CI packages run in parallel against the same server and must not see each other's data
+// or migrations.
 package pgtest
 
 import (

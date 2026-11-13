@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,7 +29,9 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 	"github.com/DrewGGM/aluna/internal/reconciliation"
+	"github.com/DrewGGM/aluna/test/harness"
 )
 
 // image is the PostgreSQL of deploy/compose.yaml.
@@ -42,7 +43,7 @@ const image = "postgres:16"
 // after it, and the restored database passes the audit chain and the controls. It then seals again into a new
 // anchor generation, as the runbook says, and the chain still verifies from its first block.
 func TestPointInTimeRestore(t *testing.T) {
-	bin, anchors := buildAluna(t), t.TempDir()
+	bin, anchors := harness.Build(t), t.TempDir()
 	drill := "aluna-restore-" + strings.ToLower(rand.Text()[:10])
 	wal, base := volume(t, drill+"-wal"), volume(t, drill+"-base")
 	docker(t, "run", "--rm", "-v", wal+":/wal", "-v", base+":/base", image, "chown", "postgres:postgres", "/wal", "/base")
@@ -50,7 +51,7 @@ func TestPointInTimeRestore(t *testing.T) {
 	primary := start(t, drill+"-primary",
 		dockerOptions{"-e", "POSTGRES_USER=aluna", "-e", "POSTGRES_PASSWORD=aluna", "-v", wal + ":/wal", "-v", base + ":/base"},
 		serverSettings{"wal_level=replica", "archive_mode=on", "archive_command=test ! -f /wal/%f && cp %p /wal/%f"})
-	aluna(t, bin, primary, anchors, "migrate", "up")
+	harness.Migrate(t, bin, primary.dsn)
 	e := newEntity(t, primary, anchors)
 	e.work(t, 3)
 	docker(t, "exec", "-u", "postgres", primary.name, "pg_basebackup", "-U", "aluna", "-D", "/base/data", "-X", "stream", "-c", "fast")
@@ -58,7 +59,7 @@ func TestPointInTimeRestore(t *testing.T) {
 	target, kept := e.dbNow(t), e.done
 	e.work(t, 2) // after the target: lost on purpose
 	e.mistake(t)
-	err := run(t.Context(), bin, primary, anchors, "audit", "verify", "--from", "1", "--to", strconv.Itoa(e.done.blocks))
+	err := run(t, bin, primary, anchors, "audit", "verify", "--from", "1", "--to", strconv.Itoa(e.done.blocks))
 	if err == nil || !strings.Contains(err.Error(), "breaks at block 1:") {
 		t.Fatalf("audit verify on the tampered primary = %v, want the chain broken at block 1", err)
 	}
@@ -103,11 +104,9 @@ func anchorGeneration(t *testing.T, anchors string, last int) string {
 	return next
 }
 
-// cluster is a PostgreSQL container of the drill and the owner's DSN to it from the host.
-type cluster struct{ name, dsn string }
-
-// app is the cluster's DSN with the application's role, as the processes connect.
-func (c cluster) app() string { return c.dsn + "&options=-c%20role%3Daluna_app" }
+// cluster is a PostgreSQL container of the drill and the DSNs to it from the host: the owner's, and app with the
+// application's role, as the processes connect.
+type cluster struct{ name, dsn, app string }
 
 // open opens a pool to dsn that the test closes at the end.
 func open(t *testing.T, dsn string) *pgxpool.Pool {
@@ -174,8 +173,12 @@ func start(t *testing.T, name string, options dockerOptions, settings serverSett
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	addr := docker(t, "port", name, "5432/tcp")
-	return cluster{name: name, dsn: "postgres://aluna:aluna@" + addr + "/aluna?sslmode=disable"}
+	c := cluster{name: name, dsn: "postgres://aluna:aluna@" + docker(t, "port", name, "5432/tcp") + "/aluna?sslmode=disable"}
+	var err error
+	if c.app, err = pgtest.AppDSN(c.dsn); err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 // logs is the tail of the container's log, to explain a failure.
@@ -184,29 +187,10 @@ func logs(name string) string {
 	return string(out)
 }
 
-// buildAluna compiles the binary under test.
-func buildAluna(t *testing.T) string {
+// run runs aluna args against c as the application, sealing into or verifying against anchors.
+func run(t *testing.T, bin string, c cluster, anchors string, args ...string) error {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "aluna")
-	if runtime.GOOS == "windows" {
-		bin += ".exe"
-	}
-	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", bin, "./cmd/aluna") //nolint:gosec // bin is a path in the test's TempDir
-	cmd.Dir = filepath.Join("..", "..")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
-	return bin
-}
-
-// run runs aluna args against c: migrate as the owner, the rest as the application.
-func run(ctx context.Context, bin string, c cluster, anchors string, args ...string) error {
-	dsn := c.app()
-	if args[0] == "migrate" {
-		dsn = c.dsn
-	}
-	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // the binary this test built
-	cmd.Env = append(os.Environ(), "ALUNA_DATABASE_URL="+dsn, "ALUNA_AUDIT_ANCHOR_DIR="+anchors)
+	cmd := harness.Command(t, bin, []string{"ALUNA_DATABASE_URL=" + c.app, "ALUNA_AUDIT_ANCHOR_DIR=" + anchors}, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return errors.Join(err, errors.New(string(out)))
 	}
@@ -216,7 +200,7 @@ func run(ctx context.Context, bin string, c cluster, anchors string, args ...str
 // aluna is run that stops the test on a failure.
 func aluna(t *testing.T, bin string, c cluster, anchors string, args ...string) {
 	t.Helper()
-	if err := run(t.Context(), bin, c, anchors, args...); err != nil {
+	if err := run(t, bin, c, anchors, args...); err != nil {
 		t.Fatalf("aluna %s: %v", strings.Join(args, " "), err)
 	}
 }
@@ -282,7 +266,7 @@ type entity struct {
 // newEntity creates the entity and its accounts on c, sealing its audit blocks into anchors.
 func newEntity(t *testing.T, c cluster, anchors string) *entity {
 	t.Helper()
-	e := &entity{id: ids.New(), owner: open(t, c.dsn), app: open(t, c.app()), businessDate: time.Date(2026, time.March, 2, 0, 0, 0, 0, time.UTC)}
+	e := &entity{id: ids.New(), owner: open(t, c.dsn), app: open(t, c.app), businessDate: time.Date(2026, time.March, 2, 0, 0, 0, 0, time.UTC)}
 	if _, err := e.owner.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
 		VALUES ($1, 'Restore drill', $2, 'COP')`, e.id, e.businessDate); err != nil {
 		t.Fatal(err)
@@ -390,7 +374,7 @@ func (e *entity) mistake(t *testing.T) {
 func (e *entity) resume(t *testing.T, c cluster, at progress, anchors string) *entity {
 	t.Helper()
 	r := *e
-	r.owner, r.app, r.done = open(t, c.dsn), open(t, c.app()), at
+	r.owner, r.app, r.done = open(t, c.dsn), open(t, c.app), at
 	var err error
 	if r.records, err = audit.WithFileAnchor(anchors); err != nil {
 		t.Fatal(err)
@@ -406,7 +390,7 @@ func (e *entity) resume(t *testing.T, c cluster, at progress, anchors string) *e
 // controls runs the reconciliation controls on c and returns the controls of the entity's open breaks.
 func (e *entity) controls(t *testing.T, c cluster) []string {
 	t.Helper()
-	pool := open(t, c.app())
+	pool := open(t, c.app)
 	events, err := outbox.New(pool)
 	if err != nil {
 		t.Fatal(err)

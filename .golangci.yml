@@ -5,6 +5,8 @@ run:
   build-tags:
     - integration
     - e2e
+    - load
+    - restore
 
 linters:
   default: none

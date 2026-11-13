@@ -42,7 +42,7 @@ func (w world) rollUntil(t *testing.T, day calendar.Date) {
 			today, err = cal.BusinessDate(t.Context(), tx, w.entity)
 			return err
 		})
-		if time.Date(today.Year, today.Month, today.Day, 0, 0, 0, 0, time.UTC).After(time.Date(day.Year, day.Month, day.Day, 0, 0, 0, 0, time.UTC)) {
+		if today.After(day) {
 			return
 		}
 		w.rollover(t, today)
@@ -148,7 +148,7 @@ func (w world) expectCapitalization(t *testing.T, a deposits.Account, expense id
 	}
 	header := posted.Code == "deposits.interest_capitalization" && posted.RuleVersion == "deposits/v1" &&
 		posted.Metadata["rounding"] == "half_even" && posted.Actor == "deposits.accrual" && posted.Channel == "job"
-	if !header || !posted.ValueDate.Equal(time.Date(on.Year, on.Month, on.Day, 0, 0, 0, 0, time.UTC)) {
+	if !header || !posted.ValueDate.Equal(on.Time()) {
 		t.Fatalf("capitalization = %+v, want the deposit rules, half even, by the accrual job, on %v", posted, on)
 	}
 	return posted

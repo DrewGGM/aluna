@@ -277,8 +277,8 @@ func (o opening) CreateLedgerAccount(ctx context.Context, in ledger.CreateAccoun
 // statusChanges is app.StatusChanges over tx; the store gives LockAccount.
 type statusChanges struct{ statusWriter }
 
-func (c statusChanges) Balance(ctx context.Context, ledgerAccountID ids.ID) (ledger.Balance, error) {
-	return c.s.ledger.Balance(ctx, c.tx, ledgerAccountID)
+func (c statusChanges) Balance(ctx context.Context, entity, ledgerAccountID ids.ID) (ledger.Balance, error) {
+	return c.s.ledger.Balance(ctx, c.tx, entity, ledgerAccountID)
 }
 
 func (c statusChanges) BusinessDate(ctx context.Context, entity ids.ID) (calendar.Date, error) {
@@ -320,7 +320,7 @@ func statusEvent(a Account, to Status) (string, any) {
 	change := statusPayload{AccountID: a.ID, PreviousStatus: a.Status, Status: to}
 	switch {
 	case to == Dormant:
-		return typeDormant, dormantPayload{statusPayload: change, LastCustomerActivityOn: isoDate(a.LastCustomerActivityOn)}
+		return typeDormant, dormantPayload{statusPayload: change, LastCustomerActivityOn: a.LastCustomerActivityOn.String()}
 	case to == Frozen:
 		return typeFrozen, change
 	case to == Closed:
@@ -424,7 +424,7 @@ func (m movements) Limits(ctx context.Context, versionID ids.ID) (domain.Limits,
 func (m movements) SMMLV(ctx context.Context, on calendar.Date) (money.Precise, error) {
 	wage, err := m.s.products.MarketParameter(ctx, m.tx, products.SMMLV, "", on)
 	if errors.Is(err, products.ErrNoMarketParameter) {
-		return money.Precise{}, fmt.Errorf("%w: %d-%02d-%02d", ErrMinimumWageMissing, on.Year, on.Month, on.Day)
+		return money.Precise{}, fmt.Errorf("%w: %s", ErrMinimumWageMissing, on)
 	}
 	return wage, err
 }
@@ -436,9 +436,9 @@ func (m movements) Used(ctx context.Context, a domain.Account, on calendar.Date)
 	if err != nil {
 		return domain.Usage{}, err
 	}
-	b, err := m.s.ledger.Balance(ctx, m.tx, a.LedgerAccountID)
+	b, err := m.s.ledger.Balance(ctx, m.tx, a.LegalEntityID, a.LedgerAccountID)
 	if err != nil {
 		return domain.Usage{}, err
 	}
-	return domain.Usage{DailyDebits: daily, MonthlyDebits: monthly, Balance: ledger.NaturalBalance(ledger.KindLiability, b.Posted)}, nil
+	return domain.Usage{DailyDebits: daily, MonthlyDebits: monthly, Balance: ledger.NaturalBalance(ledger.KindLiability, b.Posted.Units())}, nil
 }

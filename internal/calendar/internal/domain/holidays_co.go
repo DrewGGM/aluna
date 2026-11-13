@@ -63,13 +63,13 @@ func ColombianHolidays(year int) []Date {
 	for _, offset := range easterMondayHolidays {
 		days = append(days, nextMonday(e.AddDays(offset)))
 	}
-	slices.SortFunc(days, func(a, b Date) int { return a.utc().Compare(b.utc()) })
+	slices.SortFunc(days, func(a, b Date) int { return a.Time().Compare(b.Time()) })
 	return slices.Compact(days)
 }
 
 // nextMonday is d if it is a Monday; otherwise, the following Monday.
 func nextMonday(d Date) Date {
-	return d.AddDays((int(time.Monday) - int(d.utc().Weekday()) + 7) % 7)
+	return d.AddDays((int(time.Monday) - int(d.Time().Weekday()) + 7) % 7)
 }
 
 // easter is Easter Sunday in the Gregorian calendar (the anonymous Meeus/Jones/Butcher algorithm).

@@ -156,7 +156,7 @@ func (p ports) BusinessDate(ctx context.Context, entity ids.ID) (calendar.Date, 
 func (p ports) UVT(ctx context.Context, on calendar.Date) (money.Precise, error) {
 	uvt, err := p.s.products.MarketParameter(ctx, p.tx, products.UVT, "", on)
 	if errors.Is(err, products.ErrNoMarketParameter) {
-		return money.Precise{}, fmt.Errorf("%w: %d-%02d-%02d", ErrUVTMissing, on.Year, on.Month, on.Day)
+		return money.Precise{}, fmt.Errorf("%w: %s", ErrUVTMissing, on)
 	}
 	return uvt, err
 }

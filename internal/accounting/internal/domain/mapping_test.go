@@ -23,8 +23,11 @@ func day(t *testing.T, s string) time.Time {
 
 func date(t *testing.T, s string) calendar.Date {
 	t.Helper()
-	d := day(t, s)
-	return calendar.Date{Year: d.Year(), Month: d.Month(), Day: d.Day()}
+	d, err := calendar.ParseDate(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
 
 func mapping(t *testing.T, pattern, code, from, to string) domain.Mapping {

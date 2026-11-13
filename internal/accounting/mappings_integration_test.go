@@ -67,11 +67,11 @@ func load(t *testing.T, s *accounting.Service, entity ids.ID, m []accounting.Map
 
 func on(t *testing.T, s string) calendar.Date {
 	t.Helper()
-	d, err := time.Parse(time.DateOnly, s)
+	d, err := calendar.ParseDate(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return calendar.Date{Year: d.Year(), Month: d.Month(), Day: d.Day()}
+	return d
 }
 
 // TestAnAccountMapsByItsMostSpecificPatternInForce (FR-36): a period ends the day before the next, and another entity

@@ -48,14 +48,10 @@ func newEntity(t *testing.T, businessDate calendar.Date) ids.ID {
 	id := ids.New()
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, timezone, business_date, functional_currency)
-			VALUES ($1, 'Test entity', 'America/Bogota', $2, 'COP')`, id, dateOf(businessDate))
+			VALUES ($1, 'Test entity', 'America/Bogota', $2, 'COP')`, id, businessDate.Time())
 		return err
 	})
 	return id
-}
-
-func dateOf(d calendar.Date) time.Time {
-	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC)
 }
 
 func rollover(t *testing.T, entity ids.ID, expected calendar.Date) (calendar.Date, error) {
@@ -267,7 +263,7 @@ func TestAPostingKeepsTheDateItRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, err := testLedger().Transaction(t.Context(), testPool, entity, posted)
-	if err != nil || !stored.BusinessDate.Equal(dateOf(monday)) {
+	if err != nil || !stored.BusinessDate.Equal(monday.Time()) {
 		t.Fatalf("the posting got %v (%v), want the Monday it read", stored.BusinessDate, err)
 	}
 	if got := businessDate(t, entity); got != tuesday {
@@ -349,7 +345,7 @@ func checkPostedOnTheDateRead(t *testing.T, entity ids.ID, posted []postedOn, at
 	seen := map[calendar.Date]int{}
 	for _, p := range posted {
 		stored, err := testLedger().Transaction(t.Context(), testPool, entity, p.tx)
-		if err != nil || !stored.BusinessDate.Equal(dateOf(p.read)) {
+		if err != nil || !stored.BusinessDate.Equal(p.read.Time()) {
 			t.Fatalf("transaction %s: business date %v, it had read %v (%v)", p.tx, stored.BusinessDate, p.read, err)
 		}
 		seen[p.read]++
@@ -373,7 +369,7 @@ func postOn(t *testing.T, tx postgres.Tx, entity, cash, deposit ids.ID, day cale
 		return ids.ID{}, err
 	}
 	posting, err := testLedger().Post(t.Context(), tx, ledger.PostInput{
-		LegalEntityID: entity, Code: "deposit", ValueDate: dateOf(day), BusinessDate: dateOf(day),
+		LegalEntityID: entity, Code: "deposit", ValueDate: day.Time(), BusinessDate: day.Time(),
 		Source: "test", ExternalRef: ids.New().String(), Actor: "tester", Channel: "test", RuleVersion: "v1",
 		Entries: []ledger.EntryInput{{AccountID: cash, Amount: money.New(100, cop)}, {AccountID: deposit, Amount: money.New(-100, cop)}},
 	})

@@ -54,7 +54,7 @@ func TestReverseUndoesATransaction(t *testing.T) {
 	c := cop(t)
 	checkReversal(t, original, reversal,
 		[]ledger.EntryInput{{AccountID: cash.ID, Amount: money.New(-100, c)}, {AccountID: deposit.ID, Amount: money.New(100, c)}})
-	if pc, pd := postedOf(t, cash.ID), postedOf(t, deposit.ID); pc != 0 || pd != 0 {
+	if pc, pd := postedOf(t, cash), postedOf(t, deposit); pc != 0 || pd != 0 {
 		t.Fatalf("balances after the reversal = %d and %d, want 0 and 0", pc, pd)
 	}
 	for _, posted := range []ledger.Transaction{original, reversal} { // without metadata and with metadata
@@ -91,7 +91,7 @@ func TestATransactionIsReversedOnlyOnce(t *testing.T) {
 	if !errors.Is(err, ledger.ErrAlreadyReversed) || again.ID != first.ID {
 		t.Fatalf("second reversal = %s, %v; want ErrAlreadyReversed with the first one %s", again.ID, err, first.ID)
 	}
-	if pc := postedOf(t, cash.ID); pc != 0 {
+	if pc := postedOf(t, cash); pc != 0 {
 		t.Fatalf("cash balance = %d, want 0: the second reversal moves no money", pc)
 	}
 }
@@ -164,7 +164,7 @@ func TestReversingASpentDepositRespectsTheLimits(t *testing.T) {
 	if _, err := reverse(t, credited.ID); !errors.Is(err, ledger.ErrInsufficientFunds) {
 		t.Fatalf("reversing a spent deposit = %v, want ErrInsufficientFunds", err)
 	}
-	if pc, pd := postedOf(t, cash.ID), postedOf(t, deposit.ID); pc != 100 || pd != 0 {
+	if pc, pd := postedOf(t, cash), postedOf(t, deposit); pc != 100 || pd != 0 {
 		t.Fatalf("balances = %d and %d, want 100 and 0: the rejected reversal moves no money", pc, pd)
 	}
 }
@@ -178,8 +178,8 @@ func TestAReversalCanBeReversed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := reverse(t, reversal.ID); err != nil || postedOf(t, cash.ID) != 100 {
-		t.Fatalf("reversing the reversal = %v, cash %d; want cash at 100", err, postedOf(t, cash.ID))
+	if _, err := reverse(t, reversal.ID); err != nil || postedOf(t, cash) != 100 {
+		t.Fatalf("reversing the reversal = %v, cash %d; want cash at 100", err, postedOf(t, cash))
 	}
 }
 
@@ -202,7 +202,7 @@ func TestReverseRejects(t *testing.T) {
 			}
 		})
 	}
-	if pc := postedOf(t, cash.ID); pc != 100 {
+	if pc := postedOf(t, cash); pc != 100 {
 		t.Fatalf("cash balance = %d, want 100: no rejected reversal moves money", pc)
 	}
 }

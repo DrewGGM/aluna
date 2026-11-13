@@ -159,11 +159,11 @@ func (w world) balance(t *testing.T, a deposits.Account) int64 {
 
 func (w world) posted(t *testing.T, ledgerAccountID ids.ID) int64 {
 	t.Helper()
-	b, err := w.ledger.Balance(t.Context(), testPool, ledgerAccountID)
+	b, err := w.ledger.Balance(t.Context(), testPool, w.entity, ledgerAccountID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b.Posted
+	return b.Posted.Units()
 }
 
 // TestMoneyMovesBetweenAccounts (US-5, FR-23): open two accounts, deposit 100,000 into the first and transfer
@@ -339,7 +339,7 @@ func TestTheLastCustomerActivityIsTheBusinessDate(t *testing.T) {
 	}
 
 	on := deposited.BusinessDate
-	if (calendar.Date{Year: on.Year(), Month: on.Month(), Day: on.Day()}) != tuesday {
+	if calendar.DateOf(on) != tuesday {
 		t.Fatalf("deposit posted on %s, want %v", on, tuesday)
 	}
 	if got := w.reread(t, a).LastCustomerActivityOn; got != tuesday {

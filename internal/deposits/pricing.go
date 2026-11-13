@@ -30,7 +30,7 @@ func (s *Service) quoteInput(ctx context.Context, tx postgres.Tx, a Account, op 
 	if err != nil {
 		return pricing.QuoteInput{}, err
 	}
-	b, err := s.ledger.Balance(ctx, tx, a.LedgerAccountID)
+	b, err := s.ledger.Balance(ctx, tx, a.LegalEntityID, a.LedgerAccountID)
 	if err != nil {
 		return pricing.QuoteInput{}, err
 	}
@@ -39,7 +39,7 @@ func (s *Service) quoteInput(ctx context.Context, tx postgres.Tx, a Account, op 
 		Amount: amount,
 		Facts: products.RuleVars{
 			PartyKind: string(holder.Kind), RiskLevel: string(holder.Current.RiskLevel),
-			BalanceUnits: ledger.NaturalBalance(ledger.KindLiability, b.Posted),
+			BalanceUnits: ledger.NaturalBalance(ledger.KindLiability, b.Posted.Units()),
 		},
 	}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/DrewGGM/aluna/internal/ledger"
+	"github.com/DrewGGM/aluna/internal/money"
 )
 
 var statuses = []Status{Pending, Active, Frozen, Dormant, Closed}
@@ -69,8 +70,9 @@ func TestAnAccountClosesEmpty(t *testing.T) {
 		{"with a pending credit hold", 0, 0, 50, ErrPendingHolds},
 		{"with a balance and its hold", -100, 100, 0, ErrPendingHolds},
 	}
+	cop := currencyOf(t, "COP")
 	for _, c := range cases {
-		b := ledger.Balance{Posted: c.posted, PendingDebits: c.debits, PendingCredits: c.credits}
+		b := ledger.Balance{Posted: money.New(c.posted, cop), PendingDebits: money.New(c.debits, cop), PendingCredits: money.New(c.credits, cop)}
 		if err := CheckClosable(b); !errors.Is(err, c.want) {
 			t.Errorf("%s = %v, want %v", c.name, err, c.want)
 		}

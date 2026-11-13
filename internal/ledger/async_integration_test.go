@@ -61,14 +61,14 @@ func TestPostDoesNotCheckNorUpdateAsyncAccounts(t *testing.T) {
 
 	mustPostRef(t, transfer(t, cash.ID, settlement.ID, ids.New().String())) // the async asset ends at -100
 
-	if b := balanceOf(t, settlement.ID); b.Posted != 0 || b.Version != 0 {
+	if b := balanceOf(t, settlement); b.Posted.Units() != 0 || b.Version != 0 {
 		t.Fatalf("async account balance before aggregating = %+v, want untouched", b)
 	}
 	catchUp(t, 100)
-	if b := balanceOf(t, settlement.ID); b.Posted != -100 {
+	if b := balanceOf(t, settlement); b.Posted.Units() != -100 {
 		t.Fatalf("async account balance after aggregating = %+v, want -100", b)
 	}
-	if b := balanceOf(t, cash.ID); b.Posted != 100 {
+	if b := balanceOf(t, cash); b.Posted.Units() != 100 {
 		t.Fatalf("cash (sync) after aggregating = %+v, want 100: the aggregator only touches async accounts", b)
 	}
 }
@@ -84,15 +84,15 @@ func TestAggregationMatchesTheEntries(t *testing.T) {
 	}
 
 	catchUp(t, 2)
-	before := balanceOf(t, clearing.ID)
+	before := balanceOf(t, clearing)
 
 	if n := aggregate(t, 2); n != 0 {
 		t.Fatalf("the second run aggregated %d entries, want 0", n)
 	}
-	if after := balanceOf(t, clearing.ID); after != before || unaggregated(t) != 0 {
+	if after := balanceOf(t, clearing); after != before || unaggregated(t) != 0 {
 		t.Fatalf("balance after aggregating again = %+v, before %+v: it was duplicated", after, before)
 	}
-	if b := balanceOf(t, income.ID); b.Posted != -300 {
+	if b := balanceOf(t, income); b.Posted.Units() != -300 {
 		t.Fatalf("income = %+v, want -300", b)
 	}
 }
@@ -111,7 +111,7 @@ func TestAPostingInFlightIsNotSkipped(t *testing.T) {
 	}
 
 	catchUp(t, 100)
-	if b := balanceOf(t, clearing.ID); b.Posted != -200 {
+	if b := balanceOf(t, clearing); b.Posted.Units() != -200 {
 		t.Fatalf("clearing = %+v, want both postings (-200)", b)
 	}
 }
@@ -144,7 +144,7 @@ func TestAnOlderTransactionWithNewerEntriesIsAggregated(t *testing.T) {
 	}
 
 	catchUp(t, 1)
-	if b := balanceOf(t, clearing.ID); b.Posted != -200 {
+	if b := balanceOf(t, clearing); b.Posted.Units() != -200 {
 		t.Fatalf("clearing = %+v, want both postings (-200)", b)
 	}
 }

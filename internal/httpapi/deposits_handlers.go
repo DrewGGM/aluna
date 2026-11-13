@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
-	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
@@ -234,6 +233,4 @@ func toDepositAccountJSON(a deposits.Account) gen.DepositAccount {
 	}
 }
 
-func dateJSON(d calendar.Date) openapi_types.Date {
-	return dateOf(time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC))
-}
+func dateJSON(d calendar.Date) openapi_types.Date { return dateOf(d.Time()) }

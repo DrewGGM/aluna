@@ -13,7 +13,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -247,39 +246,50 @@ func (s *Store) AddToBalance(ctx context.Context, accountID ids.ID, d app.Balanc
 	return nil
 }
 
-// Balance returns an account's materialized balance, without locking it.
-func (s *Store) Balance(ctx context.Context, accountID ids.ID) (app.Balance, error) {
-	r, err := s.q.Balance(ctx, accountID)
+// Balance returns the materialized balance of one of the entity's accounts, without locking it; another
+// entity's account is ErrAccountNotFound.
+func (s *Store) Balance(ctx context.Context, entity, accountID ids.ID) (app.Balance, error) {
+	r, err := s.q.Balance(ctx, sqlcgen.BalanceParams{AccountID: accountID, LegalEntityID: entity})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.Balance{}, fmt.Errorf("%w: %s", app.ErrAccountNotFound, accountID)
 	}
 	if err != nil {
 		return app.Balance{}, fmt.Errorf("read balance: %w", err)
 	}
-	return app.Balance{Posted: r.Posted, PendingDebits: r.PendingDebits, PendingCredits: r.PendingCredits, Version: r.Version}, nil
+	cur, err := money.CurrencyOf(r.Currency)
+	if err != nil {
+		return app.Balance{}, fmt.Errorf("balance of %s: %w", accountID, err)
+	}
+	return app.Balance{
+		Posted: money.New(r.Posted, cur), PendingDebits: money.New(r.PendingDebits, cur),
+		PendingCredits: money.New(r.PendingCredits, cur), Version: r.Version,
+	}, nil
 }
 
-// PostedAsOf sums the account's entries within the bitemporal cut at.
-func (s *Store) PostedAsOf(ctx context.Context, accountID ids.ID, at app.BalanceAsOf) (int64, error) {
-	arg := sqlcgen.PostedAsOfParams{AccountID: accountID}
-	if at.ValueDate != nil {
-		arg.AsOfValueDate = pgtype.Date{Time: *at.ValueDate, Valid: true}
+// PostedAsOf sums the entries of the entity's account within the bitemporal cut at; another entity's
+// account is ErrAccountNotFound.
+func (s *Store) PostedAsOf(ctx context.Context, entity, accountID ids.ID, at app.BalanceAsOf) (money.Amount, error) {
+	r, err := s.q.PostedAsOf(ctx, sqlcgen.PostedAsOfParams{
+		AccountID: accountID, LegalEntityID: entity, AsOfValueDate: at.ValueDate, AsKnownAt: at.KnownAt,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return money.Amount{}, fmt.Errorf("%w: %s", app.ErrAccountNotFound, accountID)
 	}
-	if at.KnownAt != nil {
-		arg.AsKnownAt = pgtype.Timestamptz{Time: *at.KnownAt, Valid: true}
-	}
-	posted, err := s.q.PostedAsOf(ctx, arg)
 	if err != nil {
-		return 0, fmt.Errorf("sum bitemporal balance: %w", err)
+		return money.Amount{}, fmt.Errorf("sum bitemporal balance: %w", err)
 	}
-	return posted, nil
+	cur, err := money.CurrencyOf(r.Currency)
+	if err != nil {
+		return money.Amount{}, fmt.Errorf("bitemporal balance of %s: %w", accountID, err)
+	}
+	return money.New(r.Posted, cur), nil
 }
 
 // EntriesBefore reads the first limit entries of the entity's account before p, newest first.
 func (s *Store) EntriesBefore(ctx context.Context, entity, accountID ids.ID, p app.Position, limit int) ([]app.HistoryEntry, error) {
 	arg := sqlcgen.EntriesBeforeParams{AccountID: accountID, LegalEntityID: entity, Page: int64(limit)}
 	if !p.PostedAt.IsZero() {
-		arg.PostedAt, arg.EntryID = pgtype.Timestamptz{Time: p.PostedAt, Valid: true}, pgtype.Int8{Int64: p.EntryID, Valid: true}
+		arg.PostedAt, arg.EntryID = &p.PostedAt, &p.EntryID
 	}
 	rows, err := s.q.EntriesBefore(ctx, arg)
 	if err != nil {

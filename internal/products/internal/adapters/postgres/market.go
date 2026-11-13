@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,7 +27,7 @@ var _ app.MarketParameters = Store{}
 // app.ErrMarketParameterOverlap.
 func (s Store) InsertParameter(ctx context.Context, p app.MarketParameter) error {
 	_, err := s.q.Exec(ctx, `INSERT INTO products.market_parameters (kind, modality, valid_from, valid_to, value)
-		VALUES ($1, $2, $3, $4, $5::numeric)`, p.Kind, p.Modality, dateOf(p.ValidFrom), dateOf(p.ValidTo), p.Value.String())
+		VALUES ($1, $2, $3, $4, $5::numeric)`, p.Kind, p.Modality, p.ValidFrom.Time(), p.ValidTo.Time(), p.Value.String())
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && (pgErr.Code == exclusionViolation && pgErr.ConstraintName == noOverlap ||
 		pgErr.Code == uniqueViolation && pgErr.ConstraintName == sameStart) {
@@ -45,7 +44,7 @@ func (s Store) Overlaps(ctx context.Context, p app.MarketParameter) (bool, error
 	var overlaps bool
 	err := s.q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM products.market_parameters
 		WHERE kind = $1 AND modality = $2 AND daterange(valid_from, valid_to) && daterange($3, $4))`,
-		p.Kind, p.Modality, dateOf(p.ValidFrom), dateOf(p.ValidTo)).Scan(&overlaps)
+		p.Kind, p.Modality, p.ValidFrom.Time(), p.ValidTo.Time()).Scan(&overlaps)
 	if err != nil {
 		return false, fmt.Errorf("check the periods of market parameter %s %s: %w", p.Kind, p.Modality, err)
 	}
@@ -57,9 +56,9 @@ func (s Store) Overlaps(ctx context.Context, p app.MarketParameter) (bool, error
 func (s Store) ValueOn(ctx context.Context, kind app.MarketKind, modality string, on calendar.Date) (money.Precise, error) {
 	var value string
 	err := s.q.QueryRow(ctx, `SELECT value::text FROM products.market_parameters
-		WHERE kind = $1 AND modality = $2 AND daterange(valid_from, valid_to) @> $3::date`, kind, modality, dateOf(on)).Scan(&value)
+		WHERE kind = $1 AND modality = $2 AND daterange(valid_from, valid_to) @> $3::date`, kind, modality, on.Time()).Scan(&value)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return money.Precise{}, fmt.Errorf("%w: %s %s on %d-%02d-%02d", app.ErrNoMarketParameter, kind, modality, on.Year, on.Month, on.Day)
+		return money.Precise{}, fmt.Errorf("%w: %s %s on %s", app.ErrNoMarketParameter, kind, modality, on)
 	}
 	if err != nil {
 		return money.Precise{}, fmt.Errorf("read market parameter %s %s: %w", kind, modality, err)
@@ -69,8 +68,4 @@ func (s Store) ValueOn(ctx context.Context, kind app.MarketKind, modality string
 		return money.Precise{}, fmt.Errorf("stored market parameter %s %s: %w", kind, modality, err)
 	}
 	return parsed, nil
-}
-
-func dateOf(d calendar.Date) time.Time {
-	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC)
 }

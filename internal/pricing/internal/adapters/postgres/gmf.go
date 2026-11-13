@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -62,12 +61,12 @@ func (s Store) IsExempt(ctx context.Context, entity, accountID ids.ID) (bool, er
 // transaction ends; the month's row is created if missing, so that there is one to lock.
 func (s Store) ExemptUsed(ctx context.Context, entity, party ids.ID, month calendar.Date) (int64, error) {
 	if _, err := s.q.Exec(ctx, `INSERT INTO pricing.gmf_monthly (legal_entity_id, party_id, month, exempt_used_units)
-		VALUES ($1, $2, $3, 0) ON CONFLICT DO NOTHING`, entity, party, dateOf(month)); err != nil {
+		VALUES ($1, $2, $3, 0) ON CONFLICT DO NOTHING`, entity, party, month.Time()); err != nil {
 		return 0, fmt.Errorf("GMF exemption of party %s: %w", party, err)
 	}
 	var used int64
 	err := s.q.QueryRow(ctx, `SELECT exempt_used_units FROM pricing.gmf_monthly WHERE legal_entity_id = $1 AND party_id = $2 AND month = $3
-		FOR UPDATE`, entity, party, dateOf(month)).Scan(&used)
+		FOR UPDATE`, entity, party, month.Time()).Scan(&used)
 	if err != nil {
 		return 0, fmt.Errorf("GMF exemption of party %s: %w", party, err)
 	}
@@ -81,7 +80,7 @@ func (s Store) UseExemption(ctx context.Context, entity, party ids.ID, month cal
 		SELECT $1, $2, $3, $4::bigint WHERE $4::bigint <= $5::bigint
 		ON CONFLICT (legal_entity_id, party_id, month) DO UPDATE SET exempt_used_units = m.exempt_used_units + EXCLUDED.exempt_used_units
 			WHERE m.exempt_used_units + EXCLUDED.exempt_used_units <= $5::bigint`,
-		entity, party, dateOf(month), units, limit)
+		entity, party, month.Time(), units, limit)
 	if err != nil {
 		return fmt.Errorf("use the GMF exemption of party %s: %w", party, err)
 	}
@@ -89,9 +88,4 @@ func (s Store) UseExemption(ctx context.Context, entity, party ids.ID, month cal
 		return fmt.Errorf("%w: party %s has less than %d units of its GMF exemption left", app.ErrQuoteUnavailable, party, units)
 	}
 	return nil
-}
-
-// dateOf is day at midnight UTC, as pgx writes a date.
-func dateOf(day calendar.Date) time.Time {
-	return time.Date(day.Year, day.Month, day.Day, 0, 0, 0, 0, time.UTC)
 }

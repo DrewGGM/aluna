@@ -368,7 +368,7 @@ func lockActive(ctx context.Context, s Movements, entity, id ids.ID) (domain.Acc
 // post posts entries on today, the entity's business date, as value date too, and records it as the last
 // activity of customer account a.
 func post(ctx context.Context, s Movements, a domain.Account, today calendar.Date, h header, entries []ledger.EntryInput) (ledger.Transaction, error) {
-	day := dateTime(today)
+	day := today.Time()
 	posted, err := s.Post(ctx, ledger.PostInput{
 		LegalEntityID: a.LegalEntityID, Code: h.code, ValueDate: day, BusinessDate: day,
 		Source: movementSource, ExternalRef: h.externalRef, Actor: h.actor, Channel: h.channel,

@@ -136,7 +136,7 @@ func TestRaceDebits(t *testing.T) {
 	if succeeded, insufficient := outcomes(t, errs); succeeded != 1 || insufficient != 49 {
 		t.Fatalf("%d withdrawals went through and %d were insufficient funds; want 1 and 49", succeeded, insufficient)
 	}
-	if natural := ledger.NaturalBalance(ledger.KindLiability, postedOf(t, deposit.ID)); natural != 3_000_000 {
+	if natural := ledger.NaturalBalance(ledger.KindLiability, postedOf(t, deposit)); natural != 3_000_000 {
 		t.Fatalf("deposit natural balance = %d, want 3,000,000 (30,000 COP)", natural)
 	}
 	if net := netOfEntries(t, deposit.ID); !maps.Equal(net, map[string]int64{"COP": 0}) {
@@ -146,7 +146,7 @@ func TestRaceDebits(t *testing.T) {
 	if err := testPool.QueryRow(t.Context(), `SELECT sum(amount)::bigint FROM ledger.entries WHERE account_id = $1`, deposit.ID).Scan(&entries); err != nil {
 		t.Fatal(err)
 	}
-	if posted := postedOf(t, deposit.ID); entries != posted {
+	if posted := postedOf(t, deposit); entries != posted {
 		t.Fatalf("Σ deposit entries = %d and its materialized balance = %d: they must match", entries, posted)
 	}
 }
@@ -173,7 +173,7 @@ func TestRaceCrossTransfers(t *testing.T) {
 	if err := errors.Join(errs...); err != nil {
 		t.Fatal(err)
 	}
-	if pa, pb := postedOf(t, a.ID), postedOf(t, b.ID); pa != 1_000_000 || pb != 1_000_000 {
+	if pa, pb := postedOf(t, a), postedOf(t, b); pa != 1_000_000 || pb != 1_000_000 {
 		t.Fatalf("balances = %d and %d, want 1,000,000 and 1,000,000", pa, pb)
 	}
 }

@@ -34,12 +34,13 @@ func ParseDate(s string) (Date, error) {
 func DateOf(t time.Time) Date { return Date{Year: t.Year(), Month: t.Month(), Day: t.Day()} }
 
 // After reports whether d is a later day than o.
-func (d Date) After(o Date) bool { return d.utc().After(o.utc()) }
+func (d Date) After(o Date) bool { return d.Time().After(o.Time()) }
 
-func (d Date) utc() time.Time { return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC) }
+// Time is d at midnight UTC: how pgx writes a date column, and the ledger's value and business dates.
+func (d Date) Time() time.Time { return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC) }
 
 // AddDays is the day n days after d (before it, if n is negative).
-func (d Date) AddDays(n int) Date { return DateOf(d.utc().AddDate(0, 0, n)) }
+func (d Date) AddDays(n int) Date { return DateOf(d.Time().AddDate(0, 0, n)) }
 
 // Convention is how a date that falls on a non-business day is moved.
 type Convention string
@@ -59,7 +60,7 @@ const (
 
 // IsBusinessDay reports whether d is a business day: Monday to Friday and not a holiday.
 func IsBusinessDay(d Date, isHoliday func(Date) bool) bool {
-	if wd := d.utc().Weekday(); wd == time.Saturday || wd == time.Sunday {
+	if wd := d.Time().Weekday(); wd == time.Saturday || wd == time.Sunday {
 		return false
 	}
 	return !isHoliday(d)

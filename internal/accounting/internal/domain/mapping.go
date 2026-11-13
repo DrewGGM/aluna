@@ -58,7 +58,7 @@ func (m Mapping) overlaps(o Mapping) bool {
 // that starts the code. ErrNoMapping if none does. The result does not depend on the order of mappings: two
 // mappings of a pattern do not hold on the same day.
 func Resolve(mappings []Mapping, account string, day calendar.Date) (string, error) {
-	at := time.Date(day.Year, day.Month, day.Day, 0, 0, 0, 0, time.UTC)
+	at := day.Time()
 	var best Mapping
 	for _, m := range mappings {
 		if m.holdsOn(at) && strings.HasPrefix(account, m.Pattern) && len(m.Pattern) > len(best.Pattern) {
@@ -66,7 +66,7 @@ func Resolve(mappings []Mapping, account string, day calendar.Date) (string, err
 		}
 	}
 	if best.Pattern == "" {
-		return "", fmt.Errorf("%w: account %s on %s", ErrNoMapping, account, at.Format(time.DateOnly))
+		return "", fmt.Errorf("%w: account %s on %s", ErrNoMapping, account, day)
 	}
 	return best.CUIFCode, nil
 }
@@ -84,11 +84,11 @@ func CheckAgainst(stored, mappings []Mapping) error {
 // CheckStart reports whether mappings start no earlier than the entity's business date: a mapping that started
 // before would change the CUIF code of days already closed and reported. ErrInvalidMapping otherwise.
 func CheckStart(mappings []Mapping, businessDate calendar.Date) error {
-	today := time.Date(businessDate.Year, businessDate.Month, businessDate.Day, 0, 0, 0, 0, time.UTC)
+	today := businessDate.Time()
 	for _, m := range mappings {
 		if m.ValidFrom.Before(today) {
 			return fmt.Errorf("%w: pattern %s starts on %s, before the business date %s", ErrInvalidMapping, m.Pattern,
-				m.ValidFrom.Format(time.DateOnly), today.Format(time.DateOnly))
+				m.ValidFrom.Format(time.DateOnly), businessDate)
 		}
 	}
 	return nil

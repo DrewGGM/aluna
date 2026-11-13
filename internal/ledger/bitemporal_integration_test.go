@@ -3,6 +3,7 @@
 package ledger_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -12,11 +13,14 @@ import (
 
 func postedAsOf(t *testing.T, account ids.ID, at ledger.BalanceAsOf) int64 {
 	t.Helper()
-	posted, err := svc().PostedAsOf(t.Context(), testPool, account, at)
+	posted, err := svc().PostedAsOf(t.Context(), testPool, entity, account, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return posted
+	if posted.Currency() != cop(t) {
+		t.Fatalf("bitemporal balance in %s, want the account's COP", posted.Currency().Code())
+	}
+	return posted.Units()
 }
 
 // TestABackdatedEntryIsKnownFromItsPosting (FR-8): an entry with a value date ten days ago posted today
@@ -56,7 +60,22 @@ func TestABackdatedEntryIsKnownFromItsPosting(t *testing.T) {
 func TestTheBitemporalBalanceWithoutFiltersIsTheMaterialized(t *testing.T) {
 	deposit, _ := fundedDeposit(t)
 
-	if got, want := postedAsOf(t, deposit.ID, ledger.BalanceAsOf{}), balanceOf(t, deposit.ID).Posted; got != want {
+	if got, want := postedAsOf(t, deposit.ID, ledger.BalanceAsOf{}), balanceOf(t, deposit).Posted.Units(); got != want {
 		t.Fatalf("bitemporal balance without cuts = %d, materialized %d", got, want)
+	}
+}
+
+// TestAnotherEntitysAccountHasNoBitemporalBalance: the bitemporal balance of another entity's account is
+// ErrAccountNotFound, like that of a missing one, and not the sum of its entries.
+func TestAnotherEntitysAccountHasNoBitemporalBalance(t *testing.T) {
+	deposit, _ := fundedDeposit(t)
+
+	for name, read := range map[string]struct{ entity, account ids.ID }{
+		"another entity's account": {ids.New(), deposit.ID},
+		"a missing account":        {entity, ids.New()},
+	} {
+		if _, err := svc().PostedAsOf(t.Context(), testPool, read.entity, read.account, ledger.BalanceAsOf{}); !errors.Is(err, ledger.ErrAccountNotFound) {
+			t.Errorf("%s = %v, want ErrAccountNotFound", name, err)
+		}
 	}
 }

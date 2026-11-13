@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -45,7 +44,7 @@ func (s *Store) BusinessDate(ctx context.Context, entity ids.ID) (domain.Date, e
 
 // AdvanceBusinessDate changes the business date from expected to next if it is still expected.
 func (s *Store) AdvanceBusinessDate(ctx context.Context, entity ids.ID, expected, next domain.Date) (bool, error) {
-	n, err := s.q.AdvanceBusinessDate(ctx, sqlcgen.AdvanceBusinessDateParams{ID: entity, Expected: dateOf(expected), Next: dateOf(next)})
+	n, err := s.q.AdvanceBusinessDate(ctx, sqlcgen.AdvanceBusinessDateParams{ID: entity, Expected: expected.Time(), Next: next.Time()})
 	if err != nil {
 		return false, fmt.Errorf("advance business date: %w", err)
 	}
@@ -55,7 +54,7 @@ func (s *Store) AdvanceBusinessDate(ctx context.Context, entity ids.ID, expected
 // CreateLegalEntity stores e.
 func (s *Store) CreateLegalEntity(ctx context.Context, e app.LegalEntity) error {
 	err := s.q.CreateLegalEntity(ctx, sqlcgen.CreateLegalEntityParams{
-		ID: e.ID, Name: e.Name, BusinessDate: dateOf(e.BusinessDate), FunctionalCurrency: e.Currency,
+		ID: e.ID, Name: e.Name, BusinessDate: e.BusinessDate.Time(), FunctionalCurrency: e.Currency,
 	})
 	if err != nil {
 		return fmt.Errorf("create legal entity: %w", err)
@@ -96,5 +95,3 @@ func (s *Store) MarkClosed(ctx context.Context, entity ids.ID, period, by string
 	}
 	return nil
 }
-
-func dateOf(d domain.Date) time.Time { return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC) }

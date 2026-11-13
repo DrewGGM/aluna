@@ -250,7 +250,8 @@ func holdOrigin(ctx context.Context, store PostingStore, in PlaceHoldInput) (dom
 // outgoingOf is amount with the sign with which it leaves a: a credit on a debit-normal account, a debit
 // on a credit-normal one.
 func outgoingOf(a domain.Account, amount money.Amount) money.Amount {
-	return money.New(-domain.NaturalBalance(a.Kind, amount.Units()), amount.Currency())
+	natural := domain.NaturalAmount(a.Kind, amount)
+	return money.New(-natural.Units(), natural.Currency())
 }
 
 // pendingOf splits outgoing between the two pending balances, which are stored positive: a debit goes to

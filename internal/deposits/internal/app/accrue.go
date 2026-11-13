@@ -44,9 +44,9 @@ type Accruals interface {
 	// to batch accounts of the entity, not closed, due to accrue day: opened on it or accrued up to the day
 	// before, and not accrued for it yet.
 	Due(ctx context.Context, entity ids.ID, day calendar.Date, after ids.ID, batch int) ([]DueAccount, error)
-	// ClosingBalance is the posted balance of a deposit's ledger account with a value date up to day: what it
-	// held at the close of day.
-	ClosingBalance(ctx context.Context, ledgerAccountID ids.ID, day calendar.Date) (int64, error)
+	// ClosingBalance is the posted balance of a deposit's ledger account of the entity with a value date up
+	// to day: what it held at the close of day.
+	ClosingBalance(ctx context.Context, entity, ledgerAccountID ids.ID, day calendar.Date) (int64, error)
 	Terms(ctx context.Context, versionID ids.ID) (InterestTerms, error)
 	InsertAccruals(ctx context.Context, day calendar.Date, rows []Accrual) error
 }
@@ -107,7 +107,7 @@ func productDayOf(ctx context.Context, s Accruals, c Capitalizing, versionID ids
 // accrueAccount accrues day for account a and, on its product's capitalization date, capitalizes what it
 // accrued.
 func accrueAccount(ctx context.Context, s Accruals, c Capitalizing, entity ids.ID, day calendar.Date, a DueAccount, p productDay) (Accrual, error) {
-	balance, err := s.ClosingBalance(ctx, a.LedgerAccountID, day)
+	balance, err := s.ClosingBalance(ctx, entity, a.LedgerAccountID, day)
 	if err != nil {
 		return Accrual{}, err
 	}

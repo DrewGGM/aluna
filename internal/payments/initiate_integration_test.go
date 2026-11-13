@@ -201,7 +201,7 @@ func (w world) initiate(t *testing.T, in payments.InitiateInput) (payments.Order
 // balance is the world account's materialized balance.
 func (w world) balance(t *testing.T) ledger.Balance {
 	t.Helper()
-	b, err := w.ledger.Balance(t.Context(), testPool, w.account.LedgerAccountID)
+	b, err := w.ledger.Balance(t.Context(), testPool, w.entity, w.account.LedgerAccountID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,8 +260,8 @@ func TestACleanPaymentIsHeldAndQueued(t *testing.T) {
 	if err != nil || o.Status != payments.StatusHeld || o.HoldID == (ids.ID{}) || o.GMF != cop(t, 120000) || len(o.Fees) != 0 {
 		t.Fatalf("a clean payment = %+v (%v), want it held with its GMF of 1,200 COP", o, err)
 	}
-	if b := w.balance(t); b.PendingDebits != 30120000 || o.Held != cop(t, 30120000) {
-		t.Fatalf("the account's pending debits = %d and the order holds %v, want 30,120,000 held", b.PendingDebits, o.Held)
+	if b := w.balance(t); b.PendingDebits.Units() != 30120000 || o.Held != cop(t, 30120000) {
+		t.Fatalf("the account's pending debits = %d and the order holds %v, want 30,120,000 held", b.PendingDebits.Units(), o.Held)
 	}
 	var counter string
 	if err := testPool.QueryRow(t.Context(), `SELECT a.code FROM ledger.holds h JOIN ledger.accounts a ON a.id = h.counter_account_id
@@ -311,8 +311,8 @@ func TestAPaymentHoldsItsFees(t *testing.T) {
 	if err != nil || len(o.Fees) != 1 || o.Fees[0].Code != "transfer_fee" || o.Fees[0].Amount != cop(t, 300000) {
 		t.Fatalf("a payment of the tiered product = %+v (%v), want its transfer fee of 3,000 COP", o, err)
 	}
-	if b := w.balance(t); b.PendingDebits != 30000000+300000+o.GMF.Units() {
-		t.Fatalf("the account's pending debits = %d, want the amount, the fee and the GMF %v", b.PendingDebits, o.GMF)
+	if b := w.balance(t); b.PendingDebits.Units() != 30000000+300000+o.GMF.Units() {
+		t.Fatalf("the account's pending debits = %d, want the amount, the fee and the GMF %v", b.PendingDebits.Units(), o.GMF)
 	}
 	var fees string
 	if err := testPool.QueryRow(t.Context(), `SELECT fees::text FROM payments.orders WHERE id = $1`, o.ID).Scan(&fees); err != nil ||
@@ -335,7 +335,7 @@ func TestAPaymentScreeningDoesNotClearMovesNothing(t *testing.T) {
 		if err != nil || o.Status != payments.StatusPendingScreening || o.HoldID != (ids.ID{}) || !o.GMF.IsZero() {
 			t.Fatalf("a payment to %+v = %+v (%v), want it pending_screening without a hold", creditor, o, err)
 		}
-		if b := w.balance(t); b.PendingDebits != 0 || b.Posted != -100000000 {
+		if b := w.balance(t); b.PendingDebits.Units() != 0 || b.Posted.Units() != -100000000 {
 			t.Fatalf("after a payment to %+v the balance = %+v, want 1,000,000 COP available", creditor, b)
 		}
 		expectStoredPending(t, o)
@@ -364,7 +364,7 @@ func TestAQuotedPaymentHoldsWhatWasQuoted(t *testing.T) {
 	o, err := w.initiate(t, in)
 	_, again := w.initiate(t, in)
 
-	if err != nil || o.GMF != q.GMF.Tax || w.balance(t).PendingDebits != 20000000+q.GMF.Tax.Units() {
+	if err != nil || o.GMF != q.GMF.Tax || w.balance(t).PendingDebits.Units() != 20000000+q.GMF.Tax.Units() {
 		t.Fatalf("a quoted payment = %+v (%v), want the quote's GMF %v held", o, err, q.GMF.Tax)
 	}
 	if !errors.Is(again, pricing.ErrQuoteUnavailable) {
@@ -450,7 +450,7 @@ func TestAPaymentTheCoreDoesNotTake(t *testing.T) {
 	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM payments.orders WHERE account_id = $1`, w.account.ID).Scan(&orders); err != nil {
 		t.Fatal(err)
 	}
-	if b := w.balance(t); b.PendingDebits != 0 || orders != 0 {
+	if b := w.balance(t); b.PendingDebits.Units() != 0 || orders != 0 {
 		t.Fatalf("after the rejected payments the balance = %+v with %d orders, want nothing held or stored", b, orders)
 	}
 }
@@ -483,8 +483,8 @@ func TestAFreezeDuringAPaymentStopsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := <-paid; !errors.Is(err, deposits.ErrAccountNotActive) || w.balance(t).PendingDebits != 0 {
-		t.Fatalf("a payment during a freeze = %v with %d held, want ErrAccountNotActive and nothing held", err, w.balance(t).PendingDebits)
+	if err := <-paid; !errors.Is(err, deposits.ErrAccountNotActive) || w.balance(t).PendingDebits.Units() != 0 {
+		t.Fatalf("a payment during a freeze = %v with %d held, want ErrAccountNotActive and nothing held", err, w.balance(t).PendingDebits.Units())
 	}
 }
 
@@ -522,8 +522,8 @@ func TestAReferenceIsOnePayment(t *testing.T) {
 
 	_, again := w.initiate(t, in)
 
-	if !errors.Is(again, payments.ErrDuplicatePayment) || w.balance(t).PendingDebits != 30120000 {
-		t.Fatalf("the same reference again = %v with %d held, want ErrDuplicatePayment and the first hold only", again, w.balance(t).PendingDebits)
+	if !errors.Is(again, payments.ErrDuplicatePayment) || w.balance(t).PendingDebits.Units() != 30120000 {
+		t.Fatalf("the same reference again = %v with %d held, want ErrDuplicatePayment and the first hold only", again, w.balance(t).PendingDebits.Units())
 	}
 }
 

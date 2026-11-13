@@ -19,7 +19,7 @@ func (s Store) UnbalancedCurrencies(ctx context.Context, entity ids.ID, from, to
 		WHERE t.legal_entity_id = $1 AND t.business_date >= $2 AND t.business_date < $3
 		GROUP BY e.currency
 		HAVING sum(e.amount) <> 0
-		ORDER BY e.currency`, entity, dateOf(from), dateOf(to))
+		ORDER BY e.currency`, entity, from.Time(), to.Time())
 	if err != nil {
 		return nil, fmt.Errorf("read the trial balance: %w", err)
 	}

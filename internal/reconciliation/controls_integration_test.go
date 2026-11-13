@@ -315,15 +315,15 @@ func waitAggregated(t *testing.T, w world, uow *postgres.UnitOfWork, account ids
 		if _, err := w.ledger.AggregateAsyncBalances(t.Context(), uow, 1000); err != nil {
 			t.Fatal(err)
 		}
-		b, err := w.ledger.Balance(t.Context(), testPool, account)
+		b, err := w.ledger.Balance(t.Context(), testPool, w.entity, account)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if b.Posted == want {
+		if b.Posted.Units() == want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("balance %d, want %d", b.Posted, want)
+			t.Fatalf("balance %d, want %d", b.Posted.Units(), want)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

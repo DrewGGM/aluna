@@ -54,7 +54,7 @@ func (h *CalendarHandlers) RolloverBusinessDate(ctx context.Context, req gen.Rol
 		return nil, errNoBusinessDateToClose
 	}
 	resp, err := h.commands.idempotent(ctx, p, rolloverBusinessDate, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
-		closed := calendarDate(req.Body.BusinessDate.Time)
+		closed := calendar.DateOf(req.Body.BusinessDate.Time)
 		next, err := h.calendar.Rollover(ctx, tx, p.LegalEntityID, closed)
 		if err != nil {
 			return nil, err

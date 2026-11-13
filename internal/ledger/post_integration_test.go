@@ -85,13 +85,13 @@ func move(ctx context.Context, tx postgres.Tx, c money.Currency, to, from ids.ID
 	})
 }
 
-func postedOf(t *testing.T, account ids.ID) int64 {
+func postedOf(t *testing.T, a ledger.Account) int64 {
 	t.Helper()
-	b, err := svc().Balance(t.Context(), testPool, account)
+	b, err := svc().Balance(t.Context(), testPool, a.LegalEntityID, a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b.Posted
+	return b.Posted.Units()
 }
 
 func TestPostUpdatesBalancesWithTheDatabaseClock(t *testing.T) {
@@ -107,10 +107,10 @@ func TestPostUpdatesBalancesWithTheDatabaseClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := postedOf(t, cash.ID); got != 10_000_000 {
+	if got := postedOf(t, cash); got != 10_000_000 {
 		t.Errorf("cash posted = %d, want 10,000,000", got)
 	}
-	if got := postedOf(t, deposit.ID); got != -10_000_000 { // liability: natural balance 10,000,000
+	if got := postedOf(t, deposit); got != -10_000_000 { // liability: natural balance 10,000,000
 		t.Errorf("deposit posted = %d, want -10,000,000", got)
 	}
 	var stored time.Time
@@ -120,7 +120,7 @@ func TestPostUpdatesBalancesWithTheDatabaseClock(t *testing.T) {
 	if !stored.Equal(posted.PostedAt) || posted.PostedAt.Before(before.Add(-time.Minute)) {
 		t.Errorf("posted_at returned %v, stored %v: it must come from the database", posted.PostedAt, stored)
 	}
-	b, err := svc().Balance(t.Context(), testPool, cash.ID)
+	b, err := svc().Balance(t.Context(), testPool, entity, cash.ID)
 	if err != nil || b.Version != 1 {
 		t.Errorf("version = %d (%v), want 1 after a posting", b.Version, err)
 	}
@@ -150,7 +150,7 @@ func TestPostRejectsOverdraftAndPersistsNothing(t *testing.T) {
 	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM ledger.transactions WHERE external_ref = $1`, ref).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("the rejected withdrawal left %d transactions (err = %v)", n, err)
 	}
-	if got := postedOf(t, deposit.ID); got != -100_000 {
+	if got := postedOf(t, deposit); got != -100_000 {
 		t.Fatalf("the deposit balance changed to %d", got)
 	}
 }
@@ -272,10 +272,13 @@ func TestBalance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := svc().Balance(t.Context(), testPool, clearing.ID); err != nil {
+	if _, err := svc().Balance(t.Context(), testPool, entity, clearing.ID); err != nil {
 		t.Errorf("an async account also has a materialized balance: %v", err)
 	}
-	if _, err := svc().Balance(t.Context(), testPool, ids.New()); !errors.Is(err, ledger.ErrAccountNotFound) {
+	if _, err := svc().Balance(t.Context(), testPool, entity, ids.New()); !errors.Is(err, ledger.ErrAccountNotFound) {
 		t.Errorf("error = %v, want ErrAccountNotFound for an account that does not exist", err)
+	}
+	if _, err := svc().Balance(t.Context(), testPool, ids.New(), clearing.ID); !errors.Is(err, ledger.ErrAccountNotFound) {
+		t.Errorf("error = %v, want ErrAccountNotFound for another entity's account", err)
 	}
 }

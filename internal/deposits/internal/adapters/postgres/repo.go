@@ -31,7 +31,7 @@ func (s Store) InsertAccount(ctx context.Context, a domain.Account) error {
 			currency, status, opened_on, last_customer_activity_on)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		a.ID, a.LegalEntityID, a.PartyID, a.ProductVersionID, a.LedgerAccountID, a.Currency.Code(), a.Status,
-		dateOf(a.OpenedOn), dateOf(a.LastCustomerActivityOn))
+		a.OpenedOn.Time(), a.LastCustomerActivityOn.Time())
 	if err != nil {
 		return fmt.Errorf("insert deposit account %s: %w", a.ID, err)
 	}
@@ -64,7 +64,7 @@ func (s Store) LockAccount(ctx context.Context, entity, id ids.ID) (domain.Accou
 // actor.
 func (s Store) SetStatus(ctx context.Context, a domain.Account, to domain.Status, actor string) error {
 	if _, err := s.q.Exec(ctx, `UPDATE deposits.accounts SET status = $2, last_customer_activity_on = $3 WHERE id = $1`,
-		a.ID, to, dateOf(a.LastCustomerActivityOn)); err != nil {
+		a.ID, to, a.LastCustomerActivityOn.Time()); err != nil {
 		return fmt.Errorf("move deposit account %s to %s: %w", a.ID, to, err)
 	}
 	_, err := s.q.Exec(ctx, `INSERT INTO deposits.status_changes (account_id, from_status, to_status, actor) VALUES ($1, $2, $3, $4)`,
@@ -77,7 +77,7 @@ func (s Store) SetStatus(ctx context.Context, a domain.Account, to domain.Status
 
 // RecordActivity sets the last customer activity of account id to on.
 func (s Store) RecordActivity(ctx context.Context, id ids.ID, on calendar.Date) error {
-	if _, err := s.q.Exec(ctx, `UPDATE deposits.accounts SET last_customer_activity_on = $2 WHERE id = $1`, id, dateOf(on)); err != nil {
+	if _, err := s.q.Exec(ctx, `UPDATE deposits.accounts SET last_customer_activity_on = $2 WHERE id = $1`, id, on.Time()); err != nil {
 		return fmt.Errorf("record the activity of deposit account %s: %w", id, err)
 	}
 	return nil
@@ -127,14 +127,14 @@ func (s Store) DaysToAccrue(ctx context.Context, entity ids.ID, today calendar.D
 	rows, err := s.q.Query(ctx, `SELECT day::date FROM generate_series(
 			(SELECT min(coalesce((SELECT max(r.value_date) FROM deposits.accruals r WHERE r.account_id = a.id) + 1, a.opened_on))
 				FROM deposits.accounts a WHERE a.legal_entity_id = $1 AND a.status <> 'closed'),
-			$2::date - 1, interval '1 day') AS day`, entity, dateOf(today))
+			$2::date - 1, interval '1 day') AS day`, entity, today.Time())
 	if err != nil {
 		return nil, fmt.Errorf("find the days to accrue: %w", err)
 	}
 	days, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (calendar.Date, error) {
 		var day time.Time
 		err := row.Scan(&day)
-		return calendarDate(day), err
+		return calendar.DateOf(day), err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("find the days to accrue: %w", err)
@@ -152,9 +152,9 @@ func (s Store) Due(ctx context.Context, entity ids.ID, day calendar.Date, after 
 		WHERE a.legal_entity_id = $1 AND a.id > $4 AND a.status <> 'closed' AND (p.account_id IS NOT NULL OR a.opened_on = $2)
 			AND NOT EXISTS (SELECT 1 FROM deposits.accruals r WHERE r.account_id = a.id AND r.value_date = $2)
 		ORDER BY a.id LIMIT $3
-		FOR UPDATE OF a SKIP LOCKED`, entity, dateOf(day), batch, after)
+		FOR UPDATE OF a SKIP LOCKED`, entity, day.Time(), batch, after)
 	if err != nil {
-		return nil, fmt.Errorf("read the accounts due to accrue %s: %w", dateOf(day).Format(time.DateOnly), err)
+		return nil, fmt.Errorf("read the accounts due to accrue %s: %w", day, err)
 	}
 	due, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (app.DueAccount, error) {
 		var a app.DueAccount
@@ -170,7 +170,7 @@ func (s Store) Due(ctx context.Context, entity ids.ID, day calendar.Date, after 
 		return a, err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("read the accounts due to accrue %s: %w", dateOf(day).Format(time.DateOnly), err)
+		return nil, fmt.Errorf("read the accounts due to accrue %s: %w", day, err)
 	}
 	return due, nil
 }
@@ -186,9 +186,9 @@ func (s Store) InsertAccruals(ctx context.Context, day calendar.Date, rows []app
 	_, err := s.q.Exec(ctx, `INSERT INTO deposits.accruals (account_id, value_date, balance_units, interest, accrued_precise, posted_units)
 		SELECT account, $2, balance, interest::numeric, accrued::numeric, posted
 		FROM unnest($1::uuid[], $3::bigint[], $4::text[], $5::text[], $6::bigint[]) AS r (account, balance, interest, accrued, posted)`,
-		accounts, dateOf(day), balances, interest, accrued, posted)
+		accounts, day.Time(), balances, interest, accrued, posted)
 	if err != nil {
-		return fmt.Errorf("store the accruals of %s: %w", dateOf(day).Format(time.DateOnly), err)
+		return fmt.Errorf("store the accruals of %s: %w", day, err)
 	}
 	return nil
 }
@@ -213,7 +213,7 @@ func (s Store) Inactive(ctx context.Context, entity, versionID ids.ID, before ca
 	rows, err := s.q.Query(ctx, selectAccount+` WHERE legal_entity_id = $1 AND product_version_id = $2 AND status = 'active'
 			AND last_customer_activity_on < $3 AND id > $4
 		ORDER BY id LIMIT $5
-		FOR UPDATE SKIP LOCKED`, entity, versionID, dateOf(before), after, batch)
+		FOR UPDATE SKIP LOCKED`, entity, versionID, before.Time(), after, batch)
 	if err != nil {
 		return nil, fmt.Errorf("read the inactive accounts: %w", err)
 	}
@@ -226,8 +226,7 @@ func (s Store) Inactive(ctx context.Context, entity, versionID ids.ID, before ca
 
 // periods are the counters' periods of day on: the day (2026-03-02) and its month (2026-03).
 func periods(on calendar.Date) (day, month string) {
-	t := dateOf(on)
-	return t.Format(time.DateOnly), t.Format("2006-01")
+	return on.String(), on.Time().Format("2006-01")
 }
 
 func scan(id ids.ID, row pgx.Row) (domain.Account, error) {
@@ -245,14 +244,6 @@ func scan(id ids.ID, row pgx.Row) (domain.Account, error) {
 	if a.Currency, err = money.CurrencyOf(currency); err != nil {
 		return domain.Account{}, fmt.Errorf("stored currency of deposit account %s: %w", id, err)
 	}
-	a.OpenedOn, a.LastCustomerActivityOn = calendarDate(openedOn), calendarDate(lastActivity)
+	a.OpenedOn, a.LastCustomerActivityOn = calendar.DateOf(openedOn), calendar.DateOf(lastActivity)
 	return a, nil
-}
-
-func dateOf(d calendar.Date) time.Time {
-	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC)
-}
-
-func calendarDate(t time.Time) calendar.Date {
-	return calendar.Date{Year: t.Year(), Month: t.Month(), Day: t.Day()}
 }

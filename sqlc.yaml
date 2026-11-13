@@ -22,6 +22,22 @@ sql:
             go_type: time.Time
           - db_type: date
             go_type: time.Time
+          # Nullable dates, timestamps and bigints (parameters and columns) as pointers: nil is SQL null.
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
+          - db_type: date
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
+          - db_type: pg_catalog.int8
+            nullable: true
+            go_type:
+              type: int64
+              pointer: true
           - db_type: xid8
             go_type: uint64
   - engine: postgresql

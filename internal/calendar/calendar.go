@@ -20,6 +20,9 @@ type Date = domain.Date
 // ParseDate reads a date yyyy-mm-dd, as Date.String writes it, or ErrInvalidDate.
 func ParseDate(s string) (Date, error) { return domain.ParseDate(s) }
 
+// DateOf is the day of t in its own location; Date.Time goes back, to midnight UTC.
+func DateOf(t time.Time) Date { return domain.DateOf(t) }
+
 // Convention is how a date that falls on a non-business day is moved.
 type Convention = domain.Convention
 

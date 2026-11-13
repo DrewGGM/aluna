@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger/internal/domain"
 	"github.com/DrewGGM/aluna/internal/money"
@@ -242,20 +243,15 @@ func recordOf(in PostInput) (TransactionRecord, error) {
 	if in.ValueDate.IsZero() || in.BusinessDate.IsZero() {
 		return TransactionRecord{}, fmt.Errorf("%w: missing dates", ErrInvalidPosting)
 	}
+	// Each date keeps its calendar day as UTC midnight: this way the Transaction Post returns equals the one
+	// read back from the database (zoneless date) and two dates on the same day compare equal even if
+	// written in different zones.
 	return TransactionRecord{
 		ID: ids.New(), LegalEntityID: in.LegalEntityID, Code: in.Code,
-		ValueDate: civilDate(in.ValueDate), BusinessDate: civilDate(in.BusinessDate),
+		ValueDate: calendar.DateOf(in.ValueDate).Time(), BusinessDate: calendar.DateOf(in.BusinessDate).Time(),
 		Source: in.Source, ExternalRef: in.ExternalRef, Actor: in.Actor, Channel: in.Channel, RuleVersion: in.RuleVersion,
 		ReversesID: in.ReversesID, Metadata: in.Metadata,
 	}, nil
-}
-
-// civilDate keeps t's calendar day as UTC midnight: this way the Transaction Post returns equals the one
-// read back from the database (zoneless date) and two dates on the same day compare equal even if written
-// in different zones.
-func civilDate(t time.Time) time.Time {
-	y, m, d := t.Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
 // accountsOf loads the entries' accounts and checks that they belong to the entity and are in the entry's

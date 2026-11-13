@@ -189,7 +189,7 @@ func TestAnAcceptedPaymentSettles(t *testing.T) {
 	if units, transactions := w.posted(t); !maps.Equal(units, want) || transactions != 2 || o.GMF.Units() <= 0 {
 		t.Fatalf("posted %v in %d transactions, want %v in the capture and the charges", units, transactions, want)
 	}
-	if b := w.balance(t); b.Posted != -100000000+total || b.PendingDebits != 0 {
+	if b := w.balance(t); b.Posted.Units() != -100000000+total || b.PendingDebits.Units() != 0 {
 		t.Fatalf("balance = %+v, want %d posted and nothing pending", b, -100000000+total)
 	}
 }
@@ -277,7 +277,7 @@ func (w world) expectRejected(t *testing.T, o payments.Order, reason, railRef st
 	if units, _ := w.posted(t); len(units) != 0 {
 		t.Fatalf("posted %v, want nothing", units)
 	}
-	if b := w.balance(t); b.Posted != -100000000 || b.PendingDebits != 0 {
+	if b := w.balance(t); b.Posted.Units() != -100000000 || b.PendingDebits.Units() != 0 {
 		t.Fatalf("balance = %+v, want the deposit whole and nothing pending", b)
 	}
 }
@@ -422,7 +422,7 @@ func TestAPaymentWithoutAnswerStaysSent(t *testing.T) {
 	if !errors.Is(err, payments.ErrNoAnswer) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("send = %v, want ErrNoAnswer", err)
 	}
-	if s := storedOrder(t, o.ID); s.status != "sent" || holdStatus(t, o.HoldID) != "pending" || w.balance(t).PendingDebits != o.Held.Units() {
+	if s := storedOrder(t, o.ID); s.status != "sent" || holdStatus(t, o.HoldID) != "pending" || w.balance(t).PendingDebits.Units() != o.Held.Units() {
 		t.Fatalf("order = %+v, want it sent with its hold pending", s)
 	}
 }

@@ -63,6 +63,11 @@ func NaturalBalance(k Kind, posted int64) int64 {
 	return -posted
 }
 
+// NaturalAmount is NaturalBalance of an amount, in its currency.
+func NaturalAmount(k Kind, posted money.Amount) money.Amount {
+	return money.New(NaturalBalance(k, posted.Units()), posted.Currency())
+}
+
 // debitNormal reports whether the kind is debit-normal; ok is false if the kind does not exist.
 func debitNormal(k Kind) (debit, ok bool) {
 	switch k {
@@ -110,6 +115,5 @@ func (a Account) availableAfter(debit bool, posted, pendingDebits, pendingCredit
 	if !debit {
 		outgoing = pendingDebits
 	}
-	natural := money.New(NaturalBalance(a.Kind, after.Units()), a.Currency)
-	return natural.Sub(money.New(outgoing, a.Currency))
+	return NaturalAmount(a.Kind, after).Sub(money.New(outgoing, a.Currency))
 }

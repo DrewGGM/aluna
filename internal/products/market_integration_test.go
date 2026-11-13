@@ -186,7 +186,7 @@ func TestALoadedValueDoesNotChange(t *testing.T) {
 	if err := load(t, svc, p); err != nil {
 		t.Fatal(err)
 	}
-	from := time.Date(p.ValidFrom.Year, p.ValidFrom.Month, p.ValidFrom.Day, 0, 0, 0, 0, time.UTC)
+	from := p.ValidFrom.Time()
 	statements := []struct {
 		sql  string
 		args []any

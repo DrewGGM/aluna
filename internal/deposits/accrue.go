@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
 	pg "github.com/DrewGGM/aluna/internal/deposits/internal/adapters/postgres"
@@ -64,7 +63,7 @@ func (s *Service) accrueEntity(ctx context.Context, uow *postgres.UnitOfWork, en
 		n, err := s.accrueDay(ctx, uow, entity, day, batch)
 		accrued += n
 		if err != nil {
-			return accrued, fmt.Errorf("accrue %s: %w", isoDate(day), err)
+			return accrued, fmt.Errorf("accrue %s: %w", day, err)
 		}
 	}
 	return accrued, nil
@@ -95,11 +94,6 @@ func (s *Service) accrueDay(ctx context.Context, uow *postgres.UnitOfWork, entit
 	}
 }
 
-// isoDate is d as YYYY-MM-DD, as the events and the errors write a date.
-func isoDate(d calendar.Date) string {
-	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC).Format(time.DateOnly)
-}
-
 // accruals is app.Accruals and app.Capitalizing over tx; the store gives Due and InsertAccruals.
 type accruals struct {
 	pg.Store
@@ -107,13 +101,13 @@ type accruals struct {
 	tx postgres.Tx
 }
 
-func (a accruals) ClosingBalance(ctx context.Context, ledgerAccountID ids.ID, day calendar.Date) (int64, error) {
-	valueDate := time.Date(day.Year, day.Month, day.Day, 0, 0, 0, 0, time.UTC)
-	posted, err := a.s.ledger.PostedAsOf(ctx, a.tx, ledgerAccountID, ledger.BalanceAsOf{ValueDate: &valueDate})
+func (a accruals) ClosingBalance(ctx context.Context, entity, ledgerAccountID ids.ID, day calendar.Date) (int64, error) {
+	valueDate := day.Time()
+	posted, err := a.s.ledger.PostedAsOf(ctx, a.tx, entity, ledgerAccountID, ledger.BalanceAsOf{ValueDate: &valueDate})
 	if err != nil {
 		return 0, err
 	}
-	return ledger.NaturalBalance(ledger.KindLiability, posted), nil
+	return ledger.NaturalBalance(ledger.KindLiability, posted.Units()), nil
 }
 
 func (a accruals) Terms(ctx context.Context, versionID ids.ID) (app.InterestTerms, error) {
@@ -145,7 +139,7 @@ func (a accruals) EmitCapitalized(ctx context.Context, entity ids.ID, e app.Capi
 		Type: typeCapitalized, Subject: "deposit-accounts/" + e.AccountID.String(), LegalEntityID: entity, SchemaVersion: 1,
 		Data: capitalizedPayload{
 			AccountID: e.AccountID, Period: e.Period, TransactionID: e.TransactionID,
-			ValueDate: isoDate(e.ValueDate),
+			ValueDate: e.ValueDate.String(),
 			Amount:    e.Amount.Units(), Currency: e.Amount.Currency().Code(),
 		},
 	})

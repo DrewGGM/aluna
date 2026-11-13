@@ -28,12 +28,6 @@ type AccountWriter interface {
 	InsertAccount(ctx context.Context, a domain.Account) error
 }
 
-// Balance is an account's materialized balance, signed (debit +, credit −). On an async account the
-// aggregator maintains it (T-023).
-type Balance struct {
-	Posted, PendingDebits, PendingCredits, Version int64
-}
-
 // CreateAccount registers the account with a zero balance.
 func CreateAccount(ctx context.Context, store AccountWriter, in CreateAccountInput) (domain.Account, error) {
 	if err := validAccount(in); err != nil {

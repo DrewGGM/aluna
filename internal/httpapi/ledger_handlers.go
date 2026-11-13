@@ -108,17 +108,17 @@ func (h *LedgerHandlers) GetLedgerAccountBalance(ctx context.Context, req gen.Ge
 	if at, ok := balanceCut(req.Params); ok {
 		return h.balanceAsOf(ctx, account, at)
 	}
-	b, err := h.ledger.Balance(ctx, h.reader, account.ID)
+	b, err := h.ledger.Balance(ctx, h.reader, account.LegalEntityID, account.ID)
 	if err != nil {
 		return nil, err
 	}
-	cur := account.Currency.Code()
+	pendingDebits, pendingCredits := moneyJSON(b.PendingDebits), moneyJSON(b.PendingCredits)
 	return gen.GetLedgerAccountBalance200JSONResponse{
 		AccountId:      [16]byte(account.ID),
-		Posted:         gen.Money{Amount: b.Posted, Currency: cur},
-		Natural:        gen.Money{Amount: ledger.NaturalBalance(account.Kind, b.Posted), Currency: cur},
-		PendingDebits:  &gen.Money{Amount: b.PendingDebits, Currency: cur},
-		PendingCredits: &gen.Money{Amount: b.PendingCredits, Currency: cur},
+		Posted:         moneyJSON(b.Posted),
+		Natural:        moneyJSON(ledger.NaturalAmount(account.Kind, b.Posted)),
+		PendingDebits:  &pendingDebits,
+		PendingCredits: &pendingCredits,
 		Version:        &b.Version,
 	}, nil
 }
@@ -141,15 +141,14 @@ func balanceCut(p gen.GetLedgerAccountBalanceParams) (ledger.BalanceAsOf, bool) 
 // balanceAsOf is the bitemporal balance (FR-8): it returns the cutoffs it was computed with and carries no
 // pending amounts, which only exist in the present.
 func (h *LedgerHandlers) balanceAsOf(ctx context.Context, account ledger.Account, at ledger.BalanceAsOf) (gen.GetLedgerAccountBalanceResponseObject, error) {
-	posted, err := h.ledger.PostedAsOf(ctx, h.reader, account.ID, at)
+	posted, err := h.ledger.PostedAsOf(ctx, h.reader, account.LegalEntityID, account.ID, at)
 	if err != nil {
 		return nil, err
 	}
-	cur := account.Currency.Code()
 	b := gen.GetLedgerAccountBalance200JSONResponse{
 		AccountId: [16]byte(account.ID),
-		Posted:    gen.Money{Amount: posted, Currency: cur},
-		Natural:   gen.Money{Amount: ledger.NaturalBalance(account.Kind, posted), Currency: cur},
+		Posted:    moneyJSON(posted),
+		Natural:   moneyJSON(ledger.NaturalAmount(account.Kind, posted)),
 		AsKnownAt: at.KnownAt,
 	}
 	if at.ValueDate != nil {

@@ -57,7 +57,7 @@ func TestAPostingInAClosedPeriodIsRejected(t *testing.T) {
 	if !errors.Is(err, ledger.ErrPeriodClosed) {
 		t.Fatalf("posting in June = %v, want ErrPeriodClosed", err)
 	}
-	if b := balanceOf(t, cash.ID); b.Posted != 0 {
+	if b := balanceOf(t, cash); b.Posted.Units() != 0 {
 		t.Fatalf("balance = %+v, the rejected posting should not have posted", b)
 	}
 	for _, d := range []time.Time{in2025(time.May, 30), in2025(time.July, 7), in2025(time.August, 1)} {
@@ -100,7 +100,7 @@ func TestReversalsAndCapturesInAClosedPeriodAreRejected(t *testing.T) {
 	if !errors.Is(err, ledger.ErrPeriodClosed) {
 		t.Errorf("reversal in June = %v, want ErrPeriodClosed", err)
 	}
-	if b := balanceOf(t, cash.ID); b.Posted != 100 {
+	if b := balanceOf(t, cash); b.Posted.Units() != 100 {
 		t.Errorf("cash = %+v, the rejected reversal should not have posted", b)
 	}
 
@@ -121,7 +121,7 @@ func TestReversalsAndCapturesInAClosedPeriodAreRejected(t *testing.T) {
 	if !errors.Is(err, ledger.ErrPeriodClosed) {
 		t.Errorf("capture in June = %v, want ErrPeriodClosed", err)
 	}
-	if b := balanceOf(t, deposit.ID); b.PendingDebits != 50 || b.Posted != -100 {
+	if b := balanceOf(t, deposit); b.PendingDebits.Units() != 50 || b.Posted.Units() != -100 {
 		t.Errorf("deposit = %+v, the rejected capture should neither post nor release the hold", b)
 	}
 }

@@ -4,7 +4,6 @@ package accounting_test
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -324,7 +323,7 @@ func (w glWorld) pending(t *testing.T) []string {
 		all, err := pg.NewStore(tx).DaysToProject(t.Context())
 		for _, d := range all {
 			if d.LegalEntityID == w.entity {
-				days = append(days, fmt.Sprintf("%04d-%02d-%02d", d.Date.Year, d.Date.Month, d.Date.Day))
+				days = append(days, d.Date.String())
 			}
 		}
 		return err

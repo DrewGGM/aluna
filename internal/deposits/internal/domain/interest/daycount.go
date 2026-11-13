@@ -66,7 +66,7 @@ func days30E(from, to calendar.Date) int {
 
 // ordinal is d as days since 1970-01-01, so spans and clamps are integer arithmetic.
 func ordinal(d calendar.Date) int {
-	return int(time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC).Unix() / secondsPerDay)
+	return int(d.Time().Unix() / secondsPerDay)
 }
 
 const secondsPerDay = 24 * 60 * 60

@@ -74,9 +74,9 @@ func releaseHold(t *testing.T, hold ids.ID) (ledger.Hold, error) {
 	})
 }
 
-func balanceOf(t *testing.T, account ids.ID) ledger.Balance {
+func balanceOf(t *testing.T, a ledger.Account) ledger.Balance {
 	t.Helper()
-	b, err := svc().Balance(t.Context(), testPool, account)
+	b, err := svc().Balance(t.Context(), testPool, a.LegalEntityID, a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestAHoldReducesTheAvailable(t *testing.T) {
 	if err != nil || hold.Status() != ledger.HoldPending || hold.Amount().Units() != 70 {
 		t.Fatalf("PlaceHold = %+v, %v", hold, err)
 	}
-	if b := balanceOf(t, deposit.ID); b.PendingDebits != 70 || b.PendingCredits != 0 || b.Posted != -100 {
+	if b := balanceOf(t, deposit); b.PendingDebits.Units() != 70 || b.PendingCredits.Units() != 0 || b.Posted.Units() != -100 {
 		t.Fatalf("balance with the hold = %+v, want 70 pending debits and posted untouched", b)
 	}
 	if _, _, err := postRef(t, transfer(t, deposit.ID, clearing.ID, ids.New().String())); !errors.Is(err, ledger.ErrInsufficientFunds) {
@@ -117,7 +117,7 @@ func TestAHoldOnAnAssetUsesPendingCredits(t *testing.T) {
 	if _, err := placeHold(t, cash.ID, funding.ID, 60, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if b := balanceOf(t, cash.ID); b.PendingCredits != 60 || b.PendingDebits != 0 {
+	if b := balanceOf(t, cash); b.PendingCredits.Units() != 60 || b.PendingDebits.Units() != 0 {
 		t.Fatalf("balance = %+v, want 60 pending credits", b)
 	}
 }
@@ -135,10 +135,10 @@ func TestCaptureFromAnAssetCreditsIt(t *testing.T) {
 	if _, err := captureHold(t, hold.ID(), 60); err != nil {
 		t.Fatal(err)
 	}
-	if b := balanceOf(t, cash.ID); b.Posted != 40 || b.PendingCredits != 0 {
+	if b := balanceOf(t, cash); b.Posted.Units() != 40 || b.PendingCredits.Units() != 0 {
 		t.Fatalf("cash after capturing 60 = %+v, want posted 40 and nothing pending", b)
 	}
-	if b := balanceOf(t, funding.ID); b.Posted != -40 {
+	if b := balanceOf(t, funding); b.Posted.Units() != -40 {
 		t.Fatalf("counterpart = %+v, want -40", b)
 	}
 }
@@ -157,10 +157,10 @@ func TestCaptureIntoAnAsyncCounterparty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b := balanceOf(t, deposit.ID); b.Posted != -70 || b.PendingDebits != 0 {
+	if b := balanceOf(t, deposit); b.Posted.Units() != -70 || b.PendingDebits.Units() != 0 {
 		t.Fatalf("deposit = %+v, want posted -70 and nothing pending", b)
 	}
-	if b := balanceOf(t, clearing.ID); b.Posted != 0 {
+	if b := balanceOf(t, clearing); b.Posted.Units() != 0 {
 		t.Fatalf("materialized balance of the async counterpart = %+v, want untouched", b)
 	}
 	checkCaptureTransaction(t, hold, got.tx)
@@ -185,7 +185,7 @@ func TestARejectedCaptureWritesNothing(t *testing.T) {
 		t.Fatalf("capture without an actor = %v (commit: %v), want ErrInvalidPosting", captureErr, err)
 	}
 
-	if b := balanceOf(t, deposit.ID); b.PendingDebits != 50 || b.Posted != -100 {
+	if b := balanceOf(t, deposit); b.PendingDebits.Units() != 50 || b.Posted.Units() != -100 {
 		t.Fatalf("balance = %+v, want the hold still held and posted untouched", b)
 	}
 	if _, err := captureHold(t, hold.ID(), 50); err != nil {
@@ -207,10 +207,10 @@ func TestCapturePostsAndReleasesTheRest(t *testing.T) {
 	if err != nil || got.hold.Status() != ledger.HoldCaptured || got.hold.Captured().Units() != 40 {
 		t.Fatalf("CaptureHold = %+v, %v", got.hold, err)
 	}
-	if b := balanceOf(t, deposit.ID); b.Posted != -60 || b.PendingDebits != 0 {
+	if b := balanceOf(t, deposit); b.Posted.Units() != -60 || b.PendingDebits.Units() != 0 {
 		t.Fatalf("deposit after capturing 40 = %+v, want posted -60 and nothing pending", b)
 	}
-	if b := balanceOf(t, clearing.ID); b.Posted != -40 {
+	if b := balanceOf(t, clearing); b.Posted.Units() != -40 {
 		t.Fatalf("clearing = %+v, want -40", b)
 	}
 	checkCaptureTransaction(t, hold, got.tx)
@@ -241,7 +241,7 @@ func TestReleaseRestoresTheAvailable(t *testing.T) {
 	if err != nil || released.Status() != ledger.HoldReleased {
 		t.Fatalf("ReleaseHold = %+v, %v", released, err)
 	}
-	if b := balanceOf(t, deposit.ID); b.PendingDebits != 0 || b.Posted != -100 {
+	if b := balanceOf(t, deposit); b.PendingDebits.Units() != 0 || b.Posted.Units() != -100 {
 		t.Fatalf("balance after releasing = %+v", b)
 	}
 	if _, err := captureHold(t, hold.ID(), 10); !errors.Is(err, ledger.ErrHoldNotPending) {
@@ -275,7 +275,7 @@ func TestCaptureRejectionsLeaveTheHoldPending(t *testing.T) {
 	if _, err := captureHold(t, expired, 10); !errors.Is(err, ledger.ErrHoldExpired) {
 		t.Fatalf("capturing an expired one = %v, want ErrHoldExpired", err)
 	}
-	if b := balanceOf(t, deposit.ID); b.PendingDebits != 80 || b.Posted != -100 {
+	if b := balanceOf(t, deposit); b.PendingDebits.Units() != 80 || b.Posted.Units() != -100 {
 		t.Fatalf("balance = %+v, want both holds pending and posted untouched", b)
 	}
 }
@@ -301,8 +301,8 @@ func TestPlaceHoldRejects(t *testing.T) {
 	if _, err := placeHold(t, deposit.ID, clearing.ID, 10, -time.Hour); !errors.Is(err, ledger.ErrInvalidHold) {
 		t.Errorf("already expired hold = %v, want ErrInvalidHold", err)
 	}
-	if b := balanceOf(t, deposit.ID); b.PendingDebits != 0 {
-		t.Fatalf("pending = %d, want 0: no rejected hold holds funds", b.PendingDebits)
+	if b := balanceOf(t, deposit); b.PendingDebits.Units() != 0 {
+		t.Fatalf("pending = %d, want 0: no rejected hold holds funds", b.PendingDebits.Units())
 	}
 }
 
@@ -405,7 +405,7 @@ func TestASecondCaptureWaitsForTheFirst(t *testing.T) {
 	if err := <-second; !errors.Is(err, ledger.ErrHoldNotPending) {
 		t.Fatalf("the second capture = %v, want ErrHoldNotPending", err)
 	}
-	if b := balanceOf(t, deposit.ID); b.Posted != -50 || b.PendingDebits != 0 {
+	if b := balanceOf(t, deposit); b.Posted.Units() != -50 || b.PendingDebits.Units() != 0 {
 		t.Fatalf("balance = %+v, want posted -50 and nothing pending: it was posted once", b)
 	}
 }

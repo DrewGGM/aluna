@@ -51,7 +51,7 @@ func (h *AccountingHandlers) GetDailyGL(ctx context.Context, req gen.GetDailyGLR
 	if err != nil {
 		return nil, err
 	}
-	gl, err := h.accounting.GL(ctx, h.reader, p.LegalEntityID, calendarDate(req.Params.Date.Time))
+	gl, err := h.accounting.GL(ctx, h.reader, p.LegalEntityID, calendar.DateOf(req.Params.Date.Time))
 	if err != nil {
 		return nil, err
 	}

@@ -222,7 +222,7 @@ func TestPostingNeverOutrunsTheAccrual(t *testing.T) {
 			if dues != state.PostedUnits || whole(rt, state.PostedUnits).Cmp(roundedUnits(rt, state.AccruedPrecise, mode)) > 0 {
 				rt.Fatalf("posted %d in total, state %d, accrual %s", dues, state.PostedUnits, state.AccruedPrecise)
 			}
-			d = nextDay(d)
+			d = d.AddDays(1)
 		}
 	})
 }
@@ -275,7 +275,7 @@ func TestAYearOfAccrualIsTheEA(t *testing.T) {
 func yearOfAccrual(rt *rapid.T, c money.Currency, balance int64, ea money.Precise, dc products.DayCount, year int) int64 {
 	tiers := []products.RateTier{{FromUnits: 0, RateEA: ea}}
 	var state AccrualState
-	for d := day(year, time.January, 1); d.Year == year; d = nextDay(d) {
+	for d := day(year, time.January, 1); d.Year == year; d = d.AddDays(1) {
 		var err error
 		if state, _, err = AccrueDay(state, balance, tiers, dc, d); err != nil {
 			rt.Fatal(err)

@@ -5,7 +5,6 @@ package interest
 
 import (
 	"slices"
-	"time"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/money"
@@ -35,7 +34,7 @@ type AccrualState struct {
 // that already includes every posting state counts: a capitalization posted after the balance was read
 // would be left out of it and earn nothing that day.
 func AccrueDay(state AccrualState, balanceUnits int64, tiers []products.RateTier, dc products.DayCount, day calendar.Date) (AccrualState, money.Precise, error) {
-	f, err := YearFraction(dc, day, nextDay(day))
+	f, err := YearFraction(dc, day, day.AddDays(1))
 	if err != nil {
 		return AccrualState{}, money.Precise{}, err
 	}
@@ -141,9 +140,4 @@ func minus(a, b money.Precise) (money.Precise, error) {
 		return money.Precise{}, err
 	}
 	return a.Add(negative)
-}
-
-func nextDay(d calendar.Date) calendar.Date {
-	t := time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
-	return calendar.Date{Year: t.Year(), Month: t.Month(), Day: t.Day()}
 }

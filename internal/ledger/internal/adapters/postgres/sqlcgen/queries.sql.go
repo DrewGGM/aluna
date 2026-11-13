@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/ids"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const accountByCode = `-- name: AccountByCode :one
@@ -197,24 +196,35 @@ func (q *Queries) AsyncEntriesAfter(ctx context.Context, arg AsyncEntriesAfterPa
 }
 
 const balance = `-- name: Balance :one
-SELECT posted, pending_debits, pending_credits, version FROM ledger.balances WHERE account_id = $1
+SELECT b.posted, b.pending_debits, b.pending_credits, b.version, a.currency
+FROM ledger.balances b
+JOIN ledger.accounts a ON a.id = b.account_id
+WHERE b.account_id = $1 AND a.legal_entity_id = $2
 `
+
+type BalanceParams struct {
+	AccountID     ids.ID
+	LegalEntityID ids.ID
+}
 
 type BalanceRow struct {
 	Posted         int64
 	PendingDebits  int64
 	PendingCredits int64
 	Version        int64
+	Currency       string
 }
 
-func (q *Queries) Balance(ctx context.Context, accountID ids.ID) (BalanceRow, error) {
-	row := q.db.QueryRow(ctx, balance, accountID)
+// Another entity's account gives no row, like a missing one.
+func (q *Queries) Balance(ctx context.Context, arg BalanceParams) (BalanceRow, error) {
+	row := q.db.QueryRow(ctx, balance, arg.AccountID, arg.LegalEntityID)
 	var i BalanceRow
 	err := row.Scan(
 		&i.Posted,
 		&i.PendingDebits,
 		&i.PendingCredits,
 		&i.Version,
+		&i.Currency,
 	)
 	return i, err
 }
@@ -265,8 +275,8 @@ LIMIT $5::bigint
 type EntriesBeforeParams struct {
 	AccountID     ids.ID
 	LegalEntityID ids.ID
-	PostedAt      pgtype.Timestamptz
-	EntryID       pgtype.Int8
+	PostedAt      *time.Time
+	EntryID       *int64
 	Page          int64
 }
 
@@ -651,27 +661,43 @@ func (q *Queries) MoveAsyncCursor(ctx context.Context, arg MoveAsyncCursorParams
 }
 
 const postedAsOf = `-- name: PostedAsOf :one
-SELECT coalesce(sum(amount), 0)::bigint AS posted
-FROM ledger.entries
-WHERE account_id = $1
-  AND value_date <= coalesce($2::date, 'infinity'::date)
-  AND posted_at <= coalesce($3::timestamptz, 'infinity'::timestamptz)
+SELECT a.currency, coalesce((
+    SELECT sum(e.amount)
+    FROM ledger.entries e
+    WHERE e.account_id = a.id
+      AND e.value_date <= coalesce($1::date, 'infinity'::date)
+      AND e.posted_at <= coalesce($2::timestamptz, 'infinity'::timestamptz)
+), 0)::bigint AS posted
+FROM ledger.accounts a
+WHERE a.id = $3 AND a.legal_entity_id = $4
 `
 
 type PostedAsOfParams struct {
+	AsOfValueDate *time.Time
+	AsKnownAt     *time.Time
 	AccountID     ids.ID
-	AsOfValueDate pgtype.Date
-	AsKnownAt     pgtype.Timestamptz
+	LegalEntityID ids.ID
 }
 
-// Bitemporal balance (FR-8): entries with a value date up to as_of_value_date and posted up to
-// as_known_at; a null parameter does not filter that axis. It walks the account's entries by index and
-// reads each one from the heap (amount is not in the index): it costs as much as the account's history.
-func (q *Queries) PostedAsOf(ctx context.Context, arg PostedAsOfParams) (int64, error) {
-	row := q.db.QueryRow(ctx, postedAsOf, arg.AccountID, arg.AsOfValueDate, arg.AsKnownAt)
-	var posted int64
-	err := row.Scan(&posted)
-	return posted, err
+type PostedAsOfRow struct {
+	Currency string
+	Posted   int64
+}
+
+// Bitemporal balance (FR-8) of one of the entity's accounts: entries with a value date up to
+// as_of_value_date and posted up to as_known_at; a null parameter does not filter that axis. Another
+// entity's account gives no row, like a missing one. It walks the account's entries by index and reads
+// each one from the heap (amount is not in the index): it costs as much as the account's history.
+func (q *Queries) PostedAsOf(ctx context.Context, arg PostedAsOfParams) (PostedAsOfRow, error) {
+	row := q.db.QueryRow(ctx, postedAsOf,
+		arg.AsOfValueDate,
+		arg.AsKnownAt,
+		arg.AccountID,
+		arg.LegalEntityID,
+	)
+	var i PostedAsOfRow
+	err := row.Scan(&i.Currency, &i.Posted)
+	return i, err
 }
 
 const transactionIDByRef = `-- name: TransactionIDByRef :one

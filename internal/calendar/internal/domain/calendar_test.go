@@ -58,7 +58,7 @@ func TestEasterIsASundayInItsWindow(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		e := easter(rapid.IntRange(1583, 4099).Draw(t, "year"))
 		earliest, latest := Date{e.Year, time.March, 22}, Date{e.Year, time.April, 25}
-		if e.utc().Weekday() != time.Sunday || e.utc().Before(earliest.utc()) || e.utc().After(latest.utc()) {
+		if e.Time().Weekday() != time.Sunday || e.Time().Before(earliest.Time()) || e.Time().After(latest.Time()) {
 			t.Fatalf("easter %v", e)
 		}
 	})

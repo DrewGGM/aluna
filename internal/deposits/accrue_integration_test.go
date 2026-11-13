@@ -46,7 +46,7 @@ func storedAccruals(t *testing.T, id ids.ID) []accrual {
 		var a accrual
 		var on time.Time
 		err := row.Scan(&on, &a.BalanceUnits, &a.Interest, &a.AccruedPrecise, &a.PostedUnits)
-		a.ValueDate = calendar.Date{Year: on.Year(), Month: on.Month(), Day: on.Day()}
+		a.ValueDate = calendar.DateOf(on)
 		return a, err
 	})
 	if err != nil {

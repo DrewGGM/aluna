@@ -85,7 +85,7 @@ type StatusChanges interface {
 	// LockAccount reads account id of the entity and keeps it locked (FOR UPDATE) until the transaction
 	// ends.
 	LockAccount(ctx context.Context, entity, id ids.ID) (domain.Account, error)
-	Balance(ctx context.Context, ledgerAccountID ids.ID) (ledger.Balance, error)
+	Balance(ctx context.Context, entity, ledgerAccountID ids.ID) (ledger.Balance, error)
 	KYCStatus(ctx context.Context, entity, partyID ids.ID) (party.KYCStatus, error)
 	BusinessDate(ctx context.Context, entity ids.ID) (calendar.Date, error)
 	// SetStatus moves account a to status to, with a's last customer activity, records the change with its
@@ -136,7 +136,7 @@ func checkChange(ctx context.Context, s StatusChanges, a domain.Account, to doma
 			return fmt.Errorf("%w: party %s is %s, not approved", ErrKYCNotSatisfied, a.PartyID, kyc)
 		}
 	case to == domain.Closed:
-		b, err := s.Balance(ctx, a.LedgerAccountID)
+		b, err := s.Balance(ctx, a.LegalEntityID, a.LedgerAccountID)
 		if err != nil {
 			return err
 		}

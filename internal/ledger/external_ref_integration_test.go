@@ -87,7 +87,7 @@ func TestARepeatedExternalRefReturnsTheOriginal(t *testing.T) {
 	if txs, entries := countByRef(t, ref); txs != 1 || entries != 2 {
 		t.Fatalf("the reference has %d transactions and %d entries, want 1 and 2", txs, entries)
 	}
-	if got := postedOf(t, cash.ID); got != 0 {
+	if got := postedOf(t, cash); got != 0 {
 		t.Fatalf("cash balance = %d, want 0: the duplicate moves no money", got)
 	}
 }
@@ -270,7 +270,7 @@ func TestIfTheFirstRollsBackTheSecondPosts(t *testing.T) {
 
 	_, second, duplicate := raceAgainst(t, transfer(t, cash.ID, deposit.ID, ref), transfer(t, otherCash.ID, otherDeposit.ID, ref), false)
 
-	if duplicate || second.ID == (ids.ID{}) || postedOf(t, otherCash.ID) != 100 {
+	if duplicate || second.ID == (ids.ID{}) || postedOf(t, otherCash) != 100 {
 		t.Fatalf("the second = %s (duplicate: %v); want it to post", second.ID, duplicate)
 	}
 	if txs, _ := countByRef(t, ref); txs != 1 {

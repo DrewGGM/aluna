@@ -39,18 +39,27 @@ SET posted = posted + @posted, pending_debits = pending_debits + @pending_debits
     pending_credits = pending_credits + @pending_credits, version = version + 1
 WHERE account_id = @account_id;
 
+-- Another entity's account gives no row, like a missing one.
 -- name: Balance :one
-SELECT posted, pending_debits, pending_credits, version FROM ledger.balances WHERE account_id = $1;
+SELECT b.posted, b.pending_debits, b.pending_credits, b.version, a.currency
+FROM ledger.balances b
+JOIN ledger.accounts a ON a.id = b.account_id
+WHERE b.account_id = @account_id AND a.legal_entity_id = @legal_entity_id;
 
--- Bitemporal balance (FR-8): entries with a value date up to as_of_value_date and posted up to
--- as_known_at; a null parameter does not filter that axis. It walks the account's entries by index and
--- reads each one from the heap (amount is not in the index): it costs as much as the account's history.
+-- Bitemporal balance (FR-8) of one of the entity's accounts: entries with a value date up to
+-- as_of_value_date and posted up to as_known_at; a null parameter does not filter that axis. Another
+-- entity's account gives no row, like a missing one. It walks the account's entries by index and reads
+-- each one from the heap (amount is not in the index): it costs as much as the account's history.
 -- name: PostedAsOf :one
-SELECT coalesce(sum(amount), 0)::bigint AS posted
-FROM ledger.entries
-WHERE account_id = @account_id
-  AND value_date <= coalesce(sqlc.narg(as_of_value_date)::date, 'infinity'::date)
-  AND posted_at <= coalesce(sqlc.narg(as_known_at)::timestamptz, 'infinity'::timestamptz);
+SELECT a.currency, coalesce((
+    SELECT sum(e.amount)
+    FROM ledger.entries e
+    WHERE e.account_id = a.id
+      AND e.value_date <= coalesce(sqlc.narg(as_of_value_date)::date, 'infinity'::date)
+      AND e.posted_at <= coalesce(sqlc.narg(as_known_at)::timestamptz, 'infinity'::timestamptz)
+), 0)::bigint AS posted
+FROM ledger.accounts a
+WHERE a.id = @account_id AND a.legal_entity_id = @legal_entity_id;
 
 -- An account's history (FR-44): its entries before the position (posted_at, entry_id), newest first,
 -- walking entries_account_history_idx backwards; a null position is the newest one, that of the first page.

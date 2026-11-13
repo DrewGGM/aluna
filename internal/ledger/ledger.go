@@ -12,6 +12,7 @@ import (
 	pg "github.com/DrewGGM/aluna/internal/ledger/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/ledger/internal/app"
 	"github.com/DrewGGM/aluna/internal/ledger/internal/domain"
+	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
@@ -99,6 +100,9 @@ var (
 // shows as positive.
 func NaturalBalance(k Kind, posted int64) int64 { return domain.NaturalBalance(k, posted) }
 
+// NaturalAmount is NaturalBalance of an amount, in its currency.
+func NaturalAmount(k Kind, posted money.Amount) money.Amount { return domain.NaturalAmount(k, posted) }
+
 // Service is the entry point to the ledger for the other modules and the inbound adapters.
 type Service struct {
 	cal    Calendar
@@ -182,7 +186,7 @@ func (s *Service) businessDay(ctx context.Context, tx postgres.Tx, entity ids.ID
 	if err != nil {
 		return time.Time{}, err
 	}
-	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC), nil
+	return d.Time(), nil
 }
 
 // guard is the calendar's period guard within tx.
@@ -195,7 +199,7 @@ type periodGuard struct {
 
 // EnsureOpen is calendar.ErrPeriodClosed if businessDate's calendar day falls in a closed period.
 func (g periodGuard) EnsureOpen(ctx context.Context, entity ids.ID, businessDate time.Time) error {
-	return g.cal.EnsureOpen(ctx, g.q, entity, calendar.Date{Year: businessDate.Year(), Month: businessDate.Month(), Day: businessDate.Day()})
+	return g.cal.EnsureOpen(ctx, g.q, entity, calendar.DateOf(businessDate))
 }
 
 // ReleaseHold releases a pending hold within tx.
@@ -272,12 +276,11 @@ func (s *Service) Transaction(ctx context.Context, q postgres.Querier, entity, i
 	return pg.NewStore(q).TransactionOf(ctx, entity, id)
 }
 
-// PostedAsOf sums an account's entries with a value date up to at.ValueDate and posted up to at.KnownAt
-// (FR-8): the signed balance as it was known at that moment. It checks neither the account nor its
-// entity: one that does not exist sums zero, so the caller reads it first with Account, as the handler
-// does. q can be the pool or a Tx.
-func (s *Service) PostedAsOf(ctx context.Context, q postgres.Querier, accountID ids.ID, at BalanceAsOf) (int64, error) {
-	return pg.NewStore(q).PostedAsOf(ctx, accountID, at)
+// PostedAsOf sums the entries of one of the entity's accounts with a value date up to at.ValueDate and
+// posted up to at.KnownAt (FR-8): the signed balance as it was known at that moment. Another entity's
+// account is ErrAccountNotFound, like a missing one. q can be the pool or a Tx.
+func (s *Service) PostedAsOf(ctx context.Context, q postgres.Querier, entity, accountID ids.ID, at BalanceAsOf) (money.Amount, error) {
+	return pg.NewStore(q).PostedAsOf(ctx, entity, accountID, at)
 }
 
 // History reads the page of limit entries (up to MaxPageSize) of the history of the entity's account that
@@ -288,9 +291,10 @@ func (s *Service) History(ctx context.Context, q postgres.Querier, entity, accou
 	return app.History(ctx, pg.NewStore(q), entity, accountID, cursor, limit)
 }
 
-// Balance reads an account's materialized balance, without locking it. q can be the pool or a Tx.
-func (s *Service) Balance(ctx context.Context, q postgres.Querier, accountID ids.ID) (Balance, error) {
-	return pg.NewStore(q).Balance(ctx, accountID)
+// Balance reads the materialized balance of one of the entity's accounts, without locking it. Another
+// entity's account is ErrAccountNotFound, like a missing one. q can be the pool or a Tx.
+func (s *Service) Balance(ctx context.Context, q postgres.Querier, entity, accountID ids.ID) (Balance, error) {
+	return pg.NewStore(q).Balance(ctx, entity, accountID)
 }
 
 // emitter is the ledger's events within tx.

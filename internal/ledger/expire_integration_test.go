@@ -68,10 +68,10 @@ func TestExpireDueHoldsReleasesThePending(t *testing.T) {
 	if s := statusOf(t, later); s != ledger.HoldPending {
 		t.Errorf("the hold that expires later = %s, want pending", s)
 	}
-	if b := balanceOf(t, deposit.ID); b.PendingDebits != 10 || b.Posted != -100 {
+	if b := balanceOf(t, deposit); b.PendingDebits.Units() != 10 || b.Posted.Units() != -100 {
 		t.Errorf("deposit = %+v, want 10 pending (the hold not yet due) and posted untouched", b)
 	}
-	if b := balanceOf(t, cash.ID); b.PendingCredits != 0 || b.Posted != 100 {
+	if b := balanceOf(t, cash); b.PendingCredits.Units() != 0 || b.Posted.Units() != 100 {
 		t.Errorf("cash = %+v, want nothing pending and posted untouched", b)
 	}
 }
@@ -85,7 +85,7 @@ func TestABatchReleasesEveryHoldOfAnAccount(t *testing.T) {
 
 	expireDue(t, afterTheHolds(), 100)
 
-	if b := balanceOf(t, deposit.ID); b.PendingDebits != 0 {
+	if b := balanceOf(t, deposit); b.PendingDebits.Units() != 0 {
 		t.Fatalf("deposit = %+v, want nothing pending after expiring its two holds", b)
 	}
 }
@@ -105,7 +105,7 @@ func TestAHoldBeingCapturedIsNotExpired(t *testing.T) {
 	if s := statusOf(t, hold); s != ledger.HoldCaptured {
 		t.Fatalf("hold = %s, want captured", s)
 	}
-	if b := balanceOf(t, deposit.ID); b.Posted != -50 || b.PendingDebits != 0 {
+	if b := balanceOf(t, deposit); b.Posted.Units() != -50 || b.PendingDebits.Units() != 0 {
 		t.Fatalf("deposit = %+v, want posted -50 and nothing pending", b)
 	}
 }
@@ -119,7 +119,7 @@ func TestAnExpiredHoldIsNotCaptured(t *testing.T) {
 	if _, err := captureHold(t, hold, 50); !errors.Is(err, ledger.ErrHoldNotPending) {
 		t.Fatalf("capturing an expired hold = %v, want ErrHoldNotPending", err)
 	}
-	if b := balanceOf(t, deposit.ID); b.Posted != -100 || b.PendingDebits != 0 {
+	if b := balanceOf(t, deposit); b.Posted.Units() != -100 || b.PendingDebits.Units() != 0 {
 		t.Fatalf("deposit = %+v, want posted untouched and nothing pending", b)
 	}
 }

@@ -130,7 +130,7 @@ func customerSide(units int64) int64 { return ledger.NaturalBalance(ledger.KindL
 func lineOf(e StatementEntry, counters CounterAccounts) statementLine {
 	line := statementLine{
 		TransactionID: e.TransactionID, Code: e.Code, Kind: kindMovement, Amount: customerSide(e.Units),
-		BusinessDate: isoDate(e.BusinessDate), ValueDate: isoDate(e.ValueDate), PostedAt: e.PostedAt.UTC().Format(time.RFC3339Nano),
+		BusinessDate: e.BusinessDate.String(), ValueDate: e.ValueDate.String(), PostedAt: e.PostedAt.UTC().Format(time.RFC3339Nano),
 	}
 	if e.CounterUnits != -e.Units {
 		return line
@@ -144,10 +144,6 @@ func lineOf(e StatementEntry, counters CounterAccounts) statementLine {
 		line.Kind = kindGMF
 	}
 	return line
-}
-
-func isoDate(d calendar.Date) string {
-	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC).Format(time.DateOnly)
 }
 
 // Statements is what generating statements needs, within the transaction a batch runs in.
@@ -171,7 +167,7 @@ func StatementBatch(ctx context.Context, s Statements, entity ids.ID, period str
 	if err != nil {
 		return 0, after, fmt.Errorf("statement period %q: %w", period, err)
 	}
-	from, to := dateOfTime(start), dateOfTime(start.AddDate(0, 1, 0))
+	from, to := calendar.DateOf(start), calendar.DateOf(start.AddDate(0, 1, 0))
 	accounts, err := s.Pending(ctx, entity, period, from, to, after, batch)
 	if err != nil {
 		return 0, after, err

@@ -75,11 +75,11 @@ func OpeningStatus(kycApproved bool) Status {
 // cannot go below 0 only holds funds it has, so a pending hold comes with a balance, and the hold is what has
 // to be resolved first.
 func CheckClosable(b ledger.Balance) error {
-	if b.PendingDebits != 0 || b.PendingCredits != 0 {
-		return fmt.Errorf("%w: %d pending debits, %d pending credits", ErrPendingHolds, b.PendingDebits, b.PendingCredits)
+	if !b.PendingDebits.IsZero() || !b.PendingCredits.IsZero() {
+		return fmt.Errorf("%w: %d pending debits, %d pending credits", ErrPendingHolds, b.PendingDebits.Units(), b.PendingCredits.Units())
 	}
-	if b.Posted != 0 {
-		return fmt.Errorf("%w: posted %d", ErrNotEmpty, b.Posted)
+	if !b.Posted.IsZero() {
+		return fmt.Errorf("%w: posted %d", ErrNotEmpty, b.Posted.Units())
 	}
 	return nil
 }

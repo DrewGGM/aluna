@@ -71,7 +71,7 @@ func capitalizeInterest(ctx context.Context, c Capitalizing, entity ids.ID, cp c
 		return interest.AccrualState{}, err
 	}
 	tx, err := c.Post(ctx, ledger.PostInput{
-		LegalEntityID: entity, Code: codeCapitalization, ValueDate: dateTime(cp.day), // the business date is the entity's today
+		LegalEntityID: entity, Code: codeCapitalization, ValueDate: cp.day.Time(), // the business date is the entity's today
 		Source: capitalizationSource, ExternalRef: a.ID.String() + ":" + cp.period, Actor: capitalizationActor,
 		Channel: capitalizationChannel, RuleVersion: postingrules.RuleVersion, Metadata: map[string]string{"rounding": "half_even"},
 		Entries: entries,
@@ -116,7 +116,7 @@ func capitalizationOn(day calendar.Date, name string, c calendar.Convention,
 		return own, true, nil
 	}
 	start := time.Date(ownEnd.Year, ownEnd.Month-time.Month(f.months)+1, 1, 0, 0, 0, 0, time.UTC)
-	previous, previousEnd := f.periodOf(dateOfTime(start.AddDate(0, 0, -1)))
+	previous, previousEnd := f.periodOf(calendar.DateOf(start.AddDate(0, 0, -1)))
 	if adjust(previousEnd, c) == day {
 		return previous, true, nil
 	}
@@ -127,14 +127,6 @@ func capitalizationOn(day calendar.Date, name string, c calendar.Convention,
 // quarter, 2026-H1 for a half and 2026 for a year.
 func (f frequency) periodOf(day calendar.Date) (string, calendar.Date) {
 	index := (int(day.Month) - 1) / f.months
-	end := dateOfTime(time.Date(day.Year, time.Month((index+1)*f.months+1), 0, 0, 0, 0, 0, time.UTC))
+	end := calendar.DateOf(time.Date(day.Year, time.Month((index+1)*f.months+1), 0, 0, 0, 0, 0, time.UTC))
 	return f.label(day.Year, index), end
-}
-
-func dateTime(d calendar.Date) time.Time {
-	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC)
-}
-
-func dateOfTime(t time.Time) calendar.Date {
-	return calendar.Date{Year: t.Year(), Month: t.Month(), Day: t.Day()}
 }

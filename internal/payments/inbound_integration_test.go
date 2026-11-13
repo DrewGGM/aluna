@@ -128,7 +128,7 @@ func TestATransferToAnActiveAccountIsCredited(t *testing.T) {
 		!dates[0].Equal(settledOn) {
 		t.Fatalf("booked %v in %d transactions on %v, want %v on the settlement date", units, transactions, dates, want)
 	}
-	if b := w.balance(t); b.Posted != -130000000 {
+	if b := w.balance(t); b.Posted.Units() != -130000000 {
 		t.Fatalf("balance = %+v, want 1,300,000 COP", b)
 	}
 }
@@ -183,7 +183,7 @@ func TestATransferNoAccountTakesGoesToSuspense(t *testing.T) {
 	if want := map[string]int64{"L.CLEARING.SIMBREB": 5000000, "L.SUSPENSE.SIMBREB": -4000000, "customer": -1000000}; !maps.Equal(units, want) {
 		t.Fatalf("booked %v, want 40,000 COP to suspense and 10,000 to the customer", units)
 	}
-	if units, _, _ := frozen.booked(t); units["L.SUSPENSE.SIMBREB"] != -1000000 || frozen.balance(t).Posted != -100000000 {
+	if units, _, _ := frozen.booked(t); units["L.SUSPENSE.SIMBREB"] != -1000000 || frozen.balance(t).Posted.Units() != -100000000 {
 		t.Fatalf("booked %v for the frozen account, want it in suspense and the account untouched", units)
 	}
 }
@@ -214,7 +214,7 @@ func TestATransferInAnotherCurrencyGoesToSuspense(t *testing.T) {
 	}
 
 	expectReceived(t, "a transfer in dollars", w.only(t, in), "suspended", payments.ReasonAccountInAnotherCurrency, &w.account.ID)
-	if units, _, _ := w.booked(t); units["L.SUSPENSE.SIMBREB"] != -50000 || w.balance(t).Posted != -100000000 {
+	if units, _, _ := w.booked(t); units["L.SUSPENSE.SIMBREB"] != -50000 || w.balance(t).Posted.Units() != -100000000 {
 		t.Fatalf("booked %v, want 500 USD in suspense and the account untouched", units)
 	}
 	var code string

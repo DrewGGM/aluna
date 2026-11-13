@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"time"
+
+	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/approvals"
@@ -14,7 +15,6 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/products"
-	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 var (
@@ -192,7 +192,7 @@ func (r marketLoadRequest) parameter() (products.MarketParameter, error) {
 		return products.MarketParameter{}, err
 	}
 	return products.MarketParameter{
-		Kind: r.Kind, Modality: r.Modality, ValidFrom: calendarDate(r.ValidFrom.Time), ValidTo: calendarDate(r.ValidTo.Time), Value: value,
+		Kind: r.Kind, Modality: r.Modality, ValidFrom: calendar.DateOf(r.ValidFrom.Time), ValidTo: calendar.DateOf(r.ValidTo.Time), Value: value,
 	}, nil
 }
 
@@ -247,7 +247,7 @@ func loadMarketParameterOnApproval(svc *products.Service) approvals.Executor {
 // no_market_parameter.
 func (h *ProductHandlers) GetMarketParameter(ctx context.Context, req gen.GetMarketParameterRequestObject) (gen.GetMarketParameterResponseObject, error) {
 	modality := deref(req.Params.Modality)
-	value, err := h.products.MarketParameter(ctx, h.reader, products.MarketKind(req.Params.Kind), modality, calendarDate(req.Params.On.Time))
+	value, err := h.products.MarketParameter(ctx, h.reader, products.MarketKind(req.Params.Kind), modality, calendar.DateOf(req.Params.On.Time))
 	if err != nil {
 		return nil, err
 	}
@@ -256,10 +256,6 @@ func (h *ProductHandlers) GetMarketParameter(ctx context.Context, req gen.GetMar
 		out.Modality = &modality
 	}
 	return gen.GetMarketParameter200JSONResponse(out), nil
-}
-
-func calendarDate(t time.Time) calendar.Date {
-	return calendar.Date{Year: t.Year(), Month: t.Month(), Day: t.Day()}
 }
 
 func deref(s *string) string {

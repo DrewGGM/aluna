@@ -43,7 +43,7 @@ func (s Store) Pending(ctx context.Context, entity ids.ID, period string, from, 
 			AND NOT EXISTS (SELECT 1 FROM deposits.statements s WHERE s.account_id = a.id AND s.period = $2)
 			AND (a.status <> 'closed' OR EXISTS (SELECT 1 FROM ledger.entries e JOIN ledger.transactions t ON t.id = e.transaction_id
 				WHERE e.account_id = a.ledger_account_id AND t.business_date >= $3 AND t.business_date < $4))
-		ORDER BY a.id LIMIT $6`, entity, period, dateOf(from), dateOf(to), after, batch)
+		ORDER BY a.id LIMIT $6`, entity, period, from.Time(), to.Time(), after, batch)
 	if err != nil {
 		return nil, fmt.Errorf("read the accounts without statement: %w", err)
 	}
@@ -59,7 +59,7 @@ func (s Store) Pending(ctx context.Context, entity ids.ID, period string, from, 
 func (s Store) Month(ctx context.Context, a domain.Account, from, to calendar.Date) (app.Month, error) {
 	var m app.Month
 	if err := s.q.QueryRow(ctx, `SELECT coalesce(sum(e.amount), 0)::bigint FROM ledger.entries e JOIN ledger.transactions t ON t.id = e.transaction_id
-		WHERE e.account_id = $1 AND t.business_date < $2`, a.LedgerAccountID, dateOf(from)).Scan(&m.Opening); err != nil {
+		WHERE e.account_id = $1 AND t.business_date < $2`, a.LedgerAccountID, from.Time()).Scan(&m.Opening); err != nil {
 		return app.Month{}, fmt.Errorf("read the opening balance of %s: %w", a.ID, err)
 	}
 	rows, err := s.q.Query(ctx, `WITH pairs AS (
@@ -74,7 +74,7 @@ func (s Store) Month(ctx context.Context, a domain.Account, from, to calendar.Da
 		JOIN ledger.transactions t ON t.id = e.transaction_id
 		LEFT JOIN pairs c ON c.transaction_id = e.transaction_id AND c.position = (e.position # 1)
 		WHERE e.account_id = $1
-		ORDER BY e.posted_at, e.id`, a.LedgerAccountID, dateOf(from), dateOf(to))
+		ORDER BY e.posted_at, e.id`, a.LedgerAccountID, from.Time(), to.Time())
 	if err != nil {
 		return app.Month{}, fmt.Errorf("read the month of %s: %w", a.ID, err)
 	}
@@ -88,7 +88,7 @@ func scanStatementEntry(row pgx.CollectableRow) (app.StatementEntry, error) {
 	var e app.StatementEntry
 	var business, value time.Time
 	err := row.Scan(&e.TransactionID, &e.Code, &business, &value, &e.PostedAt, &e.Units, &e.Counter, &e.CounterUnits)
-	e.BusinessDate, e.ValueDate = calendarDate(business), calendarDate(value)
+	e.BusinessDate, e.ValueDate = calendar.DateOf(business), calendar.DateOf(value)
 	return e, err
 }
 

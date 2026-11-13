@@ -14,14 +14,6 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 )
 
-func dateOf(d calendar.Date) time.Time {
-	return time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, time.UTC)
-}
-
-func calendarDate(t time.Time) calendar.Date {
-	return calendar.Date{Year: t.Year(), Month: t.Month(), Day: t.Day()}
-}
-
 func amountOf(units int64, currency string) (money.Amount, error) {
 	c, err := money.CurrencyOf(currency)
 	if err != nil {
@@ -51,7 +43,7 @@ func (s Store) DaysToProject(ctx context.Context) ([]app.Day, error) {
 		var d app.Day
 		var day time.Time
 		err := row.Scan(&d.LegalEntityID, &day)
-		d.Date = calendarDate(day)
+		d.Date = calendar.DateOf(day)
 		return d, err
 	})
 	if err != nil {
@@ -74,7 +66,7 @@ func (s Store) AccountTotals(ctx context.Context, d app.Day) ([]domain.AccountTo
 		JOIN ledger.entries e ON e.transaction_id = t.id
 		JOIN ledger.accounts a ON a.id = e.account_id
 		WHERE t.legal_entity_id = $1 AND t.business_date = $2
-		GROUP BY a.code, e.currency`, d.LegalEntityID, dateOf(d.Date))
+		GROUP BY a.code, e.currency`, d.LegalEntityID, d.Date.Time())
 	if err != nil {
 		return nil, "", fmt.Errorf("read the accounts of %v: %w", d, err)
 	}
@@ -100,7 +92,7 @@ func (s Store) AccountTotals(ctx context.Context, d app.Day) ([]domain.AccountTo
 
 // ReplaceDay records d's projection, its status and mark, and replaces its lines with lines.
 func (s Store) ReplaceDay(ctx context.Context, d app.Day, status domain.DayStatus, lines []domain.Line, mark app.Mark) error {
-	day := dateOf(d.Date)
+	day := d.Date.Time()
 	_, err := s.q.Exec(ctx, `INSERT INTO accounting.gl_days (legal_entity_id, business_date, status, seen_below) VALUES ($1, $2, $3, $4::xid8)
 		ON CONFLICT (legal_entity_id, business_date)
 		DO UPDATE SET status = EXCLUDED.status, seen_below = EXCLUDED.seen_below, projected_at = clock_timestamp()`,
@@ -129,7 +121,7 @@ func (s Store) DailyGL(ctx context.Context, entity ids.ID, day calendar.Date) (d
 		FROM accounting.gl_days d
 		LEFT JOIN accounting.gl_lines l ON l.legal_entity_id = d.legal_entity_id AND l.business_date = d.business_date
 		WHERE d.legal_entity_id = $1 AND d.business_date = $2
-		ORDER BY l.cuif_code, l.currency`, entity, dateOf(day))
+		ORDER BY l.cuif_code, l.currency`, entity, day.Time())
 	if err != nil {
 		return domain.DailyGL{}, fmt.Errorf("read the GL of %v: %w", day, err)
 	}

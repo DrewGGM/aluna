@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"time"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/deposits/internal/domain"
@@ -27,7 +26,7 @@ type Dormancy interface {
 // with a product of days dormancy days (FR-27): it has gone more than days days without its customer moving
 // it. Exactly days days is not more.
 func dormantBefore(today calendar.Date, days int) calendar.Date {
-	return dateOfTime(time.Date(today.Year, today.Month, today.Day-days, 0, 0, 0, 0, time.UTC))
+	return today.AddDays(-days)
 }
 
 // MarkDormantBatch marks dormant a batch of the entity's active accounts of product version versionID that

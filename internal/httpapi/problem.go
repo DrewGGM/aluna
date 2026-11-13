@@ -184,6 +184,7 @@ var problems = []struct {
 	// is not stored with the Idempotency-Key. A missing account or wage can be fixed and the request retried; a
 	// version with limits in SMMLV outside COP cannot change, so its accounts need another version
 	{deposits.ErrAccountNotFound, notFound},
+	{deposits.ErrStatementNotFound, Problem{Status: http.StatusNotFound, Code: "statement_not_found", Title: "The account has no statement of that month: its period is not closed or not stated yet, the account did not exist then, or it was closed and did not move in it"}},
 	{deposits.ErrAccountNotActive, conflict("account_not_active", "Only an active account moves money")},
 	{deposits.ErrKYCNotSatisfied, unprocessable("kyc_not_satisfied", "The party's KYC status does not allow the product")},
 	{deposits.ErrInvalidMovement, unprocessable("invalid_movement", "The amount must be positive and the accounts different")},

@@ -4,6 +4,8 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -430,4 +432,64 @@ func TestAWrongPageIsAProblem(t *testing.T) {
 			t.Errorf("%s = %d %+v, want %d %s", name, status, problem, tc.status, tc.code)
 		}
 	}
+}
+
+// TestAMonthlyStatementOverHTTP (FR-45, US-16): once March is closed its statement is served as stored, and its hash is the
+// SHA-256 of its document; a month without one, or a period that is not a month, are problems.
+func TestAMonthlyStatementOverHTTP(t *testing.T) {
+	w := newDepositWorld(t)
+	a := w.opened(t, w.party(t, party.KYCApproved), w.savings(t, true))
+	expectCreated(t, "deposit", w.move(t, a.Id.String(), "deposits", amountBody(10000000)))
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(t.Context(), `UPDATE calendar.legal_entities SET business_date = '2026-04-01' WHERE id = $1`, w.entity); err != nil {
+			return err
+		}
+		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.periods (legal_entity_id, period, status, closed_at, closed_by)
+			VALUES ($1, '2026-03', 'closed', clock_timestamp(), 'finance-b')`, w.entity)
+		return err
+	})
+	if _, err := w.deposits.GenerateStatements(t.Context(), postgres.NewUnitOfWork(testPool), 50); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/deposit-accounts/" + a.Id.String() + "/statements/"
+
+	if closing := servedStatement(t, w.ts, path+"2026-03"); closing != 10000000 {
+		t.Fatalf("closing balance %d, want 100,000 COP", closing)
+	}
+	for name, tc := range map[string]struct {
+		path   string
+		status int
+		code   string
+	}{
+		"April":                 {path + "2026-04", http.StatusNotFound, "statement_not_found"},
+		"month 13":              {path + "2026-13", http.StatusBadRequest, "invalid_request"},
+		"an account of nowhere": {"/v1/deposit-accounts/" + ids.New().String() + "/statements/2026-03", http.StatusNotFound, "not_found"},
+	} {
+		var problem Problem
+		if status := call(t, w.ts, http.MethodGet, tc.path, "", &problem); status != tc.status || problem.Code != tc.code {
+			t.Errorf("%s = %d %+v, want %d %s", name, status, problem, tc.status, tc.code)
+		}
+	}
+}
+
+// servedStatement reads the statement at path, checks that it is March's and that its hash is its document's, and
+// returns its closing balance.
+func servedStatement(t *testing.T, ts *httptest.Server, path string) int64 {
+	t.Helper()
+	var st struct {
+		Period      string          `json:"period"`
+		ContentHash string          `json:"content_hash"`
+		Document    json.RawMessage `json:"document"`
+	}
+	if status := call(t, ts, http.MethodGet, path, "", &st); status != http.StatusOK {
+		t.Fatalf("statement = %d", status)
+	}
+	sum := sha256.Sum256(st.Document)
+	var doc struct {
+		ClosingBalance int64 `json:"closing_balance"`
+	}
+	if err := json.Unmarshal(st.Document, &doc); err != nil || st.Period != "2026-03" || st.ContentHash != hex.EncodeToString(sum[:]) {
+		t.Fatalf("statement = %+v (%v)", st, err)
+	}
+	return doc.ClosingBalance
 }

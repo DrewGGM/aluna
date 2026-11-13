@@ -101,6 +101,24 @@ func (h *DepositHandlers) ListDepositAccountTransactions(ctx context.Context, re
 	return gen.ListDepositAccountTransactions200JSONResponse(toHistoryJSON(page)), nil
 }
 
+// GetDepositAccountStatement reads an account's statement of a month, of the token's entity, at no cost (FR-45).
+func (h *DepositHandlers) GetDepositAccountStatement(ctx context.Context, req gen.GetDepositAccountStatementRequestObject) (gen.GetDepositAccountStatementResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := calendar.ValidatePeriod(req.Period); err != nil {
+		return nil, err
+	}
+	st, err := h.deposits.Statement(ctx, h.reader, p.LegalEntityID, ids.ID(req.Id), req.Period)
+	if err != nil {
+		return nil, err
+	}
+	return gen.GetDepositAccountStatement200JSONResponse{
+		Period: req.Period, ContentHash: st.ContentHash, GeneratedAt: st.GeneratedAt, Document: st.Document,
+	}, nil
+}
+
 func toHistoryJSON(page ledger.HistoryPage) gen.AccountHistory {
 	entries := make([]gen.HistoryEntry, len(page.Entries))
 	for i, e := range page.Entries {

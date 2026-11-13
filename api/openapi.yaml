@@ -645,6 +645,36 @@ paths:
         "400": {$ref: "#/components/responses/Problem"}
         "404": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/deposit-accounts/{id}/statements/{period}:
+    get:
+      operationId: getDepositAccountStatement
+      summary: Read a deposit account's statement of a month
+      description: >-
+        The statement of a month (FR-45, US-16), at no cost. It is generated once the month's accounting period is
+        closed, for every account opened before the month ended unless it was closed and did not move in it, and it
+        never changes: nothing posts in a closed period. `document` is canonical JSON, byte for byte as stored, and
+        `content_hash` is the SHA-256 of those bytes, in hex: generating it again gives the same hash. It has the
+        opening and closing balances, every entry of the month by business date as a movement (a withdrawal's fees
+        and GMF are movements of their own), and apart the interest capitalized, the fees and the GMF; amounts are in
+        minor units, from the customer's side. An account of another entity is 404 `not_found`; a month without a
+        statement, 404 `statement_not_found`; a period that is not a month, 400 `invalid_request`.
+      x-aluna-permission: deposits.accounts.read
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - name: period
+          in: path
+          required: true
+          description: The month, yyyy-mm.
+          schema: {type: string, pattern: "^[0-9]{4}-[0-9]{2}$"}
+      responses:
+        "200":
+          description: The statement
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Statement"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/deposit-accounts/{id}/deposits:
     post:
       operationId: createDeposit
@@ -1208,6 +1238,19 @@ components:
         instr_id: {type: string, description: ISO 20022 InstrId}
         tx_id: {type: string, description: ISO 20022 TxId}
         held: {$ref: "#/components/schemas/Money", description: "What is held on the account: the amount, its fees and its GMF"}
+    Statement:
+      type: object
+      required: [period, content_hash, generated_at, document]
+      properties:
+        period: {type: string, description: "The month, yyyy-mm"}
+        content_hash: {type: string, description: SHA-256 of the document's bytes, in hex}
+        generated_at: {type: string, format: date-time}
+        document:
+          description: >-
+            The statement as stored: account_id, period, currency, opening_balance, interest, fees, gmf,
+            closing_balance and movements, each with transaction_id, code, kind (movement, interest, fee or gmf),
+            business_date, value_date, posted_at and amount.
+          x-go-type: json.RawMessage
     Approval:
       type: object
       required: [id, kind, status, payload, maker, created_at, expires_at]

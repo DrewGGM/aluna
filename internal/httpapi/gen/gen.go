@@ -963,6 +963,19 @@ type ResolveScreeningCaseResolution string
 // RiskLevel defines model for RiskLevel.
 type RiskLevel string
 
+// Statement defines model for Statement.
+type Statement struct {
+	// ContentHash SHA-256 of the document's bytes
+	ContentHash string `json:"content_hash"`
+
+	// Document The statement as stored: account_id, period, currency, opening_balance, interest, fees, gmf, closing_balance and movements, each with transaction_id, code, kind (movement, interest, fee or gmf), business_date, value_date, posted_at and amount.
+	Document    json.RawMessage `json:"document"`
+	GeneratedAt time.Time       `json:"generated_at"`
+
+	// Period The month, yyyy-mm
+	Period string `json:"period"`
+}
+
 // StatementImport defines model for StatementImport.
 type StatementImport struct {
 	Exceptions int `json:"exceptions"`
@@ -1241,6 +1254,9 @@ type ServerInterface interface {
 	// CreateGMFExemption Exempt an account from GMF
 	// (POST /v1/deposit-accounts/{id}/gmf-exemption)
 	CreateGMFExemption(w http.ResponseWriter, r *http.Request, id ID)
+	// GetDepositAccountStatement Read a deposit account's statement of a month
+	// (GET /v1/deposit-accounts/{id}/statements/{period})
+	GetDepositAccountStatement(w http.ResponseWriter, r *http.Request, id ID, period string)
 	// ListDepositAccountTransactions Read a deposit account's history
 	// (GET /v1/deposit-accounts/{id}/transactions)
 	ListDepositAccountTransactions(w http.ResponseWriter, r *http.Request, id ID, params ListDepositAccountTransactionsParams)
@@ -1690,6 +1706,41 @@ func (siw *ServerInterfaceWrapper) CreateGMFExemption(w http.ResponseWriter, r *
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateGMFExemption(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDepositAccountStatement operation middleware
+func (siw *ServerInterfaceWrapper) GetDepositAccountStatement(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "period" -------------
+	var period string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "period", r.PathValue("period"), &period, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "period", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDepositAccountStatement(w, r, id, period)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3021,6 +3072,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts", wrapper.OpenDepositAccount)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/deposit-accounts/{id}", wrapper.GetDepositAccount)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/deposit-accounts/{id}/transactions", wrapper.ListDepositAccountTransactions)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/deposit-accounts/{id}/statements/{period}", wrapper.GetDepositAccountStatement)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/deposits", wrapper.CreateDeposit)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/withdrawals", wrapper.CreateWithdrawal)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
@@ -3852,6 +3904,76 @@ type CreateGMFExemptiondefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response CreateGMFExemptiondefaultApplicationProblemPlusJSONResponse) VisitCreateGMFExemptionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDepositAccountStatementRequestObject struct {
+	Id     ID     `json:"id"`
+	Period string `json:"period"`
+}
+
+type GetDepositAccountStatementResponseObject interface {
+	VisitGetDepositAccountStatementResponse(w http.ResponseWriter) error
+}
+
+type GetDepositAccountStatement200JSONResponse Statement
+
+func (response GetDepositAccountStatement200JSONResponse) VisitGetDepositAccountStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDepositAccountStatement400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetDepositAccountStatement400ApplicationProblemPlusJSONResponse) VisitGetDepositAccountStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDepositAccountStatement404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDepositAccountStatement404ApplicationProblemPlusJSONResponse) VisitGetDepositAccountStatementResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDepositAccountStatementdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetDepositAccountStatementdefaultApplicationProblemPlusJSONResponse) VisitGetDepositAccountStatementResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -6380,6 +6502,9 @@ type StrictServerInterface interface {
 	// CreateGMFExemption Exempt an account from GMF
 	// (POST /v1/deposit-accounts/{id}/gmf-exemption)
 	CreateGMFExemption(ctx context.Context, request CreateGMFExemptionRequestObject) (CreateGMFExemptionResponseObject, error)
+	// GetDepositAccountStatement Read a deposit account's statement of a month
+	// (GET /v1/deposit-accounts/{id}/statements/{period})
+	GetDepositAccountStatement(ctx context.Context, request GetDepositAccountStatementRequestObject) (GetDepositAccountStatementResponseObject, error)
 	// ListDepositAccountTransactions Read a deposit account's history
 	// (GET /v1/deposit-accounts/{id}/transactions)
 	ListDepositAccountTransactions(ctx context.Context, request ListDepositAccountTransactionsRequestObject) (ListDepositAccountTransactionsResponseObject, error)
@@ -6763,6 +6888,33 @@ func (sh *strictHandler) CreateGMFExemption(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateGMFExemptionResponseObject); ok {
 		if err := validResponse.VisitCreateGMFExemptionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDepositAccountStatement operation middleware
+func (sh *strictHandler) GetDepositAccountStatement(w http.ResponseWriter, r *http.Request, id ID, period string) {
+	var request GetDepositAccountStatementRequestObject
+
+	request.Id = id
+	request.Period = period
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDepositAccountStatement(ctx, request.(GetDepositAccountStatementRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDepositAccountStatement")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDepositAccountStatementResponseObject); ok {
+		if err := validResponse.VisitGetDepositAccountStatementResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -80,6 +80,16 @@ const (
 	glTimeout  = 25 * time.Minute
 )
 
+// The statements (FR-45) of a period are generated once it is closed, so an hour is soon enough. A period of many
+// accounts takes many batches, longer than River's default minute; they commit as they go, so a run cut short only
+// leaves work for the next. Like the GL a run is not inserted while another waits or runs, so it holds at most one
+// of the default queue's workers, as the dormancy does, and needs no queue of its own.
+const (
+	statementsInterval = time.Hour
+	statementsBatch    = 200
+	statementsTimeout  = 30 * time.Minute
+)
+
 // Sealing (ADR-0012) closes blocks of at most auditBlockSize records, sealRounds per run so it finishes
 // before the job's time limit; whatever is left goes to the next run.
 const (
@@ -163,6 +173,10 @@ func Register(w *river.Workers, deps Deps) {
 	river.AddWorker(w, &task[projectGL]{timeout: glTimeout, run: func(ctx context.Context) error {
 		return deps.Accounting.ProjectGL(ctx, deps.UnitOfWork)
 	}})
+	river.AddWorker(w, &task[generateStatements]{timeout: statementsTimeout, run: func(ctx context.Context) error {
+		_, err := deps.Deposits.GenerateStatements(ctx, deps.UnitOfWork, statementsBatch)
+		return err
+	}})
 	compliance.FollowCash(deps.Outbox, holderOf(deps.Deposits))
 	deps.Outbox.AddWorkers(w)
 	deps.Payments.AddWorkers(w, deps.UnitOfWork)
@@ -196,6 +210,7 @@ func Periodic() []*river.PeriodicJob {
 		every(time.Hour, markDormant{}),
 		every(controlsInterval, runControls{}),
 		every(glInterval, projectGL{}),
+		every(statementsInterval, generateStatements{}),
 	}
 }
 
@@ -273,6 +288,14 @@ type projectGL struct{}
 func (projectGL) Kind() string { return "accounting.gl.project" }
 
 func (projectGL) InsertOpts() river.InsertOpts { return oneAtATime(QueueGL) }
+
+// generateStatements generates the monthly statements of the closed periods (FR-45). A run is not inserted while
+// another is waiting or running.
+type generateStatements struct{}
+
+func (generateStatements) Kind() string { return "deposits.statements.generate" }
+
+func (generateStatements) InsertOpts() river.InsertOpts { return oneAtATime(river.QueueDefault) }
 
 // oneAtATime puts a job in queue, like insertOpts, and inserts it only if no other of its kind waits or runs.
 func oneAtATime(queue string) river.InsertOpts {

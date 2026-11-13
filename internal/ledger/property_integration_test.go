@@ -26,9 +26,9 @@ import (
 // that of its pending holds, no available balance ends below the limit and no hold changes status except
 // through the operation that finished it.
 func TestLedgerProperties(t *testing.T) {
-	enforced := defaultChecks(t, "200")
+	enforced := defaultChecks(t, "200") && !testing.Short() // defaultChecks first: it sets -rapid.checks
 	ran := &coverage{}
-	rapid.Check(t, func(rt *rapid.T) {
+	sequence := func(rt *rapid.T) {
 		m := &ledgerModel{t: t, cop: cop(t), ran: ran, posted: map[ids.ID]int64{}, reserved: map[ids.ID]int64{}}
 		rt.Repeat(map[string]func(*rapid.T){
 			"":          m.check,
@@ -40,18 +40,32 @@ func TestLedgerProperties(t *testing.T) {
 			"release":   m.releaseStep,
 			"aggregate": m.aggregateStep,
 		})
-	})
-	t.Logf("succeeded %+v", *ran)
-	if enforced && !testing.Short() && slices.Contains([]int{ran.posts, ran.reversals, ran.holds, ran.captures, ran.releases, ran.refusals, ran.reterminated}, 0) {
-		t.Errorf("some operation never succeeded in %+v: the test does not exercise it", *ran)
+	}
+	rapid.Check(t, sequence)
+	batches := 1
+	for ; enforced && ran.incomplete() && batches < coverageBatches; batches++ {
+		rapid.Check(t, sequence)
+	}
+	t.Logf("succeeded %+v in %d batches", *ran, batches)
+	if enforced && ran.incomplete() {
+		t.Errorf("some operation never succeeded in %+v after %d batches: the test does not exercise it", *ran, batches)
 	}
 }
+
+// coverageBatches is how many batches of sequences the test draws at most: one batch can miss a rare operation by
+// chance (Q-98), and four make that as unlikely as a real gap is likely.
+const coverageBatches = 4
 
 // coverage counts what actually happened across all sequences: an operation that never succeeds (because
 // the ledger always rejects it, for example) would leave half the state machine untested.
 type coverage struct {
 	posts, reversals, holds, captures, releases, refusals int
 	reterminated                                          int // attempts to finish an already finished hold again
+}
+
+// incomplete reports whether some operation never succeeded.
+func (c coverage) incomplete() bool {
+	return slices.Contains([]int{c.posts, c.reversals, c.holds, c.captures, c.releases, c.refusals, c.reterminated}, 0)
 }
 
 // defaultChecks runs n sequences unless -rapid.checks or RAPID_CHECKS say how many (CI runs the test

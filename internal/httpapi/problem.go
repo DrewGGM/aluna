@@ -25,6 +25,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
 	"github.com/DrewGGM/aluna/internal/reconciliation"
+	"github.com/DrewGGM/aluna/internal/webhooks"
 )
 
 // Problem is an RFC 9457 error. Code is stable and meant for machines; Title and Detail are meant for people
@@ -234,6 +235,8 @@ var problems = []struct {
 	{approvals.ErrNotPending, conflict("approval_not_pending", "The request was already decided")},
 	{approvals.ErrExpired, conflict("approval_expired", "The request expired")},
 	{approvals.ErrNoReason, unprocessable("rejection_reason_required", "A rejection needs a reason")},
+	// webhooks
+	{webhooks.ErrInvalidPage, invalidRequest("Invalid page", "A page has 1 to 200 events and a cursor is the next_cursor of a page.")},
 }
 
 func problemFor(err error) (Problem, bool) {

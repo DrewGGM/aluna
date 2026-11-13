@@ -43,6 +43,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/products"
 	"github.com/DrewGGM/aluna/internal/reconciliation"
 	"github.com/DrewGGM/aluna/internal/telemetry"
+	"github.com/DrewGGM/aluna/internal/webhooks"
 )
 
 // version is injected at build time: go build -ldflags "-X main.version=1.2.3" ./cmd/aluna
@@ -370,6 +371,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 		PaymentHandlers:        httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: httpapi.NewReconciliationHandlers(reconciliation.New(events), uow, keys, pool),
 		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(), reconciliation.New(events), requests, uow, keys, pool),
+		WebhookHandlers:        httpapi.NewWebhookHandlers(webhooks.New(), pool),
 	}, nil
 }
 

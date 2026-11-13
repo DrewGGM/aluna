@@ -542,6 +542,9 @@ type CashWithdrawal struct {
 	QuoteId *openapi_types.UUID `json:"quote_id,omitempty"`
 }
 
+// CloudEvent A CloudEvent 1.0 (architecture §8): specversion, id (UUIDv7), source (aluna/<module>), type, subject, time, datacontenttype (application/json) and data, with legalentityid, correlationid (if any) and schemaversion. Its data carries identifiers, amounts and statuses, never personal data.
+type CloudEvent = json.RawMessage
+
 // CreateLedgerAccount defines model for CreateLedgerAccount.
 type CreateLedgerAccount struct {
 	BalanceMode BalanceMode `json:"balance_mode"`
@@ -646,6 +649,17 @@ type Entry struct {
 
 	// Amount Signed, debit positive and credit negative.
 	Amount Money `json:"amount"`
+}
+
+// EventPage defines model for EventPage.
+type EventPage struct {
+	Events []CloudEvent `json:"events"`
+
+	// HasMore Whether there are events after this page already
+	HasMore bool `json:"has_more"`
+
+	// NextCursor Where the next page starts
+	NextCursor string `json:"next_cursor"`
 }
 
 // GLLine defines model for GLLine.
@@ -1059,6 +1073,18 @@ type CreateWithdrawalParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListEventsParams defines parameters for ListEvents.
+type ListEventsParams struct {
+	// Cursor The `next_cursor` of the previous page; absent for the first one.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Type Only events of this type, aluna.<module>.<aggregate>.<event>.v<N>.
+	Type *string `form:"type,omitempty" json:"type,omitempty"`
+
+	// Limit Events per page.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // GetDailyGLParams defines parameters for GetDailyGL.
 type GetDailyGLParams struct {
 	Date openapi_types.Date `form:"date" json:"date"`
@@ -1263,6 +1289,9 @@ type ServerInterface interface {
 	// CreateWithdrawal Withdraw cash from an account
 	// (POST /v1/deposit-accounts/{id}/withdrawals)
 	CreateWithdrawal(w http.ResponseWriter, r *http.Request, id ID, params CreateWithdrawalParams)
+	// ListEvents List the events of the last 30 days
+	// (GET /v1/events)
+	ListEvents(w http.ResponseWriter, r *http.Request, params ListEventsParams)
 	// GetDailyGL Read the GL of a day
 	// (GET /v1/general-ledger/daily)
 	GetDailyGL(w http.ResponseWriter, r *http.Request, params GetDailyGLParams)
@@ -1850,6 +1879,65 @@ func (siw *ServerInterfaceWrapper) CreateWithdrawal(w http.ResponseWriter, r *ht
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateWithdrawal(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListEvents operation middleware
+func (siw *ServerInterfaceWrapper) ListEvents(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListEventsParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "type" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "type", r.URL.Query(), &params.Type, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "type"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "type", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListEvents(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3083,6 +3171,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/statements", wrapper.ImportStatement)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/reconciliation/breaks", wrapper.ListBreaks)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/breaks/{id}/resolution", wrapper.ResolveBreak)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/events", wrapper.ListEvents)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transfers", wrapper.CreateTransfer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/gmf-exemption", wrapper.CreateGMFExemption)
 
@@ -4157,6 +4246,61 @@ type CreateWithdrawaldefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response CreateWithdrawaldefaultApplicationProblemPlusJSONResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEventsRequestObject struct {
+	Params ListEventsParams
+}
+
+type ListEventsResponseObject interface {
+	VisitListEventsResponse(w http.ResponseWriter) error
+}
+
+type ListEvents200JSONResponse EventPage
+
+func (response ListEvents200JSONResponse) VisitListEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEvents400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListEvents400ApplicationProblemPlusJSONResponse) VisitListEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEventsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListEventsdefaultApplicationProblemPlusJSONResponse) VisitListEventsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -6511,6 +6655,9 @@ type StrictServerInterface interface {
 	// CreateWithdrawal Withdraw cash from an account
 	// (POST /v1/deposit-accounts/{id}/withdrawals)
 	CreateWithdrawal(ctx context.Context, request CreateWithdrawalRequestObject) (CreateWithdrawalResponseObject, error)
+	// ListEvents List the events of the last 30 days
+	// (GET /v1/events)
+	ListEvents(ctx context.Context, request ListEventsRequestObject) (ListEventsResponseObject, error)
 	// GetDailyGL Read the GL of a day
 	// (GET /v1/general-ledger/daily)
 	GetDailyGL(ctx context.Context, request GetDailyGLRequestObject) (GetDailyGLResponseObject, error)
@@ -6976,6 +7123,32 @@ func (sh *strictHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Request
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateWithdrawalResponseObject); ok {
 		if err := validResponse.VisitCreateWithdrawalResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListEvents operation middleware
+func (sh *strictHandler) ListEvents(w http.ResponseWriter, r *http.Request, params ListEventsParams) {
+	var request ListEventsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListEvents(ctx, request.(ListEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListEvents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListEventsResponseObject); ok {
+		if err := validResponse.VisitListEventsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

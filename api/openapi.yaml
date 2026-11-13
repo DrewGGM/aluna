@@ -979,6 +979,44 @@ paths:
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/events:
+    get:
+      operationId: listEvents
+      summary: List the events of the last 30 days
+      description: >-
+        The events of the token's entity of the last 30 days (FR-46), in the order of the transactions that emitted
+        them, as CloudEvents 1.0 with the extensions legalentityid, correlationid and schemaversion; `type` keeps only
+        those of one type. An event shows up once every transaction older than its own has ended, usually within
+        moments. A page ends with `next_cursor`, also the last one: reading from it later gives what was emitted
+        since, without repeating or skipping an event, and `has_more` says whether there is more already. A cursor
+        older than 30 days resumes at the start of the window: the events before it are gone. A cursor that does not
+        decode, or a `limit` outside 1 to 200, is 400 `invalid_request`. The events carry the results of screening and
+        reconciliation, so only integrators (a role that reads nothing else), compliance and auditors read them.
+      x-aluna-permission: webhooks.events.read
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` of the previous page; absent for the first one.
+          schema: {type: string}
+        - name: type
+          in: query
+          required: false
+          description: Only events of this type, aluna.<module>.<aggregate>.<event>.v<N>.
+          schema: {type: string}
+        - name: limit
+          in: query
+          required: false
+          description: Events per page.
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+      responses:
+        "200":
+          description: A page of events
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EventPage"}
+        "400": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/transfers:
     post:
       operationId: createTransfer
@@ -1238,6 +1276,21 @@ components:
         instr_id: {type: string, description: ISO 20022 InstrId}
         tx_id: {type: string, description: ISO 20022 TxId}
         held: {$ref: "#/components/schemas/Money", description: "What is held on the account: the amount, its fees and its GMF"}
+    CloudEvent:
+      description: >-
+        A CloudEvent 1.0 (architecture §8): specversion, id (UUIDv7), source (aluna/<module>), type, subject, time,
+        datacontenttype (application/json) and data, with legalentityid, correlationid (if any) and schemaversion.
+        Its data carries identifiers, amounts and statuses, never personal data.
+      x-go-type: json.RawMessage
+    EventPage:
+      type: object
+      required: [events, next_cursor, has_more]
+      properties:
+        events:
+          type: array
+          items: {$ref: "#/components/schemas/CloudEvent"}
+        next_cursor: {type: string, description: Where the next page starts}
+        has_more: {type: boolean, description: Whether there are events after this page already}
     Statement:
       type: object
       required: [period, content_hash, generated_at, document]

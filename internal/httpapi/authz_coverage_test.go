@@ -104,9 +104,9 @@ func withIDs(path string) string {
 
 var pathParam = regexp.MustCompile(`\{[^}]+\}`)
 
-// TestTheRolesOfThePolicy: config/roles.yaml defines the six roles of ADR-0014 and only grants permissions
-// the contract declares: a misspelled permission does not sit there granting nothing without anyone
-// noticing.
+// TestTheRolesOfThePolicy: config/roles.yaml defines the roles of ADR-0014, with the service roles of machines (system,
+// integrator), and only grants permissions the contract declares: a misspelled permission does not sit there granting
+// nothing without anyone noticing.
 func TestTheRolesOfThePolicy(t *testing.T) {
 	policy, err := access.ParsePolicy(config.Roles)
 	if err != nil {
@@ -114,7 +114,7 @@ func TestTheRolesOfThePolicy(t *testing.T) {
 	}
 	declared := slices.Collect(maps.Values(specOperations(t)))
 
-	if want := []string{"auditor", "channel", "compliance", "finance", "operator", "system"}; !slices.Equal(policy.Roles(), want) {
+	if want := []string{"auditor", "channel", "compliance", "finance", "integrator", "operator", "system"}; !slices.Equal(policy.Roles(), want) {
 		t.Errorf("roles = %v, want %v", policy.Roles(), want)
 	}
 	for _, permission := range policy.Permissions() {

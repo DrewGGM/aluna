@@ -79,6 +79,7 @@ compliance:
     - ledger.accounts.read
     - ledger.balances.read
     - ledger.transactions.read
+    - webhooks.events.read
 
 # Internal audit or statutory auditor: read only.
 auditor:
@@ -93,6 +94,7 @@ auditor:
     - ledger.transactions.read
     - reconciliation.breaks.read
     - accounting.gl.read
+    - webhooks.events.read
 
 # Internal services (rails, jobs): move money with holds and entries.
 system:
@@ -104,3 +106,8 @@ system:
     - ledger.holds.place
     - ledger.holds.capture
     - ledger.holds.release
+
+# Integrators: read the entity's events (FR-46) and nothing else, so a token to follow them cannot move money.
+integrator:
+  all:
+    - webhooks.events.read

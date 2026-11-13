@@ -8,15 +8,7 @@ desde el contrato: no se editan a mano.
 ## Uso
 
 1. En Postman, *Import* de los dos archivos y selecciona el entorno **Aluna dev**.
-2. Levanta Keycloak y la API como dice el [README](../../README.md):
-
-   ```bash
-   docker compose -f deploy/compose.yaml up -d postgres
-   docker compose -f deploy/compose.yaml --profile iam up -d keycloak   # :8180
-   # migraciones y ./aluna api con ALUNA_OIDC_ISSUER=http://localhost:8180/realms/aluna
-   # y ALUNA_OIDC_AUDIENCE=aluna-api
-   ```
-
+2. Levanta PostgreSQL, Keycloak, la API y el worker como dice el [inicio rápido](../../README.md#uso).
 3. Envía cualquier petición.
 
 La colección no tiene aserciones: un 4xx de la API es una respuesta, no un fallo, también al correrla

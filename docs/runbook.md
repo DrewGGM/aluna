@@ -3,8 +3,9 @@
 Qué hacer cuando Aluna da síntomas en producción: cómo se ve cada falla, cómo se diagnostica y cómo se
 mitiga sin mover dinero de más. Las alertas están en
 [`deploy/observability/alerts.yaml`](../deploy/observability/alerts.yaml) y las SLO en
-[`slo.yaml`](../deploy/observability/slo.yaml). Al final están los procesos, la imagen, la configuración
-de PostgreSQL y las migraciones.
+[`slo.yaml`](../deploy/observability/slo.yaml). Aquí solo hay síntomas y procedimientos: los procesos, su
+configuración, las métricas y el despliegue (imagen, PostgreSQL, migraciones) están en
+[`arquitectura.md`](arquitectura.md).
 
 Dos reglas valen para todo el runbook:
 
@@ -180,7 +181,7 @@ GROUP BY 1;
   ```
 
 - Una transacción larga del clúster frena la cola `ledger` y el GL (ver
-  [Configuración de PostgreSQL](#configuración-de-postgresql)).
+  [Configuración de PostgreSQL](arquitectura.md#configuración-de-postgresql)).
 
 ## Falla del IAM
 
@@ -293,62 +294,3 @@ eventos posteriores que recibieron ya no existen. Los webhooks no tienen este pr
 en la base restaurada. Un `pg_dump`/restore o una replicación lógica tampoco conservan el contador, y el
 feed queda vacío para todos hasta que el contador nuevo pase al viejo: el remedio es el mismo. Adelantar
 el contador (`pg_resetwal -e` y `-x`) es irreversible, lo hace solo un DBA y no está ensayado.
-
-## Procesos e imagen
-
-Un solo binario con varios procesos: `aluna api` (canales en `:8080` y notificaciones de rails en
-`:8081`), `aluna worker` (jobs de River), `aluna migrate` y `aluna audit verify`.
-
-```bash
-docker build --build-arg VERSION=0.1.0 -t aluna:0.1.0 .
-docker run -d --name aluna-api --env-file api.env --stop-timeout 30 -p 8080:8080 -p 8081:8081 aluna:0.1.0 api
-docker run -d --name aluna-worker --env-file worker.env --stop-timeout 30 --no-healthcheck \
-  -e ALUNA_AUDIT_ANCHOR_DIR=/anchor -e ALUNA_SIMBREB_NOTIFY_URL=http://aluna-api:8081 \
-  -v /ruta/del/ancla:/anchor aluna:0.1.0 worker
-docker run --rm --env-file migrate.env aluna:0.1.0 migrate up
-```
-
-- La imagen es distroless, corre como `nonroot` (uid 65532) y no trae shell. Su `HEALTHCHECK` es
-  `aluna healthcheck`, que pide `/healthz` a la API en `ALUNA_HTTP_ADDR`. El worker no escucha HTTP:
-  corre con `--no-healthcheck` (en Kubernetes, sin probe HTTP). El directorio del ancla debe admitir
-  escritura del uid 65532.
-- Con SIGTERM, `api` y `worker` esperan hasta 20 s a que terminen las solicitudes y los jobs en curso. El
-  plazo del orquestador antes de matar el proceso (`--stop-timeout`, `terminationGracePeriodSeconds`) debe
-  superarlo: 30 s. Con el de Docker por defecto (10 s), un posting o un pago se cortaría a mitad.
-- `/healthz` dice si el proceso vive y `/readyz` si además llega a la base. El balanceador saca de
-  rotación con `/readyz`. El orquestador reinicia solo con `/healthz`: una caída de la base no debe
-  reiniciar todas las réplicas.
-- `ALUNA_SIMBREB_NOTIFY_URL` del worker debe llegar al puerto de rails de la `api`: su valor por
-  defecto (`http://localhost:8081`) apunta al propio contenedor del worker, y los pagos se quedarían
-  `sent`.
-- `api` y `worker` se conectan con el rol `aluna_app` y `migrate` con el dueño de las tablas (ver el
-  README). El ancla de auditoría (`ALUNA_AUDIT_ANCHOR_DIR`) es WORM en producción y sobrevive a la base.
-
-## Configuración de PostgreSQL
-
-Fija en el servidor `idle_in_transaction_session_timeout` (por ejemplo `60s`). Una transacción que
-escribió y quedó abierta en cualquier base del clúster, como una sesión de `psql` olvidada después de un
-`UPDATE` sin `COMMIT`, frena el feed de eventos de todas las entidades (`GET /v1/events` solo muestra
-lo que confirmó antes de la transacción más vieja), el agregador de saldos async y la proyección del GL.
-
-## Migraciones
-
-`aluna migrate up` corre cada migración en su propia transacción. En una base vacía todas son
-instantáneas. En una base con historia, estas recorren una tabla que ya tenía filas: un índice sin
-`CONCURRENTLY` bloquea sus escrituras mientras se construye, un `CHECK` nuevo la bloquea entera,
-lecturas incluidas, mientras se valida, y una llave foránea nueva bloquea sus escrituras:
-
-| Migración | Qué hace sobre una tabla existente | Qué bloquea |
-|---|---|---|
-| `0005_async_balances.sql` | índice sobre `ledger.transactions` | los postings |
-| `0011_audit_seal.sql` | llave foránea, `CHECK` e índice sobre `audit.records` | todo comando auditado |
-| `0020_gmf.sql` | columnas con `CHECK` en `pricing.quotes` | las cotizaciones |
-| `0021_compliance.sql` | `CHECK` nuevo en `party.versions` | las parties |
-| `0023_inbound_payments.sql` | `CHECK` e índice único sobre `payments.orders` | los pagos |
-| `0026_recon_statements.sql` | columnas con `CHECK` e índice sobre `recon.breaks` | los controles y los breaks |
-| `0028_gl.sql` | índice sobre `ledger.transactions` y `CHECK` en `recon.control_runs` y `recon.breaks` | los postings y los controles |
-| `0031_events.sql` | dos índices sobre `infra.outbox` | todo comando que emite eventos |
-
-Aplícalas en una ventana de mantenimiento, con la API fuera de rotación: tardan lo que tarde recorrer la
-tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y migrándolo (ver
-[Restauración PITR](#restauración-pitr)).

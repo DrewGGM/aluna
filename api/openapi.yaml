@@ -547,7 +547,7 @@ paths:
         - name: kind
           in: query
           required: true
-          schema: {$ref: "#/components/schemas/MarketKind"}
+          schema: {$ref: "#/components/schemas/MarketKind", example: uvt}
         - name: modality
           in: query
           required: false
@@ -665,7 +665,7 @@ paths:
           in: path
           required: true
           description: The month, yyyy-mm.
-          schema: {type: string, pattern: "^[0-9]{4}-[0-9]{2}$"}
+          schema: {type: string, pattern: "^[0-9]{4}-[0-9]{2}$", example: "2026-10"}
       responses:
         "200":
           description: The statement
@@ -850,7 +850,7 @@ paths:
         - name: period
           in: path
           required: true
-          schema: {type: string, pattern: "^[0-9]{4}-[0-9]{2}$"}
+          schema: {type: string, pattern: "^[0-9]{4}-[0-9]{2}$", example: "2026-10"}
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "202":
@@ -1122,6 +1122,7 @@ components:
     Money:
       type: object
       required: [amount, currency]
+      example: {amount: 10000000, currency: COP}
       properties:
         amount:
           type: integer
@@ -1155,7 +1156,7 @@ components:
       properties:
         code: {type: string, minLength: 1}
         kind: {$ref: "#/components/schemas/AccountKind"}
-        currency: {type: string, pattern: "^[A-Z]{3}$"}
+        currency: {type: string, pattern: "^[A-Z]{3}$", example: COP}
         balance_mode: {$ref: "#/components/schemas/BalanceMode"}
         lower_limit:
           type: integer
@@ -1221,6 +1222,9 @@ components:
           type: array
           minItems: 2
           items: {$ref: "#/components/schemas/Entry"}
+          example:
+            - {account_id: 00000000-0000-0000-0000-000000000000, amount: {amount: 10000000, currency: COP}}
+            - {account_id: 00000000-0000-0000-0000-000000000000, amount: {amount: -10000000, currency: COP}}
     Transaction:
       type: object
       required: [id, code, value_date, business_date, posted_at, source, external_ref, entries]
@@ -1242,7 +1246,7 @@ components:
         account_id: {type: string, format: uuid, description: Account whose funds are held}
         counter_account_id: {type: string, format: uuid, description: Account that receives the captured amount}
         amount: {$ref: "#/components/schemas/Money"}
-        expires_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time, example: "2030-01-01T00:00:00Z"}
     CaptureHold:
       type: object
       required: [amount, business_date]
@@ -1287,6 +1291,7 @@ components:
     PaymentParty:
       type: object
       description: A party at its bank, by account number or by key (a Bre-B "llave"), one of the two.
+      example: {account_number: "0012345678"}
       properties:
         account_number: {type: string, minLength: 1, maxLength: 64}
         key: {type: string, minLength: 1, maxLength: 128}
@@ -1309,7 +1314,7 @@ components:
       type: object
       required: [url]
       properties:
-        url: {type: string, maxLength: 2048, description: "An https URL of the internet"}
+        url: {type: string, maxLength: 2048, description: "An https URL of the internet", example: "https://example.com/aluna/webhooks"}
     WebhookEndpoint:
       type: object
       required: [id, url, secret, created_at]
@@ -1458,6 +1463,20 @@ components:
         definition:
           description: The definition, following deposit-product.v1.json.
           x-go-type: json.RawMessage
+          example:
+            currency: COP
+            day_count: ACT/365F
+            rate_tiers: [{from_units: 0, rate_ea: "0.015"}]
+            capitalization_frequency: monthly
+            date_convention: following
+            dormancy_days: 365
+            allowed_kyc: [approved]
+            gmf_exempt_eligible: true
+            accounts:
+              cash: A.CASH.VAULT
+              interest_expense: E.INTEREST.SAVINGS
+              fee_income: I.FEES.SAVINGS
+              gmf_payable: L.TAX.GMF
     ProductVersion:
       type: object
       required: [id, product_id, version, status, definition, created_by, created_at]
@@ -1478,6 +1497,7 @@ components:
     LoadMarketParameter:
       type: object
       required: [kind, valid_from, valid_to, value]
+      example: {kind: uvt, valid_from: "2026-01-01", valid_to: "2027-01-01", value: "52374"}
       properties:
         kind: {$ref: "#/components/schemas/MarketKind"}
         modality:
@@ -1619,7 +1639,10 @@ components:
       type: object
       required: [csv]
       properties:
-        csv: {type: string, description: "The file, with its header"}
+        csv:
+          type: string
+          description: "The file, with its header"
+          example: "pattern,cuif_code,valid_from,valid_to\nA.CASH.,110505,2027-01-01,2028-01-01\n"
     ImportStatement:
       type: object
       required: [rail, statement_ref, statement_date, lines]
@@ -1701,4 +1724,4 @@ components:
       type: object
       required: [kyc_status]
       properties:
-        kyc_status: {$ref: "#/components/schemas/KYCStatus"}
+        kyc_status: {$ref: "#/components/schemas/KYCStatus", example: approved}

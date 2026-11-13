@@ -1,0 +1,1824 @@
+{
+  "info": {
+    "name": "Aluna API",
+    "description": "Core banking. Money is always {\"amount\": <integer in minor units>, \"currency\": \"<ISO 4217>\"}, never decimals. Errors are RFC 9457 (application/problem+json) with a stable `code`. Every operation declares the permission it requires in `x-aluna-permission`. Amounts are 64-bit integers: a JavaScript client must read them as BigInt, because they exceed 2^53.\n\nGenerated from api/openapi.yaml by go generate: do not edit by hand.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "accounting-periods",
+      "item": [
+        {
+          "name": "Request the close of an accounting period",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/accounting-periods/:period/closure",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "accounting-periods",
+                ":period",
+                "closure"
+              ],
+              "variable": [
+                {
+                  "key": "period",
+                  "value": "2026-10",
+                  "description": "Pattern: ^[0-9]{4}-[0-9]{2}$"
+                }
+              ]
+            },
+            "description": "Asks to close a month of the entity (FR-37, US-14) and answers 202 with an `accounting.period_close` maker-checker request. When someone else with `accounting.periods.close` approves it, the period goes closing, its trial balance must sum zero in every currency and no reconciliation break may be open, and it is closed: from then on a posting with a business date in it is 409 `period_closed`. If a check fails, the request is left `failed` with why and the period stays open. A closed period never reopens. A period that is not a month is 400; one the business date has not left is 422 `period_not_ended`; one closed already is 409 `period_closed`. Idempotent by `Idempotency-Key`.\n\nPermission: `accounting.periods.close`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "approvals",
+      "item": [
+        {
+          "name": "Maker-checker requests of the entity",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/approvals",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "approvals"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending",
+                  "description": "One of: pending, approved, rejected, failed, expired",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "The 100 most recent, from newest to oldest. With `status`, only those in that status; `expired` is a pending one that passed its 7 days.\n\nPermission: `approvals.read`"
+          }
+        },
+        {
+          "name": "Approve a request",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/approvals/:id/approval",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "approvals",
+                ":id",
+                "approval"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Runs the requested command with its original payload, in the same transaction that marks the request `approved`. The approver cannot be the requester (403 `self_approval_forbidden`) and needs the permission of the request kind. If the command fails, the request ends up `failed` and the answer is 200 with that status. Idempotent by `Idempotency-Key`.\n\nPermission: `approvals.decide`"
+          }
+        },
+        {
+          "name": "Reject a request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"reason\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/approvals/:id/rejection",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "approvals",
+                ":id",
+                "rejection"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "The command does not run. The rejecter cannot be the requester (403 `self_approval_forbidden`) and needs the permission of the request kind.\n\nPermission: `approvals.decide`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "cuif-mappings",
+      "item": [
+        {
+          "name": "Request the load of a file of CUIF mappings",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"csv\": \"pattern,cuif_code,valid_from,valid_to\\nA.CASH.,110505,2027-01-01,2028-01-01\\n\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/cuif-mappings",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "cuif-mappings"
+              ]
+            },
+            "description": "Asks to load which CUIF code the entity's internal accounts are (FR-36): a CSV file in `csv`, with the header `pattern,cuif_code,valid_from,valid_to`. A pattern is the start of an internal code, the most specific in force wins, and a period goes from `valid_from` (included) to `valid_to` (excluded). Creates an `accounting.cuif_mappings_load` maker-checker request and answers 202 with it; the file is stored when someone else with `accounting.cuif_mappings.load` approves it. An invalid file is 422 `invalid_mapping`; a mapping that overlaps another of its pattern is 409 `mapping_overlap` when requesting, and leaves the request `failed` if it overlaps when approving. A mapping is never changed: a correction is another period. Idempotent by `Idempotency-Key`.\n\nPermission: `accounting.cuif_mappings.load`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "deposit-accounts",
+      "item": [
+        {
+          "name": "Open a deposit account",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"party_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"product_id\": \"00000000-0000-0000-0000-000000000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/deposit-accounts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "deposit-accounts"
+              ]
+            },
+            "description": "Opens an account for a party of the entity with the version in force of a product of the entity (FR-19, FR-22): `active` if the party's KYC is approved, `pending` if the product allows a pending KYC (422 `kyc_not_satisfied` if it does not). A product without a published version is 409 `no_published_version`. Idempotent by `Idempotency-Key`.\n\nPermission: `deposits.accounts.open`"
+          }
+        },
+        {
+          "name": "Read a deposit account",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/deposit-accounts/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "deposit-accounts",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Its balance is that of its `ledger_account_id`.\n\nPermission: `deposits.accounts.read`"
+          }
+        },
+        {
+          "name": "Deposit cash into an account",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": {\n    \"amount\": 10000000,\n    \"currency\": \"COP\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/deposit-accounts/:id/deposits",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "deposit-accounts",
+                ":id",
+                "deposits"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Posts the amount from the product's cash account into the account, on the entity's business date (FR-23). Only an `active` account moves money (409 `account_not_active`), within the limits of its product (FR-24: 422 `limit_exceeded`, with the limit in `detail`; nothing is credited in part). Idempotent by `Idempotency-Key`; once the key expires (7 days), the same key is 409 `duplicate_external_ref` and moves nothing.\n\nPermission: `deposits.deposits.post`"
+          }
+        },
+        {
+          "name": "Exempt an account from GMF",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/deposit-accounts/:id/gmf-exemption",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "deposit-accounts",
+                ":id",
+                "gmf-exemption"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Marks the account as exempt from GMF (FR-29): its party's debits from its exempt accounts pay no GMF up to 350 UVT a month. The product must allow it and the account must be in COP and not closed (422 `gmf_not_eligible`). With the exemption on a single account, the entity's default, a party with another exempt account is 409 `gmf_exemption_taken`, as is an account already exempt.\n\nPermission: `pricing.gmf_exemptions.create`"
+          }
+        },
+        {
+          "name": "Read a deposit account's statement of a month",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/deposit-accounts/:id/statements/:period",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "deposit-accounts",
+                ":id",
+                "statements",
+                ":period"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                },
+                {
+                  "key": "period",
+                  "value": "2026-10",
+                  "description": "The month, yyyy-mm."
+                }
+              ]
+            },
+            "description": "The statement of a month (FR-45, US-16), at no cost. It is generated once the month's accounting period is closed, for every account opened before the month ended unless it was closed and did not move in it, and it never changes: nothing posts in a closed period. `document` is canonical JSON, byte for byte as stored, and `content_hash` is the SHA-256 of those bytes, in hex: generating it again gives the same hash. It has the opening and closing balances, every entry of the month by business date as a movement (a withdrawal's fees and GMF are movements of their own), and apart the interest capitalized, the fees and the GMF; amounts are in minor units, from the customer's side. An account of another entity is 404 `not_found`; a month without a statement, 404 `statement_not_found`; a period that is not a month, 400 `invalid_request`.\n\nPermission: `deposits.accounts.read`"
+          }
+        },
+        {
+          "name": "Read a deposit account's history",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/deposit-accounts/:id/transactions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "deposit-accounts",
+                ":id",
+                "transactions"
+              ],
+              "query": [
+                {
+                  "key": "cursor",
+                  "value": "cursor",
+                  "description": "The `next_cursor` of the previous page; absent for the first one.",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "1",
+                  "description": "Entries per page.",
+                  "disabled": true
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "The entries of its `ledger_account_id`, newest first by posted_at and then by the order they were posted (FR-44): a withdrawal shows its amount, its fees and its GMF as entries of one transaction. `next_cursor` reads the next page and is absent on the last one. Paging never repeats an entry nor skips one committed before the first page; one committed while paging shows up in a page not read yet or not at all. A cursor this endpoint did not issue, or a `limit` outside 1 to 200, is 400 `invalid_request`.\n\nPermission: `deposits.accounts.read`"
+          }
+        },
+        {
+          "name": "Withdraw cash from an account",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": {\n    \"amount\": 10000000,\n    \"currency\": \"COP\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/deposit-accounts/:id/withdrawals",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "deposit-accounts",
+                ":id",
+                "withdrawals"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Posts the amount from the account to the product's cash account, like a deposit (an `active` account, the business date), with its fees and its GMF in the same transaction (FR-28, FR-29): those of the quote `quote_id` names, exactly, or without one those it costs now. A quote that is not of this account, operation and amount, was used, expired or no longer has the GMF exemption it quoted is 409 `quote_unavailable`. Without funds for all of it it is 422 `insufficient_funds`, and over a limit of its product it is 422 `limit_exceeded` (with the limit in `detail`). Idempotent by `Idempotency-Key`, like a deposit.\n\nPermission: `deposits.withdrawals.post`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "events",
+      "item": [
+        {
+          "name": "List the events of the last 30 days",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/events",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "events"
+              ],
+              "query": [
+                {
+                  "key": "cursor",
+                  "value": "cursor",
+                  "description": "The `next_cursor` of the previous page; absent for the first one.",
+                  "disabled": true
+                },
+                {
+                  "key": "type",
+                  "value": "type",
+                  "description": "Only events of this type, aluna.<module>.<aggregate>.<event>.v<N>.",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "1",
+                  "description": "Events per page.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "The events of the token's entity of the last 30 days (FR-46), in the order of the transactions that emitted them, as CloudEvents 1.0 with the extensions legalentityid, correlationid and schemaversion; `type` keeps only those of one type. An event shows up once every transaction older than its own has ended, usually within moments. A page ends with `next_cursor`, also the last one: reading from it later gives what was emitted since, without repeating or skipping an event, and `has_more` says whether there is more already. A cursor older than 30 days resumes at the start of the window: the events before it are gone. A cursor that does not decode, or a `limit` outside 1 to 200, is 400 `invalid_request`. The events carry the results of screening and reconciliation, so only integrators (a role that reads nothing else), compliance and auditors read them.\n\nPermission: `webhooks.events.read`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "general-ledger",
+      "item": [
+        {
+          "name": "Read the GL of a day",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/general-ledger/daily?date=2026-01-02",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "general-ledger",
+                "daily"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-01-02",
+                  "description": "Format: date"
+                }
+              ]
+            },
+            "description": "What each CUIF code moved on a closed business date of the entity, by currency (FR-36, US-13), projected from the journal with the mapping in force that day: debits and credits apart, so the lines sum zero by currency. Only the days from the entity's first mapping have a GL. A day without a projection is 404 `gl_day_not_projected`: it is open, it had no transactions, or it comes before that mapping. A day with an account without a mapping in force is 409 `gl_day_unmapped`, which the reconciliation control `accounts_mapped_to_cuif` reports as a break.\n\nPermission: `accounting.gl.read`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "holds",
+      "item": [
+        {
+          "name": "Hold funds of an account",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"amount\": {\n    \"amount\": 10000000,\n    \"currency\": \"COP\"\n  },\n  \"counter_account_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"expires_at\": \"2030-01-01T00:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/holds",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "holds"
+              ]
+            },
+            "description": "Creates a pending hold on a sync account: the amount stops being available until it is captured, released or expires. Idempotent by `Idempotency-Key`, like `POST /v1/transactions`.\n\nPermission: `ledger.holds.place`"
+          }
+        },
+        {
+          "name": "Capture a hold, fully or partially",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": {\n    \"amount\": 10000000,\n    \"currency\": \"COP\"\n  },\n  \"business_date\": \"2026-01-02\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/holds/:id/capture",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "holds",
+                ":id",
+                "capture"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Posts the requested amount from the hold's account to its counterpart and releases the rest. A hold that is no longer pending answers 409 `hold_not_pending`; an expired one, 409 `hold_expired`; an amount larger than the held one, 422 `amount_exceeds_hold`.\n\nPermission: `ledger.holds.capture`"
+          }
+        },
+        {
+          "name": "Release a hold",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/holds/:id/release",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "holds",
+                ":id",
+                "release"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Permission: `ledger.holds.release`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ledger-accounts",
+      "item": [
+        {
+          "name": "Create a ledger account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"balance_mode\": \"sync\",\n  \"code\": \"code\",\n  \"currency\": \"COP\",\n  \"kind\": \"asset\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/ledger-accounts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "ledger-accounts"
+              ]
+            },
+            "description": "Permission: `ledger.accounts.create`"
+          }
+        },
+        {
+          "name": "Read a ledger account",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/ledger-accounts/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "ledger-accounts",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Permission: `ledger.accounts.read`"
+          }
+        },
+        {
+          "name": "Read an account balance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/ledger-accounts/:id/balance",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "ledger-accounts",
+                ":id",
+                "balance"
+              ],
+              "query": [
+                {
+                  "key": "as_of_value_date",
+                  "value": "2026-01-02",
+                  "description": "Value date cutoff (inclusive). Empty (or 0001-01-01) counts as absent.",
+                  "disabled": true
+                },
+                {
+                  "key": "as_known_at",
+                  "value": "2026-01-02T15:04:05Z",
+                  "description": "Balance as it was known at this RFC 3339 instant (posted_at up to it, inclusive; it applies in UTC and in microseconds, and is returned that way). posted_at is the insertion time and not the commit time, so the cutoff is final only for instants before the longest transaction in progress. Empty (or the zero instant) counts as absent.",
+                  "disabled": true
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Without parameters, the materialized balance, with the pending amounts of the holds. With `as_of_value_date` or `as_known_at`, the bitemporal balance (FR-8): the sum of the entries with a value date up to `as_of_value_date` and posted up to `as_known_at`, without pending amounts; a missing cutoff does not filter. On an async account the materialized balance may lag behind and the bitemporal one does not.\n\nPermission: `ledger.balances.read`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "market-parameters",
+      "item": [
+        {
+          "name": "Read the value of a market parameter on a day",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/market-parameters?kind=uvt&on=2026-01-02",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "market-parameters"
+              ],
+              "query": [
+                {
+                  "key": "kind",
+                  "value": "uvt",
+                  "description": "One of: usury_rate, uvt, smmlv, uvb, ibr"
+                },
+                {
+                  "key": "modality",
+                  "value": "modality",
+                  "description": "Credit modality of the usury rate or tenor of the IBR; absent for the others.",
+                  "disabled": true
+                },
+                {
+                  "key": "on",
+                  "value": "2026-01-02",
+                  "description": "Format: date"
+                }
+              ]
+            },
+            "description": "The value that holds on `on`. With no value for that day it is 404 `no_market_parameter`: whoever needs it does not go on without it. An unknown kind, or a modality the kind does not take (or a missing one for the usury rate and the IBR), is 422 `invalid_market_parameter`.\n\nPermission: `products.market_parameters.read`"
+          }
+        },
+        {
+          "name": "Request the load of a market parameter",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"uvt\",\n  \"valid_from\": \"2026-01-01\",\n  \"valid_to\": \"2027-01-01\",\n  \"value\": \"52374\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/market-parameters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "market-parameters"
+              ]
+            },
+            "description": "Asks to load the value of a market parameter (FR-21) for a period, from `valid_from` (included) to `valid_to` (excluded): the usury rate by credit modality and the IBR by tenor (fractions up to 1), and the UVT, the SMMLV and the UVB in pesos (without modality). The parameters are the tenant's, not a legal entity's. Creates a `products.market_parameter_load` maker-checker request and answers 202 with it; the value is stored when someone else with `products.market_parameters.load` approves it. An invalid value is 422 `invalid_market_parameter`; a period that overlaps another value of the same kind and modality is 409 `market_parameter_overlap` when requesting, and leaves the request `failed` if it overlaps when approving. A value is never changed: a correction is another period. Idempotent by `Idempotency-Key`.\n\nPermission: `products.market_parameters.load`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "parties",
+      "item": [
+        {
+          "name": "Register a party",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_ref\": \"external_ref\",\n  \"kind\": \"natural\",\n  \"pep\": false,\n  \"risk_level\": \"low\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/parties",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "parties"
+              ]
+            },
+            "description": "Registers the reference data of a natural or legal person (FR-16) with its first version, after screening it against the sanction lists (FR-42): in KYC `pending` if screening cleared it, and in `pending_screening` if it may match or the vendor did not answer, until compliance resolves its case at `POST /v1/screening-cases/{id}/resolution`. After that, the KYC status only changes through maker-checker. The core keeps no names or documents: `external_ref` points to the onboarding system and is unique within the entity (409 `party_already_registered`).\n\nPermission: `party.parties.create`"
+          }
+        },
+        {
+          "name": "Read a party",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/parties/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "parties",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "The party with its current version.\n\nPermission: `party.parties.read`"
+          }
+        },
+        {
+          "name": "Request a KYC status change",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kyc_status\": \"approved\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/parties/:id/kyc-status-changes",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "parties",
+                ":id",
+                "kyc-status-changes"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Creates a `party.kyc_status_change` maker-checker request and answers 202 with it. The new version of the party, with the new KYC status, is recorded when someone else with `party.kyc.change` approves it at `POST /v1/approvals/{id}/approval`. Valid changes: pending to approved or rejected, approved to suspended and suspended to approved; any other is 422 `invalid_kyc_transition` when requesting. If the party changed after the request (another version, even with the same status), approving it leaves the request `failed`. Idempotent by `Idempotency-Key`.\n\nPermission: `party.kyc.change`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "payment-orders",
+      "item": [
+        {
+          "name": "Initiate an outgoing payment",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"amount\": {\n    \"amount\": 10000000,\n    \"currency\": \"COP\"\n  },\n  \"creditor\": {\n    \"account_number\": \"0012345678\"\n  },\n  \"rail\": \"simbreb\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/payment-orders",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "payment-orders"
+              ]
+            },
+            "description": "Initiates a payment from a deposit account of the entity to a beneficiary at another bank, by account number or by key, through a rail (FR-31), and answers 202 with the order. Its beneficiary is screened first (FR-42): if screening does not clear it (a possible match, or no answer), the order is `pending_screening` and nothing is held or charged until compliance resolves its case. If it does, the amount and its charges (the fees and the GMF of a transfer, those of `quote_id` if it names one) are held on the account and the order is `held`, to be sent. Without funds for all of it it is 422 `insufficient_funds` and nothing is stored; an account that is not active is 409 `account_not_active`. The rail's clearing account (`L.CLEARING.SIMBREB`, in the account's currency) must exist in the entity's ledger. Idempotent by `Idempotency-Key`; a retry with the same key after the key store forgot it is 409 `duplicate_payment`, not a second payment.\n\nPermission: `payments.orders.create`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "product-versions",
+      "item": [
+        {
+          "name": "Read a product version",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/product-versions/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "product-versions",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "The version with its definition and status.\n\nPermission: `products.versions.read`"
+          }
+        },
+        {
+          "name": "Request the publication of a product version",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/product-versions/:id/publication",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "product-versions",
+                ":id",
+                "publication"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Marks the version `pending` (from then on its definition cannot change) and creates a `products.publish` maker-checker request; answers 202 with it. Only the author of the version asks for it (403 `not_version_author`), so whoever approves it did not write its conditions. When someone else with `products.versions.publish` approves it at `POST /v1/approvals/{id}/approval`, the version is `published`, the one in force is `retired` and `aluna.products.version.published.v1` is emitted. A published or retired version is 409 `version_not_publishable`; if, when approving, the version is no longer pending or a later one is in force, the request is left `failed`. Idempotent by `Idempotency-Key`.\n\nPermission: `products.versions.publish`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "products",
+      "item": [
+        {
+          "name": "Create a product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"code\",\n  \"name\": \"name\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/products",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "products"
+              ]
+            },
+            "description": "Creates a product of the entity: a family of versions known by its `code`, which is unique within the entity (409 `product_already_exists`). Its conditions go in its versions.\n\nPermission: `products.products.create`"
+          }
+        },
+        {
+          "name": "Create a product version",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"definition\": {\n    \"accounts\": {\n      \"cash\": \"A.CASH.VAULT\",\n      \"fee_income\": \"I.FEES.SAVINGS\",\n      \"gmf_payable\": \"L.TAX.GMF\",\n      \"interest_expense\": \"E.INTEREST.SAVINGS\"\n    },\n    \"allowed_kyc\": [\n      \"approved\"\n    ],\n    \"capitalization_frequency\": \"monthly\",\n    \"currency\": \"COP\",\n    \"date_convention\": \"following\",\n    \"day_count\": \"ACT/365F\",\n    \"dormancy_days\": 365,\n    \"gmf_exempt_eligible\": true,\n    \"rate_tiers\": [\n      {\n        \"from_units\": 0,\n        \"rate_ea\": \"0.015\"\n      }\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/products/:id/versions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "products",
+                ":id",
+                "versions"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Stores the next version of the product as a `draft`. Its `definition` follows internal/products/schema/deposit-product.v1.json (422 `invalid_product_definition` if it does not). Idempotent by `Idempotency-Key`.\n\nPermission: `products.versions.create`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "quotes",
+      "item": [
+        {
+          "name": "Quote what an operation costs",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"amount\": {\n    \"amount\": 10000000,\n    \"currency\": \"COP\"\n  },\n  \"operation\": \"withdrawal\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/quotes",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "quotes"
+              ]
+            },
+            "description": "Quotes a withdrawal or a transfer from a deposit account of the entity before it is done (FR-28, US-7): the fees of its product for the operation, with their exemptions decided on the account (its party, its balance and the quotes it used this month), and its GMF (FR-29): 4 per thousand of what the exemption of an exempt account does not cover. Valid for 5 minutes. An amount that is not positive or not in the account's currency is 422 `invalid_quote`.\n\nPermission: `pricing.quotes.create`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reconciliation",
+      "item": [
+        {
+          "name": "List the breaks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/reconciliation/breaks",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "reconciliation",
+                "breaks"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "open",
+                  "description": "One of: open, resolved",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "cursor",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "1",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "The entity's breaks, newest first, those of `status` if it says one: the differences the continuous controls (FR-33) and the statements (FR-34) found, with their owner and where they stand.\n\nPermission: `reconciliation.breaks.read`"
+          }
+        },
+        {
+          "name": "Resolve a break",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cause\": \"cause\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/reconciliation/breaks/:id/resolution",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "reconciliation",
+                "breaks",
+                ":id",
+                "resolution"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Closes an open break with its cause, mandatory, and who resolved it (FR-34). A difference that is still there opens another on the next run of its control. One already resolved is 409 `break_already_resolved`. Idempotent by `Idempotency-Key`.\n\nPermission: `reconciliation.breaks.resolve`"
+          }
+        },
+        {
+          "name": "Import a rail's statement",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lines\": [\n    {\n      \"amount\": {\n        \"amount\": 10000000,\n        \"currency\": \"COP\"\n      },\n      \"booking_date\": \"2026-01-02\",\n      \"direction\": \"incoming\",\n      \"end_to_end_id\": \"end_to_end_id\"\n    }\n  ],\n  \"rail\": \"simbreb\",\n  \"statement_date\": \"2026-01-02\",\n  \"statement_ref\": \"statement_ref\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/reconciliation/statements",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "reconciliation",
+                "statements"
+              ]
+            },
+            "description": "Takes what a rail reports of one day, camt.053 simplified (FR-34), once per reference, and pairs each line with its payment order by `end_to_end_id`, direction and amount. An exception opens a break owned by who imported the statement: a line in another amount, a line without an order, a line of an order the core did not settle and an order of the day the rail does not report. The answer counts the lines, the matched and the exceptions. A statement already imported is 409 `duplicate_statement`, and every line must be booked on the statement's date. Idempotent by `Idempotency-Key`.\n\nPermission: `reconciliation.statements.import`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "screening-cases",
+      "item": [
+        {
+          "name": "Request the resolution of a screening case",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resolution\": \"cleared\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/screening-cases/:id/resolution",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "screening-cases",
+                ":id",
+                "resolution"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Creates a `compliance.screening_resolution` maker-checker request and answers 202 with it (FR-42). The case is resolved when someone else with `compliance.screening.resolve` approves it at `POST /v1/approvals/{id}/approval`: `cleared` (not a match) leaves a party in KYC `pending`, and `confirmed` leaves it `rejected`. The case id comes in the `aluna.compliance.screening.pending.v1` event. A case that is no longer pending is 409 `case_already_resolved` when requesting; when approving, it leaves the request `failed`, as does a party that is no longer `pending_screening`. Idempotent by `Idempotency-Key`.\n\nPermission: `compliance.screening.resolve`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "transactions",
+      "item": [
+        {
+          "name": "Post a balanced transaction",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"business_date\": \"2026-01-02\",\n  \"code\": \"code\",\n  \"entries\": [\n    {\n      \"account_id\": \"00000000-0000-0000-0000-000000000000\",\n      \"amount\": {\n        \"amount\": 10000000,\n        \"currency\": \"COP\"\n      }\n    },\n    {\n      \"account_id\": \"00000000-0000-0000-0000-000000000000\",\n      \"amount\": {\n        \"amount\": -10000000,\n        \"currency\": \"COP\"\n      }\n    }\n  ],\n  \"external_ref\": \"external_ref\",\n  \"source\": \"source\",\n  \"value_date\": \"2026-01-02\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transactions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "transactions"
+              ]
+            },
+            "description": "Idempotent by `Idempotency-Key` (7 days): the same payload with the same key receives the original response (also a business 4xx) without posting again; another payload is 422 `idempotency_key_reused` and a request that has not finished, 409 `request_in_progress`. A 5xx is not stored: it can be retried with the same key.\n\nPermission: `ledger.transactions.post`"
+          }
+        },
+        {
+          "name": "Read a transaction",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/transactions/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "transactions",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Permission: `ledger.transactions.read`"
+          }
+        },
+        {
+          "name": "Request the reversal of a transaction",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"reason\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transactions/:id/reversal",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "transactions",
+                ":id",
+                "reversal"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Creates a maker-checker `ledger.reversal` request and answers 202 with it. The reversal is posted (its entries with the opposite sign) when another person with `ledger.transactions.reverse` approves it in `POST /v1/approvals/{id}/approval`; if the ledger rejects it then (already reversed, period closed, insufficient funds), the request ends up `failed`. The reversal of a reversal is rejected when requested (409 `reversal_of_reversal`). Idempotent by `Idempotency-Key`.\n\nPermission: `ledger.transactions.reverse`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "transfers",
+      "item": [
+        {
+          "name": "Transfer between two deposit accounts",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": {\n    \"amount\": 10000000,\n    \"currency\": \"COP\"\n  },\n  \"from_account_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"to_account_id\": \"00000000-0000-0000-0000-000000000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/transfers",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "transfers"
+              ]
+            },
+            "description": "Moves the amount between two `active` deposit accounts of the entity (FR-23, US-5), on its business date: 409 `account_not_active` if either is not, 422 `insufficient_funds` without funds, 422 `limit_exceeded` over a limit of the origin (a debit) or of the destination (a credit), and 422 `invalid_movement` to the same account. The origin pays the fees and the GMF of the transfer, as a withdrawal does, with `quote_id` or without it (409 `quote_unavailable`). Idempotent by `Idempotency-Key`, like a deposit.\n\nPermission: `deposits.transfers.post`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "webhook-endpoints",
+      "item": [
+        {
+          "name": "Register a webhook endpoint",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/aluna/webhooks\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/webhook-endpoints",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "webhook-endpoints"
+              ]
+            },
+            "description": "Registers an https endpoint for the events of the token's entity (FR-46, US-15) and answers with its secret, which no other response shows: keep it. From the transactions from this one on, each event is POSTed to it as a CloudEvent, signed as Standard Webhooks says (`webhook-id`, the same in every retry; `webhook-timestamp`, unix seconds; `webhook-signature`, `v1,` and the base64 HMAC-SHA256 with the secret's key of `id.timestamp.body`), in the Events API's order, until it answers 2xx: it is retried 8 times with an exponential backoff over 72 hours and then given up. Redirects are not followed. A URL that is not https, carries credentials, or whose host is or resolves to an address that is not public (private, loopback, link-local such as the cloud metadata service, shared, multicast) is 422 `invalid_endpoint`: Aluna does not send requests into its own network.\n\nPermission: `webhooks.endpoints.create`"
+          }
+        }
+      ]
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const expiresAt = Number(pm.environment.get(\"access_token_expires_at\") || 0);",
+          "if (!pm.environment.get(\"access_token\") || Date.now() >= expiresAt) {",
+          "  pm.sendRequest({",
+          "    url: pm.environment.get(\"oidc_issuer\") + \"/protocol/openid-connect/token\",",
+          "    method: \"POST\",",
+          "    header: { \"Content-Type\": \"application/x-www-form-urlencoded\" },",
+          "    body: {",
+          "      mode: \"urlencoded\",",
+          "      urlencoded: [",
+          "        { key: \"grant_type\", value: \"password\" },",
+          "        { key: \"client_id\", value: pm.environment.get(\"client_id\") },",
+          "        { key: \"username\", value: pm.environment.get(\"username\") },",
+          "        { key: \"password\", value: pm.environment.get(\"password\") }",
+          "      ]",
+          "    }",
+          "  }, (err, res) => {",
+          "    if (err || res.code !== 200) {",
+          "      console.error(\"token request failed\", err || res.text());",
+          "      return;",
+          "    }",
+          "    const token = res.json();",
+          "    pm.environment.set(\"access_token\", token.access_token);",
+          "    pm.environment.set(\"access_token_expires_at\", String(Date.now() + (token.expires_in - 30) * 1000));",
+          "  });",
+          "}"
+        ]
+      }
+    }
+  ]
+}

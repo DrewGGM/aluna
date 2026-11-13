@@ -129,6 +129,11 @@ func (r storedResponse) VisitCreatePaymentOrderResponse(w http.ResponseWriter) e
 	return r.write(w)
 }
 
+// VisitRegisterWebhookEndpointResponse writes the response of POST /v1/webhook-endpoints.
+func (r storedResponse) VisitRegisterWebhookEndpointResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitRequestPeriodCloseResponse writes the response of POST /v1/accounting-periods/{period}/closure.
 func (r storedResponse) VisitRequestPeriodCloseResponse(w http.ResponseWriter) error {
 	return r.write(w)

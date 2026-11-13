@@ -105,7 +105,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 		PaymentHandlers:        NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: NewReconciliationHandlers(reconciliation.New(events), uow, keys, testPool),
 		AccountingHandlers:     NewAccountingHandlers(accounting.New(), reconciliation.New(events), requests, uow, keys, testPool),
-		WebhookHandlers:        NewWebhookHandlers(webhooks.New(), testPool),
+		WebhookHandlers:        NewWebhookHandlers(webhooks.New(), uow, testPool),
 	}
 	cfg := ServerConfig{
 		Audit:      &CommandAudit{Records: audit.New(), UoW: uow},

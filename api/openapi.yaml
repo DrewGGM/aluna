@@ -1017,6 +1017,35 @@ paths:
               schema: {$ref: "#/components/schemas/EventPage"}
         "400": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/webhook-endpoints:
+    post:
+      operationId: registerWebhookEndpoint
+      summary: Register a webhook endpoint
+      description: >-
+        Registers an https endpoint for the events of the token's entity (FR-46, US-15) and answers with its secret,
+        which no other response shows: keep it. From the transactions from this one on, each event is POSTed to it
+        as a CloudEvent, signed as Standard Webhooks says (`webhook-id`, the same in every retry; `webhook-timestamp`,
+        unix seconds; `webhook-signature`, `v1,` and the base64 HMAC-SHA256 with the secret's key of
+        `id.timestamp.body`), in the Events API's order, until it answers 2xx: it is retried 8 times with an
+        exponential backoff over 72 hours and then given up. Redirects are not followed. A URL that is not https,
+        carries credentials, or whose host is or resolves to an address that is not public (private, loopback,
+        link-local such as the cloud metadata service, shared, multicast) is 422 `invalid_endpoint`: Aluna does not
+        send requests into its own network.
+      x-aluna-permission: webhooks.endpoints.create
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RegisterWebhookEndpoint"}
+      responses:
+        "201":
+          description: Endpoint registered
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WebhookEndpoint"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/transfers:
     post:
       operationId: createTransfer
@@ -1276,6 +1305,19 @@ components:
         instr_id: {type: string, description: ISO 20022 InstrId}
         tx_id: {type: string, description: ISO 20022 TxId}
         held: {$ref: "#/components/schemas/Money", description: "What is held on the account: the amount, its fees and its GMF"}
+    RegisterWebhookEndpoint:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, maxLength: 2048, description: "An https URL of the internet"}
+    WebhookEndpoint:
+      type: object
+      required: [id, url, secret, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        url: {type: string}
+        secret: {type: string, description: "whsec_ and the key in base64: shown only here"}
+        created_at: {type: string, format: date-time}
     CloudEvent:
       description: >-
         A CloudEvent 1.0 (architecture §8): specversion, id (UUIDv7), source (aluna/<module>), type, subject, time,

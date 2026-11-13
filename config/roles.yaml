@@ -107,7 +107,9 @@ system:
     - ledger.holds.capture
     - ledger.holds.release
 
-# Integrators: read the entity's events (FR-46) and nothing else, so a token to follow them cannot move money.
+# Integrators: follow the entity's events (FR-46), by reading them or registering webhooks, and nothing else, so a
+# token to follow them cannot move money.
 integrator:
   all:
     - webhooks.events.read
+    - webhooks.endpoints.create

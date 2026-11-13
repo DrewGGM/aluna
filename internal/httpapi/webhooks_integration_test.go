@@ -5,12 +5,16 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
 
 // emitEvent emits an event of type typ for entity.
@@ -84,5 +88,41 @@ func TestAnOperatorDoesNotReadTheEvents(t *testing.T) {
 	var problem Problem
 	if status := call(t, apiServer(t, ids.New()), http.MethodGet, "/v1/events", "", &problem); status != http.StatusForbidden {
 		t.Fatalf("an operator reading the events = %d", status)
+	}
+}
+
+// TestAWebhookEndpointIsRegisteredOverHTTP (FR-46): an integrator registers a public https URL and gets its secret; a
+// private one is 422 invalid_endpoint, and an operator cannot register one.
+func TestAWebhookEndpointIsRegisteredOverHTTP(t *testing.T) {
+	entity := ids.New()
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
+			VALUES ($1, 'Entity', '2026-03-02', 'COP')`, entity)
+		return err
+	})
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := apiServerAsRole(t, entity, events, "integrator-a", "integrator")
+
+	var registered struct {
+		ID     string `json:"id"`
+		URL    string `json:"url"`
+		Secret string `json:"secret"`
+	}
+	if status := call(t, ts, http.MethodPost, "/v1/webhook-endpoints", `{"url":"https://93.184.216.34/hooks"}`, &registered); status != http.StatusCreated {
+		t.Fatalf("register = %d", status)
+	}
+	if registered.ID == "" || registered.URL != "https://93.184.216.34/hooks" || !strings.HasPrefix(registered.Secret, "whsec_") {
+		t.Fatalf("registered %+v", registered)
+	}
+	var problem Problem
+	if status := call(t, ts, http.MethodPost, "/v1/webhook-endpoints", `{"url":"https://169.254.169.254/latest/meta-data/"}`, &problem); status != http.StatusUnprocessableEntity ||
+		problem.Code != "invalid_endpoint" {
+		t.Fatalf("the metadata service = %d %+v", status, problem)
+	}
+	if status := call(t, apiServer(t, entity), http.MethodPost, "/v1/webhook-endpoints", `{"url":"https://93.184.216.34/hooks"}`, &problem); status != http.StatusForbidden {
+		t.Fatalf("an operator registering = %d", status)
 	}
 }

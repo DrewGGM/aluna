@@ -371,7 +371,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 		PaymentHandlers:        httpapi.NewPaymentHandlers(paymentSvc, uow, keys),
 		ReconciliationHandlers: httpapi.NewReconciliationHandlers(reconciliation.New(events), uow, keys, pool),
 		AccountingHandlers:     httpapi.NewAccountingHandlers(accounting.New(), reconciliation.New(events), requests, uow, keys, pool),
-		WebhookHandlers:        httpapi.NewWebhookHandlers(webhooks.New(), pool),
+		WebhookHandlers:        httpapi.NewWebhookHandlers(webhooks.New(), uow, pool),
 	}, nil
 }
 
@@ -513,7 +513,7 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality,
 	cfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
 		Audit: records, Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
-		Accounting: accounting.New(),
+		Accounting: accounting.New(), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
 	})
 	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
 	client, err := river.NewClient(riverpgxv5.New(pool), cfg)

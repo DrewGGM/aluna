@@ -22,6 +22,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/reconciliation"
+	"github.com/DrewGGM/aluna/internal/webhooks"
 )
 
 // QueueLedger is the queue for the jobs that write to the ledger and QueueInterest the one of the accrual,
@@ -36,6 +37,7 @@ const (
 	QueueInterest = "interest"
 	QueueControls = "controls"
 	QueueGL       = "gl"
+	QueueWebhooks = "webhooks"
 )
 
 // The two ledger jobs keep taking batches until they catch up; the size bounds each transaction.
@@ -90,6 +92,15 @@ const (
 	statementsTimeout  = 30 * time.Minute
 )
 
+// Webhooks (FR-46) are queued and attempted every few seconds, so an integrator hears of an event soon after it
+// commits. An attempt can wait 15 seconds for its endpoint, so a run of a full batch of slow endpoints outlasts River's
+// default minute; they go on their own queue, one run at a time, so they hold none of the default queue's workers.
+const (
+	webhooksInterval = 10 * time.Second
+	webhooksBatch    = 50
+	webhooksTimeout  = 15 * time.Minute
+)
+
 // Sealing (ADR-0012) closes blocks of at most auditBlockSize records, sealRounds per run so it finishes
 // before the job's time limit; whatever is left goes to the next run.
 const (
@@ -113,6 +124,9 @@ type Deps struct {
 	Payments       *payments.Service
 	Reconciliation *reconciliation.Service
 	Accounting     *accounting.Service
+	Webhooks       *webhooks.Service
+	// WebhookSender is the client webhooks are sent with (webhooks.NewSender).
+	WebhookSender webhooks.Sender
 }
 
 // Config is the worker's River configuration: the queues, the workers from Register, the periodic jobs
@@ -124,7 +138,7 @@ func Config(deps Deps) *river.Config {
 		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: Periodic(),
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1}, QueueControls: {MaxWorkers: 1},
-			QueueGL: {MaxWorkers: 1}, payments.Queue: {MaxWorkers: 4},
+			QueueGL: {MaxWorkers: 1}, QueueWebhooks: {MaxWorkers: 1}, payments.Queue: {MaxWorkers: 4},
 		},
 		// REINDEX requires owning the index and the worker runs as aluna_app (migration 0009).
 		ReindexerIndexNames: []string{},
@@ -173,6 +187,7 @@ func Register(w *river.Workers, deps Deps) {
 	river.AddWorker(w, &task[projectGL]{timeout: glTimeout, run: func(ctx context.Context) error {
 		return deps.Accounting.ProjectGL(ctx, deps.UnitOfWork)
 	}})
+	river.AddWorker(w, deliveringWebhooks(deps))
 	river.AddWorker(w, &task[generateStatements]{timeout: statementsTimeout, run: func(ctx context.Context) error {
 		_, err := deps.Deposits.GenerateStatements(ctx, deps.UnitOfWork, statementsBatch)
 		return err
@@ -180,6 +195,13 @@ func Register(w *river.Workers, deps Deps) {
 	compliance.FollowCash(deps.Outbox, holderOf(deps.Deposits))
 	deps.Outbox.AddWorkers(w)
 	deps.Payments.AddWorkers(w, deps.UnitOfWork)
+}
+
+// deliveringWebhooks is the worker of deliverWebhooks.
+func deliveringWebhooks(deps Deps) *task[deliverWebhooks] {
+	return &task[deliverWebhooks]{timeout: webhooksTimeout, run: func(ctx context.Context) error {
+		return deps.Webhooks.Deliver(ctx, deps.UnitOfWork, deps.WebhookSender, time.Now, webhooksBatch)
+	}}
 }
 
 // holderOf answers compliance who holds a ledger account from deposits, where the customers' accounts are.
@@ -211,6 +233,7 @@ func Periodic() []*river.PeriodicJob {
 		every(controlsInterval, runControls{}),
 		every(glInterval, projectGL{}),
 		every(statementsInterval, generateStatements{}),
+		every(webhooksInterval, deliverWebhooks{}),
 	}
 }
 
@@ -296,6 +319,14 @@ type generateStatements struct{}
 func (generateStatements) Kind() string { return "deposits.statements.generate" }
 
 func (generateStatements) InsertOpts() river.InsertOpts { return oneAtATime(river.QueueDefault) }
+
+// deliverWebhooks queues the new events for each webhook endpoint and attempts the due deliveries (FR-46). A run is
+// not inserted while another is waiting or running.
+type deliverWebhooks struct{}
+
+func (deliverWebhooks) Kind() string { return "webhooks.deliver" }
+
+func (deliverWebhooks) InsertOpts() river.InsertOpts { return oneAtATime(QueueWebhooks) }
 
 // oneAtATime puts a job in queue, like insertOpts, and inserts it only if no other of its kind waits or runs.
 func oneAtATime(queue string) river.InsertOpts {

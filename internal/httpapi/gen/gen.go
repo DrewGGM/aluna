@@ -942,6 +942,12 @@ type RegisterParty struct {
 	RiskLevel RiskLevel `json:"risk_level"`
 }
 
+// RegisterWebhookEndpoint defines model for RegisterWebhookEndpoint.
+type RegisterWebhookEndpoint struct {
+	// Url An https URL of the internet
+	Url string `json:"url"`
+}
+
 // RejectApproval defines model for RejectApproval.
 type RejectApproval struct {
 	Reason string `json:"reason"`
@@ -1021,6 +1027,16 @@ type Transaction struct {
 	PostedAt     time.Time          `json:"posted_at"`
 	Source       string             `json:"source"`
 	ValueDate    openapi_types.Date `json:"value_date"`
+}
+
+// WebhookEndpoint defines model for WebhookEndpoint.
+type WebhookEndpoint struct {
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// Secret whsec_ and the key in base64: shown only here
+	Secret string `json:"secret"`
+	Url    string `json:"url"`
 }
 
 // ID defines model for ID.
@@ -1251,6 +1267,9 @@ type RequestReversalJSONRequestBody = RequestReversal
 // CreateTransferJSONRequestBody defines body for CreateTransfer for application/json ContentType.
 type CreateTransferJSONRequestBody = CreateTransfer
 
+// RegisterWebhookEndpointJSONRequestBody defines body for RegisterWebhookEndpoint for application/json ContentType.
+type RegisterWebhookEndpointJSONRequestBody = RegisterWebhookEndpoint
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// RequestPeriodClose Request the close of an accounting period
@@ -1370,6 +1389,9 @@ type ServerInterface interface {
 	// CreateTransfer Transfer between two deposit accounts
 	// (POST /v1/transfers)
 	CreateTransfer(w http.ResponseWriter, r *http.Request, params CreateTransferParams)
+	// RegisterWebhookEndpoint Register a webhook endpoint
+	// (POST /v1/webhook-endpoints)
+	RegisterWebhookEndpoint(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -3015,6 +3037,20 @@ func (siw *ServerInterfaceWrapper) CreateTransfer(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// RegisterWebhookEndpoint operation middleware
+func (siw *ServerInterfaceWrapper) RegisterWebhookEndpoint(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegisterWebhookEndpoint(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -3172,6 +3208,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/reconciliation/breaks", wrapper.ListBreaks)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/breaks/{id}/resolution", wrapper.ResolveBreak)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/events", wrapper.ListEvents)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/webhook-endpoints", wrapper.RegisterWebhookEndpoint)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transfers", wrapper.CreateTransfer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/gmf-exemption", wrapper.CreateGMFExemption)
 
@@ -6617,6 +6654,75 @@ func (response CreateTransferdefaultApplicationProblemPlusJSONResponse) VisitCre
 	return err
 }
 
+type RegisterWebhookEndpointRequestObject struct {
+	Body *RegisterWebhookEndpointJSONRequestBody
+}
+
+type RegisterWebhookEndpointResponseObject interface {
+	VisitRegisterWebhookEndpointResponse(w http.ResponseWriter) error
+}
+
+type RegisterWebhookEndpoint201JSONResponse WebhookEndpoint
+
+func (response RegisterWebhookEndpoint201JSONResponse) VisitRegisterWebhookEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterWebhookEndpoint400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RegisterWebhookEndpoint400ApplicationProblemPlusJSONResponse) VisitRegisterWebhookEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterWebhookEndpoint422ApplicationProblemPlusJSONResponse Problem
+
+func (response RegisterWebhookEndpoint422ApplicationProblemPlusJSONResponse) VisitRegisterWebhookEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterWebhookEndpointdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RegisterWebhookEndpointdefaultApplicationProblemPlusJSONResponse) VisitRegisterWebhookEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// RequestPeriodClose Request the close of an accounting period
@@ -6736,6 +6842,9 @@ type StrictServerInterface interface {
 	// CreateTransfer Transfer between two deposit accounts
 	// (POST /v1/transfers)
 	CreateTransfer(ctx context.Context, request CreateTransferRequestObject) (CreateTransferResponseObject, error)
+	// RegisterWebhookEndpoint Register a webhook endpoint
+	// (POST /v1/webhook-endpoints)
+	RegisterWebhookEndpoint(ctx context.Context, request RegisterWebhookEndpointRequestObject) (RegisterWebhookEndpointResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -7938,6 +8047,37 @@ func (sh *strictHandler) CreateTransfer(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateTransferResponseObject); ok {
 		if err := validResponse.VisitCreateTransferResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RegisterWebhookEndpoint operation middleware
+func (sh *strictHandler) RegisterWebhookEndpoint(w http.ResponseWriter, r *http.Request) {
+	var request RegisterWebhookEndpointRequestObject
+
+	var body RegisterWebhookEndpointJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RegisterWebhookEndpoint(ctx, request.(RegisterWebhookEndpointRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RegisterWebhookEndpoint")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RegisterWebhookEndpointResponseObject); ok {
+		if err := validResponse.VisitRegisterWebhookEndpointResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

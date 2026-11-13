@@ -34,6 +34,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/pricing"
 	"github.com/DrewGGM/aluna/internal/products"
 	"github.com/DrewGGM/aluna/internal/reconciliation"
+	"github.com/DrewGGM/aluna/internal/webhooks"
 )
 
 var testPool *pgxpool.Pool
@@ -72,7 +73,7 @@ func newDeps(t *testing.T) jobs.Deps {
 		Audit:      records,
 		UnitOfWork: postgres.NewUnitOfWork(testPool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(testPool), Outbox: events,
 		Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
-		Accounting: accounting.New(),
+		Accounting: accounting.New(), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
 	}
 }
 

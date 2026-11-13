@@ -25,9 +25,6 @@ import (
 // the actor.
 const transferChannel = "api"
 
-// defaultPageSize is the page of history of a request without limit.
-const defaultPageSize = 50
-
 var openDepositAccount = operation{method: http.MethodPost, path: "/v1/deposit-accounts", success: http.StatusCreated}
 
 // DepositHandlers implements the contract's deposit account operations (api/openapi.yaml).
@@ -87,13 +84,7 @@ func (h *DepositHandlers) ListDepositAccountTransactions(ctx context.Context, re
 	if err != nil {
 		return nil, err
 	}
-	cursor, limit := "", defaultPageSize
-	if req.Params.Cursor != nil {
-		cursor = *req.Params.Cursor
-	}
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
+	cursor, limit := pageOf(req.Params.Cursor, req.Params.Limit)
 	page, err := h.ledger.History(ctx, h.reader, p.LegalEntityID, a.LedgerAccountID, cursor, limit)
 	if err != nil {
 		return nil, err

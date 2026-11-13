@@ -2,8 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -99,24 +97,16 @@ func (h *AccountingHandlers) RequestCuifMappingsLoad(ctx context.Context, req ge
 // loadCuifMappingsOnApproval is the Executor of cuifLoadKind: it stores the file in the approver's entity. One that
 // overlaps what was stored meanwhile leaves the request failed.
 func loadCuifMappingsOnApproval(s *accounting.Service) approvals.Executor {
-	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
-		var r cuifLoadRequest
-		if err := json.Unmarshal(payload, &r); err != nil {
-			return nil, fmt.Errorf("CUIF mappings load payload: %w", err)
-		}
+	return onApproval("CUIF mappings load", func(ctx context.Context, tx postgres.Tx, r cuifLoadRequest, checker access.Principal) (cuifLoadResult, error) {
 		mappings, err := accounting.ParseMappings(strings.NewReader(r.CSV))
 		if err != nil {
-			return nil, asCommandRejection(err)
+			return cuifLoadResult{}, err
 		}
 		if err := s.LoadMappings(ctx, tx, checker.LegalEntityID, mappings); err != nil {
-			return nil, asCommandRejection(err)
+			return cuifLoadResult{}, err
 		}
-		result, err := json.Marshal(cuifLoadResult{Mappings: len(mappings)})
-		if err != nil {
-			return nil, fmt.Errorf("CUIF mappings load result: %w", err)
-		}
-		return result, nil
-	}
+		return cuifLoadResult{Mappings: len(mappings)}, nil
+	})
 }
 
 // cuifLoadResult is what an approved load returns: how many mappings it stored. The file stays in the payload.
@@ -167,22 +157,14 @@ func (h *AccountingHandlers) RequestPeriodClose(ctx context.Context, req gen.Req
 // approver, if recon has no break of the entity open. A period that does not square, or open breaks, leave the request
 // failed with why, and the period open.
 func closePeriodOnApproval(s *accounting.Service, recon *reconciliation.Service) approvals.Executor {
-	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
-		var r periodCloseRequest
-		if err := json.Unmarshal(payload, &r); err != nil {
-			return nil, fmt.Errorf("period close payload: %w", err)
-		}
+	return onApproval("period close", func(ctx context.Context, tx postgres.Tx, r periodCloseRequest, checker access.Principal) (periodCloseResult, error) {
 		anyOpenBreak := func(ctx context.Context) (bool, error) {
 			open, err := recon.Breaks(ctx, tx, checker.LegalEntityID, reconciliation.BreakOpen, "", 1)
 			return len(open.Breaks) > 0, err
 		}
 		if err := s.ClosePeriod(ctx, tx, checker.LegalEntityID, r.Period, checker.Subject, anyOpenBreak); err != nil {
-			return nil, asCommandRejection(err)
+			return periodCloseResult{}, err
 		}
-		result, err := json.Marshal(periodCloseResult{Period: r.Period, Status: "closed"})
-		if err != nil {
-			return nil, fmt.Errorf("period close result: %w", err)
-		}
-		return result, nil
-	}
+		return periodCloseResult{Period: r.Period, Status: "closed"}, nil
+	})
 }

@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -90,19 +89,11 @@ func (h *ComplianceHandlers) ResolveScreeningCase(ctx context.Context, req gen.R
 // entity, with the approver as who resolved it. A case no longer pending, or a subject that cannot take the
 // resolution, leaves the request failed.
 func resolveOnApproval(c *compliance.Service) approvals.Executor {
-	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
-		var r resolutionRequest
-		if err := json.Unmarshal(payload, &r); err != nil {
-			return nil, fmt.Errorf("screening resolution payload: %w", err)
-		}
+	return onApproval("screening resolution", func(ctx context.Context, tx postgres.Tx, r resolutionRequest, checker access.Principal) (resolutionResult, error) {
 		resolved, err := c.Resolve(ctx, tx, checker.LegalEntityID, r.CaseID, r.Resolution, checker.Subject)
 		if err != nil {
-			return nil, asCommandRejection(err)
+			return resolutionResult{}, err
 		}
-		result, err := json.Marshal(resolutionResult{CaseID: resolved.ID, Status: resolved.Status})
-		if err != nil {
-			return nil, fmt.Errorf("screening resolution result: %w", err)
-		}
-		return result, nil
-	}
+		return resolutionResult{CaseID: resolved.ID, Status: resolved.Status}, nil
+	})
 }

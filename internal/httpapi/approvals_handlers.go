@@ -2,9 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
+	"github.com/DrewGGM/aluna/internal/access"
 	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
@@ -106,4 +109,36 @@ func toApprovalJSON(r approvals.Request) gen.Approval {
 		a.Reason = &r.Reason
 	}
 	return a
+}
+
+// onApproval is the Executor of a kind whose payload is an In and whose result is an Out: it runs command as
+// the approver, in the approval's transaction. Every error of command goes through asCommandRejection, so a
+// business rule leaves the request failed and anything else leaves it pending. A payload that does not decode
+// or a result that does not encode is not a business rule: it goes up as is, labeled with name.
+func onApproval[In, Out any](name string, command func(ctx context.Context, tx postgres.Tx, in In, checker access.Principal) (Out, error)) approvals.Executor {
+	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
+		var in In
+		if err := json.Unmarshal(payload, &in); err != nil {
+			return nil, fmt.Errorf("%s payload: %w", name, err)
+		}
+		out, err := command(ctx, tx, in, checker)
+		if err != nil {
+			return nil, asCommandRejection(err)
+		}
+		result, err := json.Marshal(out)
+		if err != nil {
+			return nil, fmt.Errorf("%s result: %w", name, err)
+		}
+		return result, nil
+	}
+}
+
+// asCommandRejection wraps in approvals.ErrCommandRejected an error of an approved command that is a
+// business rule (a 4xx in the problems table): the request is left failed. Any other error goes up as is,
+// so the request stays pending and can be approved later.
+func asCommandRejection(err error) error {
+	if p, known := problemFor(err); known && p.Status < http.StatusInternalServerError {
+		return fmt.Errorf("%w: %w", approvals.ErrCommandRejected, err)
+	}
+	return err
 }

@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -153,21 +152,13 @@ type publicationResult struct {
 // publishOnApproval is the Executor of productPublishKind: it publishes the version in the approver's entity. If
 // the version is no longer pending or a later one is in force, the request is left failed.
 func publishOnApproval(svc *products.Service) approvals.Executor {
-	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
-		var r publicationRequest
-		if err := json.Unmarshal(payload, &r); err != nil {
-			return nil, fmt.Errorf("publication payload: %w", err)
-		}
+	return onApproval("publication", func(ctx context.Context, tx postgres.Tx, r publicationRequest, checker access.Principal) (publicationResult, error) {
 		v, err := svc.Publish(ctx, tx, checker.LegalEntityID, r.VersionID)
 		if err != nil {
-			return nil, asCommandRejection(err)
+			return publicationResult{}, err
 		}
-		result, err := json.Marshal(publicationResult{VersionID: v.ID, ProductID: v.ProductID, Version: v.Number, Status: v.Status})
-		if err != nil {
-			return nil, fmt.Errorf("publication result: %w", err)
-		}
-		return result, nil
-	}
+		return publicationResult{VersionID: v.ID, ProductID: v.ProductID, Version: v.Number, Status: v.Status}, nil
+	})
 }
 
 func toProductVersionJSON(v products.Version) gen.ProductVersion {
@@ -240,20 +231,16 @@ func (h *ProductHandlers) RequestMarketParameterLoad(ctx context.Context, req ge
 // loadMarketParameterOnApproval is the Executor of marketLoadKind: it stores the value. If by then another
 // value holds in part of the period, the request is left failed. Its result is the loaded value.
 func loadMarketParameterOnApproval(svc *products.Service) approvals.Executor {
-	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, _ access.Principal) (json.RawMessage, error) {
-		var r marketLoadRequest
-		if err := json.Unmarshal(payload, &r); err != nil {
-			return nil, fmt.Errorf("market parameter load payload: %w", err)
-		}
+	return onApproval("market parameter load", func(ctx context.Context, tx postgres.Tx, r marketLoadRequest, _ access.Principal) (marketLoadRequest, error) {
 		parameter, err := r.parameter()
 		if err != nil {
-			return nil, asCommandRejection(err)
+			return marketLoadRequest{}, err
 		}
 		if err := svc.LoadMarketParameter(ctx, tx, parameter); err != nil {
-			return nil, asCommandRejection(err)
+			return marketLoadRequest{}, err
 		}
-		return payload, nil
-	}
+		return r, nil
+	})
 }
 
 // GetMarketParameter reads the value of a market parameter on a day; with no value for that day it is 404

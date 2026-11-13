@@ -51,10 +51,8 @@ func (h *WebhookHandlers) ListEvents(ctx context.Context, req gen.ListEventsRequ
 	if err != nil {
 		return nil, err
 	}
-	cursor, typ, limit := deref(req.Params.Cursor), deref(req.Params.Type), defaultPageSize
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
+	cursor, limit := pageOf(req.Params.Cursor, req.Params.Limit)
+	typ := deref(req.Params.Type)
 	page, err := h.webhooks.Events(ctx, h.reader, p.LegalEntityID, typ, cursor, limit)
 	if err != nil {
 		return nil, err

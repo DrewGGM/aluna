@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -253,40 +252,21 @@ func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestRev
 	return resp, nil
 }
 
-// asCommandRejection wraps in approvals.ErrCommandRejected an error of an approved command that is a
-// business rule (a 4xx in the problems table): the request is left failed. Any other error goes up as is,
-// so the request stays pending and can be approved later.
-func asCommandRejection(err error) error {
-	if p, known := problemFor(err); known && p.Status < http.StatusInternalServerError {
-		return fmt.Errorf("%w: %w", approvals.ErrCommandRejected, err)
-	}
-	return err
-}
-
 // reverseOnApproval is the Executor of reversalKind: it posts the payload's reversal in the entity of the
 // approver, who becomes its actor. A ledger rejection (a 4xx from its problems table: already reversed,
-// period closed, insufficient funds) is wrapped in approvals.ErrCommandRejected and leaves the request
-// failed; any other error goes up.
+// period closed, insufficient funds) leaves the request failed; any other error goes up.
 func reverseOnApproval(l *ledger.Service) approvals.Executor {
-	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
-		var r reversalRequest
-		if err := json.Unmarshal(payload, &r); err != nil {
-			return nil, fmt.Errorf("reversal payload: %w", err)
-		}
+	return onApproval("reversal", func(ctx context.Context, tx postgres.Tx, r reversalRequest, checker access.Principal) (gen.Transaction, error) {
 		in := ledger.ReverseInput{LegalEntityID: checker.LegalEntityID, TransactionID: r.TransactionID, Reason: r.Reason, Actor: checker.Subject}
 		if r.BusinessDate != nil {
 			in.BusinessDate = r.BusinessDate.Time
 		}
 		reversal, err := l.Reverse(ctx, tx, in)
 		if err != nil {
-			return nil, asCommandRejection(err)
+			return gen.Transaction{}, err
 		}
-		result, err := json.Marshal(toTransactionJSON(reversal))
-		if err != nil {
-			return nil, fmt.Errorf("reversal result: %w", err)
-		}
-		return result, nil
-	}
+		return toTransactionJSON(reversal), nil
+	})
 }
 
 func toAccountJSON(a ledger.Account) gen.LedgerAccount {

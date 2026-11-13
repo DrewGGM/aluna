@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -131,21 +130,13 @@ func (h *PartyHandlers) RequestKYCStatusChange(ctx context.Context, req gen.Requ
 // approver's entity. If the party changed since the request (another version, even with the same status),
 // the request is left failed.
 func changeKYCOnApproval(parties *party.Service) approvals.Executor {
-	return func(ctx context.Context, tx postgres.Tx, payload json.RawMessage, checker access.Principal) (json.RawMessage, error) {
-		var r kycChangeRequest
-		if err := json.Unmarshal(payload, &r); err != nil {
-			return nil, fmt.Errorf("KYC change payload: %w", err)
-		}
+	return onApproval("KYC change", func(ctx context.Context, tx postgres.Tx, r kycChangeRequest, checker access.Principal) (kycChangeResult, error) {
 		changed, err := parties.ChangeKYC(ctx, tx, checker.LegalEntityID, r.PartyID, r.Version, r.KYCStatus)
 		if err != nil {
-			return nil, asCommandRejection(err)
+			return kycChangeResult{}, err
 		}
-		result, err := json.Marshal(kycChangeResult{PartyID: changed.ID, Version: changed.Current.Number, KYCStatus: changed.Current.KYCStatus})
-		if err != nil {
-			return nil, fmt.Errorf("KYC change result: %w", err)
-		}
-		return result, nil
-	}
+		return kycChangeResult{PartyID: changed.ID, Version: changed.Current.Number, KYCStatus: changed.Current.KYCStatus}, nil
+	})
 }
 
 func toPartyJSON(p party.Party) gen.Party {

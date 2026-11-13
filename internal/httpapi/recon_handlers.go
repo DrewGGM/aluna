@@ -81,13 +81,7 @@ func (h *ReconciliationHandlers) ListBreaks(ctx context.Context, req gen.ListBre
 	if err != nil {
 		return nil, err
 	}
-	cursor, limit := "", defaultPageSize
-	if req.Params.Cursor != nil {
-		cursor = *req.Params.Cursor
-	}
-	if req.Params.Limit != nil {
-		limit = *req.Params.Limit
-	}
+	cursor, limit := pageOf(req.Params.Cursor, req.Params.Limit)
 	var status reconciliation.BreakStatus
 	if req.Params.Status != nil {
 		status = reconciliation.BreakStatus(*req.Params.Status)

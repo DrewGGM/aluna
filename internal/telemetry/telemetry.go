@@ -20,6 +20,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/DrewGGM/aluna/internal/ids"
 )
 
 // Shutdown flushes and closes the exporters; it is called when the process shuts down.
@@ -38,8 +40,10 @@ func Setup(ctx context.Context, service, version string, out io.Writer) (*slog.L
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" {
 		return log, func(context.Context) error { return nil }, nil
 	}
-	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName(service), semconv.ServiceVersion(version)),
-		resource.WithFromEnv(), resource.WithTelemetrySDK())
+	// each process is an instance of its own, so that the series of two replicas, or of the API and the worker, do
+	// not mix: Prometheus tells them apart by service.instance.id
+	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName(service), semconv.ServiceVersion(version),
+		semconv.ServiceInstanceID(ids.New().String())), resource.WithFromEnv(), resource.WithTelemetrySDK())
 	if err != nil {
 		return nil, nil, fmt.Errorf("otel resource: %w", err)
 	}

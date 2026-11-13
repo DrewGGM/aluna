@@ -1,0 +1,97 @@
+# Alerts of Aluna (quality-reliability FF-6, security baseline): the source of truth of what pages; the SLOs of
+# slo.yaml only record. The metrics are those that the process exports over OTLP, as Prometheus names them:
+# http.server.request.duration becomes http_server_request_duration_seconds and a counter gets _total. Each process is
+# an instance of its own and reports the database's state, so those series are aggregated across instances.
+groups:
+  - name: aluna-slo
+    rules:
+      # Errors of the money-moving endpoints, the availability SLI (99.95 % of non-5xx in 30 days, slo.yaml).
+      - record: aluna:money_requests:error_ratio_rate5m
+        expr: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders",http_response_status_code=~"5.."}[5m]))
+          / sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders"}[5m]))
+      - record: aluna:money_requests:error_ratio_rate30m
+        expr: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders",http_response_status_code=~"5.."}[30m]))
+          / sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders"}[30m]))
+      - record: aluna:money_requests:error_ratio_rate1h
+        expr: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders",http_response_status_code=~"5.."}[1h]))
+          / sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders"}[1h]))
+      - record: aluna:money_requests:error_ratio_rate6h
+        expr: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders",http_response_status_code=~"5.."}[6h]))
+          / sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders"}[6h]))
+
+      # Multiwindow burn rate: at 14.4x the budget of 0.05 % lasts 2 days, at 6x 5 days.
+      - alert: AvailabilityBudgetBurningFast
+        expr: |
+          aluna:money_requests:error_ratio_rate1h > (14.4 * 0.0005)
+          and aluna:money_requests:error_ratio_rate5m > (14.4 * 0.0005)
+        labels:
+          severity: page
+        annotations:
+          summary: The money-moving endpoints burn the availability budget 14 times too fast
+          description: Over the last hour more than 0.72 % of POST /v1/transactions, /v1/transfers and /v1/payment-orders answered 5xx.
+      - alert: AvailabilityBudgetBurningSlowly
+        expr: |
+          aluna:money_requests:error_ratio_rate6h > (6 * 0.0005)
+          and aluna:money_requests:error_ratio_rate30m > (6 * 0.0005)
+        labels:
+          severity: ticket
+        annotations:
+          summary: The money-moving endpoints burn the availability budget 6 times too fast
+          description: Over the last 6 hours more than 0.3 % of the money-moving requests answered 5xx.
+
+      - alert: PostingLatencyHigh
+        expr: |
+          histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{http_request_method="POST",http_route="/v1/transactions"}[5m]))) > 0.2
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: The p99 of posting is over 200 ms
+          description: The 99th percentile of POST /v1/transactions has been over 200 ms for 10 minutes (QS-3).
+
+  - name: aluna-integrity
+    rules:
+      - alert: ReconciliationBreakOpen
+        expr: max(aluna_recon_breaks_open) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: A reconciliation break is open
+          description: "{{ $value }} breaks are open; a break of integrity freezes the deployments of its module until it is resolved."
+      - alert: AuditSealLate
+        expr: max(aluna_audit_unsealed_age_seconds) > 300
+        labels:
+          severity: page
+        annotations:
+          summary: An audit record has waited more than 5 minutes for its seal
+          description: The oldest audit record still unsealed was recorded {{ $value | humanizeDuration }} ago (ADR-0012).
+      - alert: OperationsMetricsMissing
+        expr: absent(aluna_ledger_holds_pending)
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: No process reports the database's state
+          description: Without these metrics the integrity alerts (breaks, audit seal) cannot fire; the reads of the database fail or no process runs.
+
+  - name: aluna-security
+    rules:
+      - alert: AuthorizationFailuresBurst
+        expr: |
+          sum(increase(http_server_request_duration_seconds_count{http_response_status_code=~"401|403"}[5m])) > 50
+        labels:
+          severity: page
+        annotations:
+          summary: A burst of 401 and 403
+          description: "{{ $value }} requests were refused authentication or authorization in 5 minutes."
+      - alert: MakerCheckerApproved
+        expr: max(increase(aluna_approvals_approved_total[5m])) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: A maker-checker request was approved
+          description: Every approved maker-checker action is reported, as the security baseline asks for admin actions.

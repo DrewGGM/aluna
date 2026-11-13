@@ -1,0 +1,57 @@
+# SLOs of Aluna (quality-reliability §SLOs), in the Sloth format (prometheus/v1), over the metrics that the process
+# exports over OTLP as Prometheus names them; the error budget policy goes with them (quality-reliability). They only
+# record the SLIs and the budget: what pages is in alerts.yaml, so Sloth generates no alerts of its own.
+version: prometheus/v1
+service: aluna
+labels:
+  owner: core
+slos:
+  - name: money-moving-availability
+    objective: 99.95
+    description: POST /v1/transactions, /v1/transfers and /v1/payment-orders answer something other than 5xx.
+    sli:
+      events:
+        error_query: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders",http_response_status_code=~"5.."}[{{.window}}]))
+        total_query: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route=~"/v1/transactions|/v1/transfers|/v1/payment-orders"}[{{.window}}]))
+    alerting:
+      name: AvailabilityBudget
+      page_alert:
+        disable: true
+      ticket_alert:
+        disable: true
+
+  - name: posting-latency
+    objective: 99
+    description: 99 % of POST /v1/transactions answer within 200 ms.
+    sli:
+      events:
+        error_query: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route="/v1/transactions"}[{{.window}}]))
+          - sum(rate(http_server_request_duration_seconds_bucket{http_request_method="POST",http_route="/v1/transactions",le="0.2"}[{{.window}}]))
+        total_query: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="POST",http_route="/v1/transactions"}[{{.window}}]))
+    alerting:
+      name: PostingLatencyBudget
+      page_alert:
+        disable: true
+      ticket_alert:
+        disable: true
+
+  - name: balance-latency
+    objective: 99
+    description: 99 % of the balance reads answer within 100 ms.
+    sli:
+      events:
+        error_query: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="GET",http_route="/v1/ledger-accounts/{id}/balance"}[{{.window}}]))
+          - sum(rate(http_server_request_duration_seconds_bucket{http_request_method="GET",http_route="/v1/ledger-accounts/{id}/balance",le="0.1"}[{{.window}}]))
+        total_query: |
+          sum(rate(http_server_request_duration_seconds_count{http_request_method="GET",http_route="/v1/ledger-accounts/{id}/balance"}[{{.window}}]))
+    alerting:
+      name: BalanceLatencyBudget
+      page_alert:
+        disable: true
+      ticket_alert:
+        disable: true

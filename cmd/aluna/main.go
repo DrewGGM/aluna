@@ -299,6 +299,8 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 		return 1
 	}
 	defer pool.Close()
+	unregister := withMetrics(pool, log)
+	defer unregister() // before the pool closes
 	uow := postgres.NewUnitOfWork(pool)
 	rail := payments.NewSimulatedRail("", []byte(cfg.railSecret), http.DefaultClient, log) // api only reads its notifications
 	api, err := newAPI(pool, uow, cfg.gmf, authz.policy, rail)
@@ -477,6 +479,8 @@ func runWorker(ctx context.Context, dsn string, records *audit.Service, gmf pric
 		return 1
 	}
 	defer pool.Close()
+	unregister := withMetrics(pool, log)
+	defer unregister() // before the pool closes
 	client, err := newWorker(pool, records, gmf, rail, log)
 	if err != nil {
 		log.Error("configure the worker", "error", err)

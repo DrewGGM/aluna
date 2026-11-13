@@ -10,6 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Querier is what an adapter can do with the database: the same method set the sqlc code expects. Tx
@@ -68,11 +71,23 @@ const (
 
 // UnitOfWork runs a business command in a single PostgreSQL transaction.
 type UnitOfWork struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	retries metric.Int64Counter
 }
 
-// NewUnitOfWork creates the Unit of Work over p.
-func NewUnitOfWork(p *pgxpool.Pool) *UnitOfWork { return &UnitOfWork{pool: p} }
+// instrumentation names the meter of the Unit of Work's retries.
+const instrumentation = "github.com/DrewGGM/aluna/internal/postgres"
+
+// NewUnitOfWork creates the Unit of Work over p. It counts its retries in aluna.db.transaction.retries, on the global
+// meter provider.
+func NewUnitOfWork(p *pgxpool.Pool) *UnitOfWork {
+	retries, err := otel.Meter(instrumentation).Int64Counter("aluna.db.transaction.retries",
+		metric.WithUnit("{retry}"), metric.WithDescription("Transactions retried after a serialization failure or a deadlock."))
+	if err != nil {
+		otel.Handle(err)
+	}
+	return &UnitOfWork{pool: p, retries: retries}
+}
 
 // Do runs fn in a READ COMMITTED transaction: it commits if fn returns nil and rolls back in any other
 // case (error, panic or runtime.Goexit; the panic carries on). On a serialization failure (40001) or a
@@ -82,9 +97,11 @@ func NewUnitOfWork(p *pgxpool.Pool) *UnitOfWork { return &UnitOfWork{pool: p} }
 func (u *UnitOfWork) Do(ctx context.Context, fn func(Tx) error) error {
 	for attempt := 1; ; attempt++ {
 		err := u.once(ctx, fn)
-		if attempt == maxAttempts || !retryable(err) {
+		code, retry := retryCode(err)
+		if attempt == maxAttempts || !retry {
 			return err
 		}
+		u.retries.Add(ctx, 1, metric.WithAttributes(attribute.String("db.response.status_code", code)))
 		if waitErr := sleep(ctx, backoff(attempt)); waitErr != nil {
 			return errors.Join(waitErr, err)
 		}
@@ -120,9 +137,13 @@ func (u *UnitOfWork) once(ctx context.Context, fn func(Tx) error) error {
 	return nil
 }
 
-func retryable(err error) bool {
+// retryCode is the SQLSTATE of err and whether it is one Do retries.
+func retryCode(err error) (string, bool) {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && (pgErr.Code == serializationFailure || pgErr.Code == deadlockDetected)
+	if !errors.As(err, &pgErr) {
+		return "", false
+	}
+	return pgErr.Code, pgErr.Code == serializationFailure || pgErr.Code == deadlockDetected
 }
 
 // backoff doubles the wait on each attempt and adds up to as much again at random, so that two

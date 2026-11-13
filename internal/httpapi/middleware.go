@@ -115,8 +115,8 @@ func (s *statusRecorder) code() int {
 const instrumentation = "github.com/DrewGGM/aluna/internal/httpapi"
 
 // durationBuckets are the boundaries (in seconds) that the semantic conventions recommend for
-// http.server.request.duration.
-var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10}
+// http.server.request.duration, and 0.2: the posting latency SLO is 200 ms (quality-reliability).
+var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10}
 
 // observability measures each request once, also if it ends in a panic that aborts the connection: a
 // server span that continues the client's traceparent, the http.server.request.duration histogram and the

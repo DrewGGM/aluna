@@ -13,6 +13,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 var testPool *pgxpool.Pool
@@ -179,7 +182,10 @@ func TestDoRetriesDeadlockOnce(t *testing.T) {
 	}
 }
 
+// TestDoGivesUpAfterThreeAttempts: and it counts each retry (aluna.db.transaction.retries).
 func TestDoGivesUpAfterThreeAttempts(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
 	calls := 0
 
 	err := NewUnitOfWork(testPool).Do(context.Background(), func(Tx) error {
@@ -191,6 +197,29 @@ func TestDoGivesUpAfterThreeAttempts(t *testing.T) {
 	if !errors.As(err, &pgErr) || pgErr.Code != "40001" || calls != maxAttempts {
 		t.Fatalf("error = %v, attempts = %d; want %d attempts and the 40001", err, calls, maxAttempts)
 	}
+	if retried := retriesCounted(t, reader); retried != maxAttempts-1 {
+		t.Errorf("%d retries counted, want %d", retried, maxAttempts-1)
+	}
+}
+
+// retriesCounted is what the retries metric has counted.
+func retriesCounted(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if sum, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == "aluna.db.transaction.retries" {
+				for _, p := range sum.DataPoints {
+					total += p.Value
+				}
+			}
+		}
+	}
+	return total
 }
 
 func TestDoDoesNotRetryOtherErrors(t *testing.T) {

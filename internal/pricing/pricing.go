@@ -106,6 +106,12 @@ func (s *Service) Quote(ctx context.Context, tx postgres.Tx, in QuoteInput) (Quo
 	return app.MakeQuote(ctx, p, p, in)
 }
 
+// QuotedFees are, within tx, the fees of the quote of the entity that u names, without using it: what its customer
+// was shown. A quote used, expired, or of another account, operation or amount is ErrQuoteUnavailable.
+func (s *Service) QuotedFees(ctx context.Context, tx postgres.Tx, entity ids.ID, u QuoteUse) ([]Fee, error) {
+	return pg.NewStore(tx).QuotedFees(ctx, entity, u)
+}
+
 // ChargesFor marks, within tx, the quote of the entity that u names as used and returns what u's operation is
 // charged: exactly what it quoted (FR-28), using the part of the party's GMF exemption it quoted. A quote
 // used, expired, or of another account, operation or amount, or whose exemption another operation used

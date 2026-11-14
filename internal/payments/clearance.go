@@ -11,13 +11,13 @@ import (
 
 // ResolveScreening applies, within tx, compliance's decision (FR-42) on order orderID of entity, which waited in
 // pending_screening: it is the compliance.Resolved of payment cases, which cmd/aluna registers. A confirmed match
-// rejects the order (RR04). A cleared one holds its amount and charges as initiating it would, priced as it is
-// cleared (a quote it named was never used), and queues it to be sent; if they cannot be held, without funds
-// (AM04), with its account no longer active (AC06) or over a limit of its product (AM02), the order is rejected
-// instead and nothing is held.
+// rejects the order (RR04). A cleared one holds its amount and charges as initiating it would, its GMF as it is
+// cleared and its fees as the entity's policy says of those of the quote it named (ADR-0016; the quote was never
+// used), and queues it to be sent; if they cannot be held, without funds (AM04), with its account no longer active
+// (AC06) or over a limit of its product (AM02), the order is rejected instead and nothing is held.
 func (s *Service) ResolveScreening(ctx context.Context, tx postgres.Tx, entity, orderID ids.ID, cleared bool) error {
 	c := clearance{initiation{s: s, tx: tx}}
-	err := atomically(ctx, tx, "payment_clearance", func() error { return app.ResolveScreening(ctx, c, entity, orderID, cleared) })
+	err := atomically(ctx, tx, "payment_clearance", func() error { return app.ResolveScreening(ctx, c, entity, orderID, cleared, s.policy) })
 	if reason := app.HoldRefusal(err); reason != "" {
 		return app.RejectPending(ctx, c, entity, orderID, reason)
 	}

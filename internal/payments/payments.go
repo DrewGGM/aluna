@@ -126,18 +126,19 @@ func DefaultPolicy() Policy {
 }
 
 // Initiate starts, within tx, an outgoing payment (FR-31): its beneficiary is screened (FR-42), and if screening
-// does not clear it the order is pending_screening and nothing moves; if it does, its amount and its charges
-// (by its quote if it names one) are held against the rail's clearing account and the order is queued to be
-// sent (payments.send). An unknown rail, a beneficiary not by one account or one key, or another currency is
-// ErrInvalidOrder; an account that is not active, deposits.ErrAccountNotActive; an amount over a limit of its
-// product, deposits.ErrLimitExceeded; a reference already used, ErrDuplicatePayment; without funds for all of it,
-// ledger.ErrInsufficientFunds. A rejection leaves nothing in
-// tx, not even the screening case or the quote's use.
+// does not clear it the order is pending_screening, keeping the fees of its quote if it names one (without using
+// it), and nothing moves; if it does, its amount and its charges (by its quote if it names one) are held against
+// the rail's clearing account and the order is queued to be sent (payments.send). A quote used, expired or of
+// another transfer is pricing.ErrQuoteUnavailable. An unknown rail, a beneficiary not by one account or one key, or
+// another currency is ErrInvalidOrder; an account that is not active, deposits.ErrAccountNotActive; an amount over
+// a limit of its product, deposits.ErrLimitExceeded; a reference already used, ErrDuplicatePayment; without funds
+// for all of it, ledger.ErrInsufficientFunds. A rejection leaves nothing in tx, not even the screening case or the
+// quote's use.
 func (s *Service) Initiate(ctx context.Context, tx postgres.Tx, in InitiateInput) (Order, error) {
 	var o Order
 	err := atomically(ctx, tx, "payment_initiation", func() error {
 		var err error
-		o, err = app.Initiate(ctx, initiation{s: s, tx: tx}, in)
+		o, err = app.Initiate(ctx, initiation{s: s, tx: tx}, in, s.policy)
 		return err
 	})
 	if err != nil {
@@ -212,6 +213,12 @@ func (i initiation) Debit(ctx context.Context, a deposits.Account, amount money.
 		return time.Time{}, err
 	}
 	return i.s.deposits.CountDebit(ctx, i.tx, locked, amount)
+}
+
+func (i initiation) QuotedFees(ctx context.Context, a deposits.Account, amount money.Amount, quoteID ids.ID) ([]pricing.Fee, error) {
+	return i.s.pricing.QuotedFees(ctx, i.tx, a.LegalEntityID, pricing.QuoteUse{
+		QuoteID: quoteID, AccountID: a.ID, PartyID: a.PartyID, Operation: pricing.Transfer, Amount: amount,
+	})
 }
 
 func (i initiation) Charges(ctx context.Context, a deposits.Account, amount money.Amount, quoteID ids.ID) (pricing.Charges, error) {

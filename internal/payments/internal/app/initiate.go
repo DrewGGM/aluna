@@ -46,6 +46,11 @@ type Order struct {
 	// GMFExemption is what it used of its party's GMF exemption, once it is held: a rejection, or a return that
 	// annuls it, may restore it (ADR-0016).
 	GMFExemption pricing.ExemptionUse
+	// QuotedFees are the fees of the quote it named, kept when it waited for compliance: once cleared, it is not
+	// charged more (ADR-0016). Quoted says they were kept, even if there are none; an order held at once, one that
+	// waited without a quote, or one that waited before migration 0039 has none kept.
+	QuotedFees []pricing.Fee
+	Quoted     bool
 }
 
 // InitiateInput is an outgoing payment of Amount from deposit account AccountID of LegalEntityID to Creditor,
@@ -74,6 +79,9 @@ type Initiation interface {
 	DepositAccount(ctx context.Context, entity, id ids.ID) (deposits.Account, error)
 	// ScreenBeneficiary reports whether screening cleared o's creditor.
 	ScreenBeneficiary(ctx context.Context, o Order) (cleared bool, err error)
+	// QuotedFees are the fees of quote quoteID for a transfer of amount from a, without using it:
+	// pricing.ErrQuoteUnavailable if it is used, expired or of another transfer.
+	QuotedFees(ctx context.Context, a deposits.Account, amount money.Amount, quoteID ids.ID) ([]pricing.Fee, error)
 	funds
 	// Record stores o (ErrDuplicatePayment if its reference was used), publishes it and, if it is held,
 	// queues it to be sent.
@@ -89,7 +97,7 @@ type Initiation interface {
 // The payment is a debit of the account, so it counts against its product's limits: over one it is
 // deposits.ErrLimitExceeded, checked before the charges and the funds. Without funds for all of it, it is
 // ledger.ErrInsufficientFunds.
-func Initiate(ctx context.Context, p Initiation, in InitiateInput) (Order, error) {
+func Initiate(ctx context.Context, p Initiation, in InitiateInput, policy Policy) (Order, error) {
 	a, err := p.DepositAccount(ctx, in.LegalEntityID, in.AccountID)
 	if err != nil {
 		return Order{}, err
@@ -103,9 +111,9 @@ func Initiate(ctx context.Context, p Initiation, in InitiateInput) (Order, error
 		return Order{}, err
 	}
 	if cleared {
-		err = hold(ctx, p, a, &o, in.QuoteID)
+		err = hold(ctx, p, a, &o, in.QuoteID, policy)
 	} else {
-		err = o.AwaitCompliance()
+		err = awaitCompliance(ctx, p, a, &o, in.QuoteID)
 	}
 	if err != nil {
 		return Order{}, err
@@ -171,14 +179,32 @@ func validText(s string, most int) bool {
 	return utf8.ValidString(s) && utf8.RuneCountInString(s) <= most && !strings.ContainsRune(s, 0)
 }
 
-// hold counts o's amount as a debit of a, holds it with its charges on a and moves o to held.
-func hold(ctx context.Context, p funds, a deposits.Account, o *Order, quoteID ids.ID) error {
+// awaitCompliance moves o, of a, to pending_screening, keeping the fees of quote quoteID if it names one: nothing
+// is held or used until compliance decides. Without a quote the core showed no fee, and o is charged as it is
+// cleared: a tariff goes up only with 45 days' notice (Decreto 2555 de 2010, art. 2.35.4.2.6).
+func awaitCompliance(ctx context.Context, p Initiation, a deposits.Account, o *Order, quoteID ids.ID) error {
+	if quoteID != (ids.ID{}) {
+		fees, err := p.QuotedFees(ctx, a, o.Amount, quoteID)
+		if err != nil {
+			return err
+		}
+		o.QuotedFees, o.Quoted = fees, true
+	}
+	return o.AwaitCompliance()
+}
+
+// hold counts o's amount as a debit of a, holds it with its charges on a, its fees as policy says, and moves o to
+// held.
+func hold(ctx context.Context, p funds, a deposits.Account, o *Order, quoteID ids.ID, policy Policy) error {
 	counted, err := p.Debit(ctx, a, o.Amount)
 	if err != nil {
 		return err
 	}
 	charges, err := p.Charges(ctx, a, o.Amount, quoteID)
 	if err != nil {
+		return err
+	}
+	if charges.Fees, err = policy.charged(*o, charges.Fees); err != nil {
 		return err
 	}
 	fees, err := pricing.Total(charges.Fees, o.Amount.Currency())

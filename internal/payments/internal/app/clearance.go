@@ -32,11 +32,12 @@ type Clearance interface {
 }
 
 // ResolveScreening applies compliance's decision (FR-42) on order id of entity, pending_screening: a confirmed
-// match rejects it (RR04); a cleared one holds its amount and charges, priced as it is cleared, and the order is
-// held and queued to be sent. An order that is no longer pending_screening expired meanwhile (ExpirePending) and
-// is left as it is. Another entity's order is ErrOrderNotFound. If the funds cannot be held it returns why
-// (HoldRefusal names the reason): the caller undoes what tx did since and calls RejectPending.
-func ResolveScreening(ctx context.Context, p Clearance, entity, id ids.ID, cleared bool) error {
+// match rejects it (RR04); a cleared one holds its amount and charges, its GMF as it is cleared and its fees as
+// policy says of those it was quoted (ADR-0016), and the order is held and queued to be sent. An order that is no
+// longer pending_screening expired meanwhile (ExpirePending) and is left as it is. Another entity's order is
+// ErrOrderNotFound. If the funds cannot be held it returns why (HoldRefusal names the reason): the caller undoes
+// what tx did since and calls RejectPending.
+func ResolveScreening(ctx context.Context, p Clearance, entity, id ids.ID, cleared bool, policy Policy) error {
 	o, err := lockOrderOf(ctx, p, entity, id)
 	if err != nil || o.Status != domain.StatusPendingScreening {
 		return err
@@ -48,7 +49,7 @@ func ResolveScreening(ctx context.Context, p Clearance, entity, id ids.ID, clear
 	if err != nil {
 		return err
 	}
-	if err := hold(ctx, p, a, &o, ids.ID{}); err != nil {
+	if err := hold(ctx, p, a, &o, ids.ID{}, policy); err != nil {
 		return err
 	}
 	return p.Store(ctx, o)

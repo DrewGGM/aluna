@@ -52,6 +52,7 @@ Todo sale del entorno:
 | `ALUNA_RETURN_REFUND_FEES` | `api`, `worker` | `true` | Si un pago que devuelve el banco del beneficiario reintegra su comisión (`true` o `false`) |
 | `ALUNA_RETURN_REFUND_GMF_REASONS` | `api`, `worker` | `AC01,AC03,AC04,AC06,AG01,AG02,AM05,BE04,MD07,MS02,MS03,RC01,RR01,RR02,RR03,RR04` | Causales ISO 20022 de devolución que anulan el pago (la transferencia no se pudo completar) y reintegran su GMF; separadas por coma, y vacía para ninguna. Una causal voluntaria (`CUST`, `MD06`, `FOCR`, `DUPL`) es una operación nueva y no lo reintegra |
 | `ALUNA_GMF_RESTORE_EXEMPTION` | `api`, `worker` | `same_month` | Si un pago rechazado por el rail, o devuelto con una causal que lo anula, devuelve a la exención de GMF del mes lo que usó de ella (`same_month`, mientras sea ese mes) o no (`never`) |
+| `ALUNA_QUOTE_POLICY` | `api`, `worker` | `lower_of` | Con qué comisión se cobra un pago que esperó a cumplimiento: `lower_of`, la menor entre la de la cotización que nombró al iniciarlo (`quote_id`) y la vigente al despejarlo, o `honor`, siempre la cotizada. Sin cotización se cobra la vigente: el core no le mostró ninguna. El GMF es el del momento del débito |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `api`, `worker` | sin valor: nada sale del proceso | Exporta trazas y métricas por OTLP/HTTP, con el resto de variables `OTEL_*` |
 
 ### Notificaciones de los rails
@@ -418,6 +419,7 @@ lecturas incluidas, mientras se valida, y una llave foránea nueva bloquea sus e
 | `0034_payments_pending_index.sql` | índice parcial sobre `payments.orders` | los pagos |
 | `0036_released_debits.sql` | columna con `CHECK` en `deposits.counters` | los movimientos de depósitos y los pagos |
 | `0038_gmf_restored.sql` | columnas con `CHECK` en `pricing.gmf_monthly` y `payments.orders` | las cotizaciones y los pagos |
+| `0039_payments_quoted_fees.sql` | columna con `CHECK` en `payments.orders` | los pagos |
 
 Aplícalas en una ventana de mantenimiento, con la API fuera de rotación: tardan lo que tarde recorrer la
 tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y migrándolo (ver

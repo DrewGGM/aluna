@@ -69,7 +69,9 @@ commands:
                              ALUNA_RETURN_REFUND_FEES (true, the default, or false), the return
                              reasons that refund its GMF, ALUNA_RETURN_REFUND_GMF_REASONS (ISO 20022
                              codes separated by commas; empty refunds none), and
-                             ALUNA_GMF_RESTORE_EXEMPTION (same_month, the default, or never)
+                             ALUNA_GMF_RESTORE_EXEMPTION (same_month, the default, or never); and
+                             the fees of a payment that waited for compliance, ALUNA_QUOTE_POLICY
+                             (lower_of, the default, of those quoted and the tariff, or honor)
   worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls, GL,
                              payments) on ALUNA_DATABASE_URL, anchoring blocks in
                              ALUNA_AUDIT_ANCHOR_DIR; multiple workers elect a leader for the
@@ -290,7 +292,8 @@ func chargingFromEnv() (charging, error) {
 
 // paymentsPolicyFromEnv is payments.DefaultPolicy as ALUNA_RETURN_REFUND_FEES (true or false),
 // ALUNA_RETURN_REFUND_GMF_REASONS (ISO 20022 reason codes separated by commas; set and empty, none) and
-// ALUNA_GMF_RESTORE_EXEMPTION (same_month or never) change it (ADR-0016).
+// ALUNA_GMF_RESTORE_EXEMPTION (same_month or never) and ALUNA_QUOTE_POLICY (lower_of or honor) change it
+// (ADR-0016).
 func paymentsPolicyFromEnv() (payments.Policy, error) {
 	p := payments.DefaultPolicy()
 	var err error
@@ -306,6 +309,11 @@ func paymentsPolicyFromEnv() (payments.Policy, error) {
 	}
 	if v := os.Getenv("ALUNA_GMF_RESTORE_EXEMPTION"); v != "" {
 		if p.RestoreExemption, err = either(v, "ALUNA_GMF_RESTORE_EXEMPTION", "same_month", "never"); err != nil {
+			return payments.Policy{}, err
+		}
+	}
+	if v := os.Getenv("ALUNA_QUOTE_POLICY"); v != "" {
+		if p.HonorQuotes, err = either(v, "ALUNA_QUOTE_POLICY", "honor", "lower_of"); err != nil {
 			return payments.Policy{}, err
 		}
 	}

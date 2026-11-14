@@ -240,9 +240,10 @@ llama al proveedor durante 30 s y luego deja pasar una consulta de prueba. Los c
 - Los casos que quedaron pendientes durante la caída se listan con
   `GET /v1/screening-cases?status=pending` y los resuelve cumplimiento con
   `POST /v1/screening-cases/{id}/resolution` (maker-checker). Una party resuelta sale de
-  `pending_screening`. Una orden de pago despejada retiene sus fondos con los cargos del momento y sale a
-  enviarse; una confirmada, o una despejada cuya cuenta ya no tiene fondos, no está activa o pasaría un límite
-  de su producto, queda `rejected` (`RR04`, `AM04`, `AC06` o `AM02`) sin retener nada. Una orden que nadie
+  `pending_screening`. Una orden de pago despejada retiene sus fondos y sale a enviarse: con el GMF del
+  momento y, si nombró una cotización, la comisión cotizada o la menor entre esa y la vigente, según
+  `ALUNA_QUOTE_POLICY`; sin cotización, la comisión vigente. Una confirmada, o una despejada cuya cuenta ya no
+  tiene fondos, no está activa o pasaría un límite de su producto, queda `rejected` (`RR04`, `AM04`, `AC06` o `AM02`) sin retener nada. Una orden que nadie
   resuelve en 7 días queda `rejected` (`SCREENING_EXPIRED`); resolver su caso después registra la decisión y
   no la envía.
 

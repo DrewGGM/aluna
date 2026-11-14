@@ -670,7 +670,7 @@ type CreatePaymentOrder struct {
 	// Creditor A party at its bank, by account number or by key (a Bre-B "llave"), one of the two.
 	Creditor PaymentParty `json:"creditor"`
 
-	// QuoteId Quote of this payment (POST /v1/quotes, a transfer); without one it is priced as it is made
+	// QuoteId Quote of this payment (POST /v1/quotes, a transfer); without one it is priced as it is held, when it is cleared if it waits for compliance
 	QuoteId *openapi_types.UUID `json:"quote_id,omitempty"`
 
 	// Rail The simulated Bre-B rail, the only one for now

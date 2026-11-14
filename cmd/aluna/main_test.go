@@ -222,27 +222,29 @@ const railSecret = "a secret of the simulated rail.."
 // one changes its part, and a value that is not one of the allowed is an error naming the variable.
 func TestThePaymentsPolicyComesFromTheEnvironment(t *testing.T) {
 	keep := payments.DefaultPolicy()
-	keep.RefundFeesOnReturn, keep.AnnullingReasons, keep.RestoreExemption = false, []string{"AC01", "AC04"}, false
+	keep.RefundFeesOnReturn, keep.AnnullingReasons, keep.RestoreExemption, keep.HonorQuotes = false, []string{"AC01", "AC04"}, false, true
 	none := payments.DefaultPolicy()
 	none.AnnullingReasons = nil
 	cases := map[string]struct {
-		fees, reasons, restore string
-		unsetReasons           bool
-		want                   payments.Policy
-		wantErr                string
+		fees, reasons, restore, quotes string
+		unsetReasons                   bool
+		want                           payments.Policy
+		wantErr                        string
 	}{
 		"the default":           {unsetReasons: true, want: payments.DefaultPolicy()},
-		"each one changed":      {fees: "false", reasons: "AC01, AC04", restore: "never", want: keep},
+		"each one changed":      {fees: "false", reasons: "AC01, AC04", restore: "never", quotes: "honor", want: keep},
 		"no reason refunds GMF": {reasons: "", want: none},
 		"fees neither":          {fees: "maybe", unsetReasons: true, wantErr: "ALUNA_RETURN_REFUND_FEES"},
 		"fees as a number":      {fees: "1", unsetReasons: true, wantErr: "ALUNA_RETURN_REFUND_FEES"},
 		"a reason of no code":   {reasons: "AC01,account closed", wantErr: "ALUNA_RETURN_REFUND_GMF_REASONS"},
 		"restore neither":       {unsetReasons: true, restore: "always", wantErr: "ALUNA_GMF_RESTORE_EXEMPTION"},
+		"quotes neither":        {unsetReasons: true, quotes: "requote", wantErr: "ALUNA_QUOTE_POLICY"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("ALUNA_RETURN_REFUND_FEES", tc.fees)
 			t.Setenv("ALUNA_GMF_RESTORE_EXEMPTION", tc.restore)
+			t.Setenv("ALUNA_QUOTE_POLICY", tc.quotes)
 			t.Setenv("ALUNA_RETURN_REFUND_GMF_REASONS", tc.reasons)
 			if tc.unsetReasons {
 				unsetenv(t, "ALUNA_RETURN_REFUND_GMF_REASONS")
@@ -298,6 +300,7 @@ func TestAPIConfigFromEnv(t *testing.T) {
 			t.Setenv("ALUNA_SIMBREB_SECRET", tc.secret)
 			t.Setenv("ALUNA_RETURN_REFUND_FEES", "") // the default policy, whatever the environment says
 			t.Setenv("ALUNA_GMF_RESTORE_EXEMPTION", "")
+			t.Setenv("ALUNA_QUOTE_POLICY", "")
 			t.Setenv("ALUNA_RETURN_REFUND_GMF_REASONS", "")
 			unsetenv(t, "ALUNA_RETURN_REFUND_GMF_REASONS")
 

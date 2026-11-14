@@ -68,6 +68,39 @@ func (s Store) InsertQuote(ctx context.Context, q app.Quote, ttl time.Duration) 
 	return q, nil
 }
 
+// QuotedFees are the fees of the quote of the entity that u names, if it is of u's account, operation and amount,
+// is not used and has not expired; otherwise it is app.ErrQuoteUnavailable. It does not use it.
+func (s Store) QuotedFees(ctx context.Context, entity ids.ID, u app.QuoteUse) ([]domain.Fee, error) {
+	var document []byte
+	err := s.q.QueryRow(ctx, `SELECT fees FROM pricing.quotes WHERE `+usableQuote,
+		u.QuoteID, entity, u.AccountID, u.Operation, u.Amount.Currency().Code(), u.Amount.Units()).Scan(&document)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", app.ErrQuoteUnavailable, u.QuoteID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read quote %s: %w", u.QuoteID, err)
+	}
+	return feesFrom(u.QuoteID, document, u.Amount.Currency())
+}
+
+// usableQuote is the condition of a quote an operation can take, by its id, entity, account, operation, currency
+// and amount ($1 to $6): not used, and not expired by the database's now.
+const usableQuote = `id = $1 AND legal_entity_id = $2 AND account_id = $3 AND operation = $4 AND currency = $5 AND amount_units = $6
+	AND used_at IS NULL AND expires_at > clock_timestamp()`
+
+// feesFrom are the fees document keeps, quote id's as pricing.quotes keeps them, in currency c.
+func feesFrom(id ids.ID, document []byte, c money.Currency) ([]domain.Fee, error) {
+	var stored []storedFee
+	if err := json.Unmarshal(document, &stored); err != nil {
+		return nil, fmt.Errorf("stored fees of quote %s: %w", id, err)
+	}
+	fees := make([]domain.Fee, len(stored))
+	for i, f := range stored {
+		fees[i] = domain.Fee{Code: f.Code, Amount: money.New(f.Units, c)}
+	}
+	return fees, nil
+}
+
 // UseQuote marks as used the quote of the entity that u names, if it is of u's account, operation and amount,
 // is not used and has not expired by the database's now, and returns it; otherwise it is
 // app.ErrQuoteUnavailable.
@@ -76,9 +109,7 @@ func (s Store) UseQuote(ctx context.Context, entity ids.ID, u app.QuoteUse) (app
 	c := u.Amount.Currency()
 	var document []byte
 	var gmf, exempt int64
-	err := s.q.QueryRow(ctx, `UPDATE pricing.quotes SET used_at = clock_timestamp()
-		WHERE id = $1 AND legal_entity_id = $2 AND account_id = $3 AND operation = $4 AND currency = $5 AND amount_units = $6
-			AND used_at IS NULL AND expires_at > clock_timestamp()
+	err := s.q.QueryRow(ctx, `UPDATE pricing.quotes SET used_at = clock_timestamp() WHERE `+usableQuote+`
 		RETURNING fees, gmf_units, exempt_units, created_at, expires_at`,
 		u.QuoteID, entity, u.AccountID, u.Operation, c.Code(), u.Amount.Units()).Scan(&document, &gmf, &exempt, &q.CreatedAt, &q.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -87,13 +118,8 @@ func (s Store) UseQuote(ctx context.Context, entity ids.ID, u app.QuoteUse) (app
 	if err != nil {
 		return app.Quote{}, fmt.Errorf("use quote %s: %w", u.QuoteID, err)
 	}
-	var stored []storedFee
-	if err := json.Unmarshal(document, &stored); err != nil {
-		return app.Quote{}, fmt.Errorf("stored fees of quote %s: %w", u.QuoteID, err)
-	}
-	q.Fees = make([]domain.Fee, len(stored))
-	for i, f := range stored {
-		q.Fees[i] = domain.Fee{Code: f.Code, Amount: money.New(f.Units, c)}
+	if q.Fees, err = feesFrom(u.QuoteID, document, c); err != nil {
+		return app.Quote{}, err
 	}
 	q.GMF = domain.GMF{Exempt: money.New(exempt, c), Tax: money.New(gmf, c)}
 	return q, nil

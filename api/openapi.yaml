@@ -426,8 +426,9 @@ paths:
         Creates a `compliance.screening_resolution` maker-checker request and answers 202 with it (FR-42). The
         case is resolved when someone else with `compliance.screening.resolve` approves it at
         `POST /v1/approvals/{id}/approval`: `cleared` (not a match) leaves a party in KYC `pending`, and
-        `confirmed` leaves it `rejected`. A cleared payment order holds its amount and charges, priced as it is
-        cleared, and is sent; a confirmed one, or a cleared one whose account no longer has the funds, is no
+        `confirmed` leaves it `rejected`. A cleared payment order holds its amount and charges, its GMF as it is
+        cleared and, if it named a quote, the lower of its fees and the tariff in force (or the quoted ones, as the
+        entity configures), and is sent; a confirmed one, or a cleared one whose account no longer has the funds, is no
         longer active or would go over a limit of its product, is `rejected` with reason `RR04`, `AM04`, `AC06` or
         `AM02` and holds nothing. The case id comes in the `aluna.compliance.screening.pending.v1` event and in
         `GET /v1/screening-cases`. A case that is
@@ -883,7 +884,9 @@ paths:
         Initiates a payment from a deposit account of the entity to a beneficiary at another bank, by account
         number or by key, through a rail (FR-31), and answers 202 with the order. Its beneficiary is screened
         first (FR-42): if screening does not clear it (a possible match, or no answer), the order is
-        `pending_screening` and nothing is held or charged until compliance resolves its case. If it does, the
+        `pending_screening` and nothing is held or charged until compliance resolves its case; it keeps the fees
+        of `quote_id` if it names one, without using it (409 `quote_unavailable` if it is used, expired or of
+        another transfer), so that it is never charged more. If it does, the
         amount and its charges (the fees and the GMF of a transfer, those of `quote_id` if it names one) are held
         on the account and the order is `held`, to be sent. Without funds for all of it it is 422
         `insufficient_funds` and nothing is stored; an amount that would take the account over a limit of its
@@ -1542,7 +1545,7 @@ components:
           enum: [simbreb]
           description: The simulated Bre-B rail, the only one for now
         creditor: {$ref: "#/components/schemas/PaymentParty"}
-        quote_id: {type: string, format: uuid, description: "Quote of this payment (POST /v1/quotes, a transfer); without one it is priced as it is made"}
+        quote_id: {type: string, format: uuid, description: "Quote of this payment (POST /v1/quotes, a transfer); without one it is priced as it is held, when it is cleared if it waits for compliance"}
     PaymentParty:
       type: object
       description: A party at its bank, by account number or by key (a Bre-B "llave"), one of the two.

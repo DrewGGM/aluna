@@ -294,6 +294,24 @@ func move(ctx context.Context, s Movements, l Limiting, m movement) (ledger.Tran
 	return posted, nil
 }
 
+// CountDebit keeps a debit of units from account a, already locked, that another module posts (a payment's hold)
+// within the product's limits on the entity's business date (FR-24), and adds it to the account's counters: a
+// *domain.LimitError if it exceeds one.
+func CountDebit(ctx context.Context, s Movements, l Limiting, a domain.Account, units int64) error {
+	today, err := s.BusinessDate(ctx, a.LegalEntityID)
+	if err != nil {
+		return err
+	}
+	limits, err := limitsOf(ctx, l, a, today)
+	if err != nil {
+		return err
+	}
+	if err := limits.check(debit, units); err != nil {
+		return err
+	}
+	return l.Count(ctx, a.ID, today, units, 0)
+}
+
 // limitsOn are an account's limits on a day and what it used of them before a movement.
 type limitsOn struct {
 	caps domain.Caps

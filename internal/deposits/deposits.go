@@ -168,6 +168,16 @@ func (s *Service) Withdraw(ctx context.Context, tx postgres.Tx, in CashInput) (l
 	return atomically(ctx, tx, func() (ledger.Transaction, error) { return app.Withdraw(ctx, m, m, m, in) })
 }
 
+// CountDebit keeps a debit of amount, in a's currency, from account a, which the caller locked (LockActive), within
+// the limits of its product on the entity's business date (FR-24) and counts it: a payment holds its amount through
+// the ledger, not through a movement of this module. Counters only add: a debit counted for a payment the rail
+// later rejects stays counted. ErrLimitExceeded (a *LimitError) if it exceeds one; ErrMinimumWageMissing,
+// ErrMinimumWageTooLow or ErrSMMLVOutsideCOP as Deposit.
+func (s *Service) CountDebit(ctx context.Context, tx postgres.Tx, a Account, amount money.Amount) error {
+	m := s.movements(tx)
+	return app.CountDebit(ctx, m, m, a, amount.Units())
+}
+
 // Transfer moves, within tx, money between two active accounts of the entity, as Withdraw, within the limits
 // of both; a transfer to the same account is ErrInvalidMovement.
 func (s *Service) Transfer(ctx context.Context, tx postgres.Tx, in TransferInput) (ledger.Transaction, error) {

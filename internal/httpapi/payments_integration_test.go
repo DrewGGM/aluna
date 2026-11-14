@@ -43,12 +43,18 @@ var railSecret = []byte("a secret of the simulated rail, for the tests")
 // 1,000,000 COP.
 func payingWorld(t *testing.T) (depositWorld, gen.DepositAccount) {
 	t.Helper()
+	return payingWorldWith(t, func(w depositWorld) string { return w.savings(t, true) })
+}
+
+// payingWorldWith is payingWorld whose account is of the product that product creates.
+func payingWorldWith(t *testing.T, product func(depositWorld) string) (depositWorld, gen.DepositAccount) {
+	t.Helper()
 	w := newDepositWorld(t)
 	if status := call(t, w.ts, http.MethodPost, "/v1/ledger-accounts",
 		`{"code":"L.CLEARING.SIMBREB","kind":"liability","currency":"COP","balance_mode":"async"}`, nil); status != http.StatusCreated {
 		t.Fatalf("create the clearing account = %d", status)
 	}
-	a := w.opened(t, w.party(t, party.KYCApproved), w.savings(t, true))
+	a := w.opened(t, w.party(t, party.KYCApproved), product(w))
 	expectCreated(t, "deposit", w.move(t, a.Id.String(), "deposits", amountBody(100000000)))
 	return w, a
 }

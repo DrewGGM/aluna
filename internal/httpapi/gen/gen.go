@@ -928,7 +928,7 @@ type PaymentOrder struct {
 	// RailRef The rail's reference to the order, once the rail gives it
 	RailRef *string `json:"rail_ref,omitempty"`
 
-	// Reason Why it was rejected or returned: the rail's reason as it said it, RAIL_REFUSED if the rail did not take it, RR04, AM04 or AC06 if it waited for compliance and a confirmed match, missing funds or an account no longer active stopped it, or SCREENING_EXPIRED if nobody resolved its case in 7 days
+	// Reason Why it was rejected or returned: the rail's reason as it said it, RAIL_REFUSED if the rail did not take it, RR04, AM04, AC06 or AM02 if it waited for compliance and a confirmed match, missing funds, an account no longer active or a limit of its product stopped it, or SCREENING_EXPIRED if nobody resolved its case in 7 days
 	Reason *string            `json:"reason,omitempty"`
 	Status PaymentOrderStatus `json:"status"`
 

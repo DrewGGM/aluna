@@ -111,8 +111,9 @@ func New(l *ledger.Service, d *deposits.Service, c *compliance.Service, p *prici
 // does not clear it the order is pending_screening and nothing moves; if it does, its amount and its charges
 // (by its quote if it names one) are held against the rail's clearing account and the order is queued to be
 // sent (payments.send). An unknown rail, a beneficiary not by one account or one key, or another currency is
-// ErrInvalidOrder; an account that is not active, deposits.ErrAccountNotActive; a reference already used,
-// ErrDuplicatePayment; without funds for all of it, ledger.ErrInsufficientFunds. A rejection leaves nothing in
+// ErrInvalidOrder; an account that is not active, deposits.ErrAccountNotActive; an amount over a limit of its
+// product, deposits.ErrLimitExceeded; a reference already used, ErrDuplicatePayment; without funds for all of it,
+// ledger.ErrInsufficientFunds. A rejection leaves nothing in
 // tx, not even the screening case or the quote's use.
 func (s *Service) Initiate(ctx context.Context, tx postgres.Tx, in InitiateInput) (Order, error) {
 	const savepoint = "payment_initiation"
@@ -174,10 +175,15 @@ func (i initiation) ScreenBeneficiary(ctx context.Context, o app.Order) (bool, e
 	return outcome == compliance.OutcomeClear, err
 }
 
-func (i initiation) Charges(ctx context.Context, a deposits.Account, amount money.Amount, quoteID ids.ID) (pricing.Charges, error) {
-	if _, err := i.s.deposits.LockActive(ctx, i.tx, a.LegalEntityID, a.ID); err != nil { // only to lock and check: a's data do not change
-		return pricing.Charges{}, err
+func (i initiation) Debit(ctx context.Context, a deposits.Account, amount money.Amount) error {
+	locked, err := i.s.deposits.LockActive(ctx, i.tx, a.LegalEntityID, a.ID)
+	if err != nil {
+		return err
 	}
+	return i.s.deposits.CountDebit(ctx, i.tx, locked, amount)
+}
+
+func (i initiation) Charges(ctx context.Context, a deposits.Account, amount money.Amount, quoteID ids.ID) (pricing.Charges, error) {
 	if quoteID == (ids.ID{}) {
 		in, err := i.s.deposits.QuoteInput(ctx, i.tx, a.LegalEntityID, a.ID, pricing.Transfer, amount)
 		if err != nil {

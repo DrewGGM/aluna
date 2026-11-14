@@ -188,6 +188,40 @@ func TestTheLimitsPerOperationAndPerDay(t *testing.T) {
 	}
 }
 
+// TestADebitOfAnotherModuleKeepsWithinTheLimits (FR-24): a debit another module posts (a payment's hold) counts as
+// the account's own: within the day's limit it is counted, over it it is a LimitError and nothing more counts; an
+// account without limits counts it all the same.
+func TestADebitOfAnotherModuleKeepsWithinTheLimits(t *testing.T) {
+	w := newWorld(t)
+	w.vault(t)
+	limited, free := w.limited(t, `{"daily_debits": {"units": 1500}}`), w.limited(t, `{}`)
+	countDebit := func(a deposits.Account, units int64) error {
+		return try(t, func(tx postgres.Tx) error {
+			locked, err := w.deposits.LockActive(t.Context(), tx, w.entity, a.ID)
+			if err != nil {
+				return err
+			}
+			return w.deposits.CountDebit(t.Context(), tx, locked, money.New(units, a.Currency))
+		})
+	}
+
+	if err := countDebit(limited, 1000); err != nil {
+		t.Fatal(err)
+	}
+	expectExceeds(t, "a debit over the day", countDebit(limited, 600), "daily_debits", 1500)
+	if err := countDebit(free, 5000); err != nil {
+		t.Fatal(err)
+	}
+
+	for a, want := range map[ids.ID]int64{limited.ID: 1000, free.ID: 5000} {
+		for period, m := range counters(t, a) {
+			if m.debits != want || m.credits != 0 {
+				t.Errorf("account %s moved %+v in %s, want %d of debits", a, m, period, want)
+			}
+		}
+	}
+}
+
 // TestATransferStaysWithinBothAccountsLimits (FR-24): a transfer is a debit of its origin and a credit of its
 // destination, each within its own product's limits; when one is exceeded, nothing moves.
 func TestATransferStaysWithinBothAccountsLimits(t *testing.T) {

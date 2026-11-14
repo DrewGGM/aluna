@@ -51,10 +51,12 @@ type InitiateInput struct {
 	Creditor                          AccountRef
 }
 
-// funds is what holding an order's funds needs.
+// funds is what holding an order's funds needs, step by step.
 type funds interface {
-	// Charges locks a, which must still be active, and are the fees and GMF of a transfer of amount from it, by
-	// its quote if quoteID names one.
+	// Debit locks a, which must still be active, and counts a debit of amount against its product's limits
+	// (deposits.ErrLimitExceeded if it would exceed one).
+	Debit(ctx context.Context, a deposits.Account, amount money.Amount) error
+	// Charges are the fees and GMF of a transfer of amount from a, by its quote if quoteID names one.
 	Charges(ctx context.Context, a deposits.Account, amount money.Amount, quoteID ids.ID) (pricing.Charges, error)
 	// Hold holds amount on a, already locked, against the clearing account of rail, and returns the hold.
 	Hold(ctx context.Context, a deposits.Account, rail string, amount money.Amount) (ids.ID, error)
@@ -76,8 +78,10 @@ type Initiation interface {
 // beneficiary, the order is pending_screening and nothing moves; if it does, its amount and its charges are
 // held on the account and the order is held, to be sent. The account is locked only after screening, so that a
 // slow vendor does not keep its other movements waiting, and before the charges, in the order deposits locks;
-// Charges checks again that it is active.
-// Without funds for all of it, it is ledger.ErrInsufficientFunds.
+// Debit checks again that it is active.
+// The payment is a debit of the account, so it counts against its product's limits: over one it is
+// deposits.ErrLimitExceeded, checked before the charges and the funds. Without funds for all of it, it is
+// ledger.ErrInsufficientFunds.
 func Initiate(ctx context.Context, p Initiation, in InitiateInput) (Order, error) {
 	a, err := p.DepositAccount(ctx, in.LegalEntityID, in.AccountID)
 	if err != nil {
@@ -160,8 +164,11 @@ func validText(s string, most int) bool {
 	return utf8.ValidString(s) && utf8.RuneCountInString(s) <= most && !strings.ContainsRune(s, 0)
 }
 
-// hold holds o's amount and its charges on a and moves o to held.
+// hold counts o's amount as a debit of a, holds it with its charges on a and moves o to held.
 func hold(ctx context.Context, p funds, a deposits.Account, o *Order, quoteID ids.ID) error {
+	if err := p.Debit(ctx, a, o.Amount); err != nil {
+		return err
+	}
 	charges, err := p.Charges(ctx, a, o.Amount, quoteID)
 	if err != nil {
 		return err

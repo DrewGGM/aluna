@@ -17,6 +17,7 @@ const (
 	ReasonScreeningConfirmed = "RR04" // regulatory reason: compliance confirmed the match
 	ReasonInsufficientFunds  = "AM04" // the account no longer has the amount and its charges
 	ReasonAccountBlocked     = "AC06" // the account is no longer active
+	ReasonLimitExceeded      = "AM02" // the amount would take the account over a limit of its product
 )
 
 // Clearance is what applying compliance's decision on an order needs, within its transaction.
@@ -54,13 +55,15 @@ func ResolveScreening(ctx context.Context, p Clearance, entity, id ids.ID, clear
 }
 
 // HoldRefusal is the reason to reject an order for if err is why its funds could not be held, or "" if it is
-// not: no funds (AM04) or an account no longer active (AC06).
+// not: no funds (AM04), an account no longer active (AC06) or over a limit of its product (AM02).
 func HoldRefusal(err error) string {
 	switch {
 	case errors.Is(err, ledger.ErrInsufficientFunds):
 		return ReasonInsufficientFunds
 	case errors.Is(err, deposits.ErrAccountNotActive):
 		return ReasonAccountBlocked
+	case errors.Is(err, deposits.ErrLimitExceeded):
+		return ReasonLimitExceeded
 	}
 	return ""
 }

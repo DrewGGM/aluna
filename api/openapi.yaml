@@ -427,9 +427,10 @@ paths:
         case is resolved when someone else with `compliance.screening.resolve` approves it at
         `POST /v1/approvals/{id}/approval`: `cleared` (not a match) leaves a party in KYC `pending`, and
         `confirmed` leaves it `rejected`. A cleared payment order holds its amount and charges, priced as it is
-        cleared, and is sent; a confirmed one, or a cleared one whose account no longer has the funds or is no
-        longer active, is `rejected` with reason `RR04`, `AM04` or `AC06` and holds nothing. The case id comes
-        in the `aluna.compliance.screening.pending.v1` event and in `GET /v1/screening-cases`. A case that is
+        cleared, and is sent; a confirmed one, or a cleared one whose account no longer has the funds, is no
+        longer active or would go over a limit of its product, is `rejected` with reason `RR04`, `AM04`, `AC06` or
+        `AM02` and holds nothing. The case id comes in the `aluna.compliance.screening.pending.v1` event and in
+        `GET /v1/screening-cases`. A case that is
         no longer pending is 409 `case_already_resolved` when requesting; when approving, it leaves the
         request `failed`, as does a party that is no longer `pending_screening`.
         Idempotent by `Idempotency-Key`.
@@ -885,7 +886,10 @@ paths:
         `pending_screening` and nothing is held or charged until compliance resolves its case. If it does, the
         amount and its charges (the fees and the GMF of a transfer, those of `quote_id` if it names one) are held
         on the account and the order is `held`, to be sent. Without funds for all of it it is 422
-        `insufficient_funds` and nothing is stored; an account that is not active is 409 `account_not_active`.
+        `insufficient_funds` and nothing is stored; an amount that would take the account over a limit of its
+        product is 422 `limit_exceeded`, checked before the funds: the payment counts as a debit of the day and
+        of the month when it is held, and stays counted if the rail rejects it. An account that is not active is
+        409 `account_not_active`.
         The rail's clearing account (`L.CLEARING.SIMBREB`, in the account's currency) must exist in the entity's
         ledger. Idempotent by `Idempotency-Key`; a retry with the same key after the key store forgot it is 409
         `duplicate_payment`, not a second payment.
@@ -1490,7 +1494,7 @@ components:
         tx_id: {type: string, description: ISO 20022 TxId}
         held: {$ref: "#/components/schemas/Money", description: "What is held on the account: the amount, its fees and its GMF"}
         rail_ref: {type: string, description: "The rail's reference to the order, once the rail gives it"}
-        reason: {type: string, description: "Why it was rejected or returned: the rail's reason as it said it, RAIL_REFUSED if the rail did not take it, RR04, AM04 or AC06 if it waited for compliance and a confirmed match, missing funds or an account no longer active stopped it, or SCREENING_EXPIRED if nobody resolved its case in 7 days"}
+        reason: {type: string, description: "Why it was rejected or returned: the rail's reason as it said it, RAIL_REFUSED if the rail did not take it, RR04, AM04, AC06 or AM02 if it waited for compliance and a confirmed match, missing funds, an account no longer active or a limit of its product stopped it, or SCREENING_EXPIRED if nobody resolved its case in 7 days"}
     RegisterWebhookEndpoint:
       type: object
       required: [url]

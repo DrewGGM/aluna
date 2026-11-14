@@ -216,12 +216,11 @@ llama al proveedor durante 30 s y luego deja pasar una consulta de prueba. Los c
 
 - Restablece el proveedor. El circuito se cierra solo con la primera consulta de prueba que responda.
 - Los casos que quedaron pendientes durante la caída se listan con
-  `GET /v1/screening-cases?status=pending`. Los de parties los resuelve cumplimiento con
-  `POST /v1/screening-cases/{id}/resolution` (maker-checker), y una party resuelta sale de
-  `pending_screening`.
-- Los casos de pagos no se pueden resolver todavía: la aprobación termina `failed`. Una orden
-  `pending_screening` se queda así, sin retener ni cobrar nada, y el cliente la vuelve a iniciar cuando el
-  proveedor responde.
+  `GET /v1/screening-cases?status=pending` y los resuelve cumplimiento con
+  `POST /v1/screening-cases/{id}/resolution` (maker-checker). Una party resuelta sale de
+  `pending_screening`. Una orden de pago despejada retiene sus fondos con los cargos del momento y sale a
+  enviarse; una confirmada, o una despejada cuya cuenta ya no tiene fondos o no está activa, queda `rejected`
+  (`RR04`, `AM04` o `AC06`) sin retener nada.
 
 ## Restauración PITR
 

@@ -206,10 +206,10 @@ Cada evento se escribe en `infra.outbox` en la transacción de su efecto, como C
 | `aluna.deposits.account.dormant.v1` | El job `deposits.accounts.mark_dormant` |
 | `aluna.deposits.interest.capitalized.v1` | El job `deposits.interest.accrue`, en un día de capitalización |
 | `aluna.payments.order.initiated.v1` | `POST /v1/payment-orders` |
-| `aluna.payments.order.held.v1` | `POST /v1/payment-orders` cuando el screening despeja y los fondos quedan retenidos |
+| `aluna.payments.order.held.v1` | `POST /v1/payment-orders` cuando el screening despeja y los fondos quedan retenidos, o la resolución aprobada que despeja una orden que esperaba a cumplimiento |
 | `aluna.payments.order.sent.v1` | El job `payments.send` |
 | `aluna.payments.order.settled.v1` | La notificación del rail que acepta un pago saliente, o una transferencia recibida que se abona |
-| `aluna.payments.order.rejected.v1` | La notificación del rail que rechaza un pago saliente |
+| `aluna.payments.order.rejected.v1` | La notificación del rail que rechaza un pago saliente, el rail que no lo toma, o la resolución de una orden que esperaba a cumplimiento y no puede salir |
 | `aluna.payments.order.suspended.v1` | Una transferencia recibida que va a la cuenta de suspense |
 | `aluna.approvals.request.created.v1` | Todo comando de maker-checker al pedirse |
 | `aluna.approvals.request.approved.v1` | `POST /v1/approvals/{id}/approval` cuando el comando corre (uno que falla no emite) |

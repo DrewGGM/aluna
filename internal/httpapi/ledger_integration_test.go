@@ -93,6 +93,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	if err != nil {
 		t.Fatal(err)
 	}
+	complianceSvc.OnResolved(compliance.CasePayment, paymentSvc.ResolveScreening)
 	requests := approvals.New(policy, events)
 	api := API{
 		LedgerHandlers:         NewLedgerHandlers(ledgerSvc, depositSvc, requests, uow, keys, testPool),

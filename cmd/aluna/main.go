@@ -376,6 +376,7 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 	if err != nil {
 		return httpapi.API{}, err
 	}
+	complianceSvc.OnResolved(compliance.CasePayment, paymentSvc.ResolveScreening)
 	requests := approvals.New(policy, events)
 	return httpapi.API{
 		LedgerHandlers:         httpapi.NewLedgerHandlers(ledgerSvc, depositSvc, requests, uow, keys, pool),

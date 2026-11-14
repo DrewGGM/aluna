@@ -426,9 +426,12 @@ paths:
         Creates a `compliance.screening_resolution` maker-checker request and answers 202 with it (FR-42). The
         case is resolved when someone else with `compliance.screening.resolve` approves it at
         `POST /v1/approvals/{id}/approval`: `cleared` (not a match) leaves a party in KYC `pending`, and
-        `confirmed` leaves it `rejected`. The case id comes in the `aluna.compliance.screening.pending.v1`
-        event. A case that is no longer pending is 409 `case_already_resolved` when requesting; when
-        approving, it leaves the request `failed`, as does a party that is no longer `pending_screening`.
+        `confirmed` leaves it `rejected`. A cleared payment order holds its amount and charges, priced as it is
+        cleared, and is sent; a confirmed one, or a cleared one whose account no longer has the funds or is no
+        longer active, is `rejected` with reason `RR04`, `AM04` or `AC06` and holds nothing. The case id comes
+        in the `aluna.compliance.screening.pending.v1` event and in `GET /v1/screening-cases`. A case that is
+        no longer pending is 409 `case_already_resolved` when requesting; when approving, it leaves the
+        request `failed`, as does a party that is no longer `pending_screening`.
         Idempotent by `Idempotency-Key`.
       x-aluna-permission: compliance.screening.resolve
       parameters:
@@ -1487,7 +1490,7 @@ components:
         tx_id: {type: string, description: ISO 20022 TxId}
         held: {$ref: "#/components/schemas/Money", description: "What is held on the account: the amount, its fees and its GMF"}
         rail_ref: {type: string, description: "The rail's reference to the order, once the rail gives it"}
-        reason: {type: string, description: "Why the rail rejected it, as the rail said it, or RAIL_REFUSED if the rail did not take it"}
+        reason: {type: string, description: "Why it was rejected: the rail's reason as it said it, RAIL_REFUSED if the rail did not take it, or RR04, AM04 or AC06 if it waited for compliance and a confirmed match, missing funds or an account no longer active stopped it"}
     RegisterWebhookEndpoint:
       type: object
       required: [url]

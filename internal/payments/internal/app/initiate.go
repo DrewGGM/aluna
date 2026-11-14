@@ -51,16 +51,21 @@ type InitiateInput struct {
 	Creditor                          AccountRef
 }
 
-// Initiation is what initiating a payment needs, within its transaction.
-type Initiation interface {
-	DepositAccount(ctx context.Context, entity, id ids.ID) (deposits.Account, error)
-	// ScreenBeneficiary reports whether screening cleared o's creditor.
-	ScreenBeneficiary(ctx context.Context, o Order) (cleared bool, err error)
+// funds is what holding an order's funds needs.
+type funds interface {
 	// Charges locks a, which must still be active, and are the fees and GMF of a transfer of amount from it, by
 	// its quote if quoteID names one.
 	Charges(ctx context.Context, a deposits.Account, amount money.Amount, quoteID ids.ID) (pricing.Charges, error)
 	// Hold holds amount on a, already locked, against the clearing account of rail, and returns the hold.
 	Hold(ctx context.Context, a deposits.Account, rail string, amount money.Amount) (ids.ID, error)
+}
+
+// Initiation is what initiating a payment needs, within its transaction.
+type Initiation interface {
+	DepositAccount(ctx context.Context, entity, id ids.ID) (deposits.Account, error)
+	// ScreenBeneficiary reports whether screening cleared o's creditor.
+	ScreenBeneficiary(ctx context.Context, o Order) (cleared bool, err error)
+	funds
 	// Record stores o (ErrDuplicatePayment if its reference was used), publishes it and, if it is held,
 	// queues it to be sent.
 	Record(ctx context.Context, o Order) error
@@ -156,7 +161,7 @@ func validText(s string, most int) bool {
 }
 
 // hold holds o's amount and its charges on a and moves o to held.
-func hold(ctx context.Context, p Initiation, a deposits.Account, o *Order, quoteID ids.ID) error {
+func hold(ctx context.Context, p funds, a deposits.Account, o *Order, quoteID ids.ID) error {
 	charges, err := p.Charges(ctx, a, o.Amount, quoteID)
 	if err != nil {
 		return err

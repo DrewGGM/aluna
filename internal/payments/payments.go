@@ -115,14 +115,15 @@ func New(l *ledger.Service, d *deposits.Service, c *compliance.Service, p *prici
 // ErrDuplicatePayment; without funds for all of it, ledger.ErrInsufficientFunds. A rejection leaves nothing in
 // tx, not even the screening case or the quote's use.
 func (s *Service) Initiate(ctx context.Context, tx postgres.Tx, in InitiateInput) (Order, error) {
-	if _, err := tx.Exec(ctx, "SAVEPOINT payment_initiation"); err != nil {
+	const savepoint = "payment_initiation"
+	if _, err := tx.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
 		return Order{}, fmt.Errorf("payment savepoint: %w", err)
 	}
 	o, err := app.Initiate(ctx, initiation{s: s, tx: tx}, in)
 	if err != nil {
-		return Order{}, undo(ctx, tx, err)
+		return Order{}, undo(ctx, tx, savepoint, err)
 	}
-	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT payment_initiation"); err != nil {
+	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
 		return Order{}, fmt.Errorf("release the payment savepoint: %w", err)
 	}
 	return o, nil
@@ -134,15 +135,23 @@ func (s *Service) Order(ctx context.Context, q postgres.Querier, entity, id ids.
 	return pg.NewStore(q).Outgoing(ctx, entity, id)
 }
 
-// undo rolls tx back to the payment's savepoint, which failed with err, and releases it. If it cannot, it
+// undo rolls tx back to savepoint, after which the payment failed with err, and releases it. If it cannot, it
 // returns that error and not err: the payment may still be in tx, so it must not pass for a clean rejection.
-func undo(ctx context.Context, tx postgres.Tx, err error) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
-	defer cancel()
-	if _, undoErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT payment_initiation; RELEASE SAVEPOINT payment_initiation"); undoErr != nil {
+func undo(ctx context.Context, tx postgres.Tx, savepoint string, err error) error {
+	if undoErr := rollbackTo(ctx, tx, savepoint); undoErr != nil {
 		return fmt.Errorf("undo the payment that failed with %v: %w", err, undoErr) //nolint:errorlint // err must not match: the payment may not be undone
 	}
 	return err
+}
+
+// rollbackTo rolls tx back to savepoint and releases it, even if the request was canceled.
+func rollbackTo(ctx context.Context, tx postgres.Tx, savepoint string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
+	defer cancel()
+	if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint+"; RELEASE SAVEPOINT "+savepoint); err != nil {
+		return fmt.Errorf("roll back to %s: %w", savepoint, err)
+	}
+	return nil
 }
 
 // initiation is app.Initiation within tx.
@@ -229,10 +238,15 @@ func (i initiation) Record(ctx context.Context, o app.Order) error {
 	if o.Status != StatusHeld {
 		return nil
 	}
-	if err := i.s.emit(ctx, i.tx, eventType(StatusHeld), o); err != nil {
+	return i.s.queue(ctx, i.tx, o)
+}
+
+// queue publishes held order o and queues it to be sent (payments.send).
+func (s *Service) queue(ctx context.Context, tx postgres.Tx, o Order) error {
+	if err := s.emit(ctx, tx, eventType(StatusHeld), o); err != nil {
 		return err
 	}
-	if _, err := i.s.jobs.InsertTx(ctx, i.tx.Pgx(), sendArgs{OrderID: o.ID}, nil); err != nil {
+	if _, err := s.jobs.InsertTx(ctx, tx.Pgx(), sendArgs{OrderID: o.ID}, nil); err != nil {
 		return fmt.Errorf("queue payment order %s: %w", o.ID, err)
 	}
 	return nil

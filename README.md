@@ -22,10 +22,9 @@ dinero real. Antes hay que reemplazar cuatro piezas de desarrollo:
   desarrollo, con usuarios y secretos fijos; producción necesita un emisor OIDC real con los claims
   `legal_entity_id` y `roles`.
 
-Límites conocidos: el rol `channel` aún no ve recursos propios (todo le responde 404); los casos de
-screening de pagos no se pueden resolver; las transferencias recibidas por llave van a la cuenta de suspense
-porque no hay directorio de llaves; y los asientos manuales (`POST /v1/transactions`, roles `operator`,
-`finance` y `system`) no pasan por maker-checker.
+Límites conocidos: el rol `channel` aún no ve recursos propios (todo le responde 404); las transferencias
+recibidas por llave van a la cuenta de suspense porque no hay directorio de llaves; y los asientos manuales
+(`POST /v1/transactions`, roles `operator`, `finance` y `system`) no pasan por maker-checker.
 
 | Etapa | Qué entregó |
 |---|---|

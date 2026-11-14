@@ -34,13 +34,9 @@ type fee struct {
 // if it is outgoing, and the rail's reference until the rail gives it. A reference the entity already used is
 // app.ErrDuplicatePayment, and it leaves the transaction usable.
 func (s Store) InsertOrder(ctx context.Context, o app.Order) error {
-	fees := make([]fee, len(o.Fees))
-	for i, f := range o.Fees {
-		fees[i] = fee{Code: f.Code, Units: f.Amount.Units()}
-	}
-	feesJSON, err := json.Marshal(fees)
+	feesJSON, err := feesOf(o)
 	if err != nil {
-		return fmt.Errorf("fees of order %s: %w", o.ID, err)
+		return err
 	}
 	tag, err := s.q.Exec(ctx, `INSERT INTO payments.orders (id, legal_entity_id, account_id, direction, rail, end_to_end_id, instr_id,
 		tx_id, currency, amount_units, creditor_number, creditor_key, status, reason, hold_id, held_units, fees, gmf_units, external_ref,
@@ -58,6 +54,19 @@ func (s Store) InsertOrder(ctx context.Context, o app.Order) error {
 		return app.ErrDuplicatePayment
 	}
 	return nil
+}
+
+// feesOf is o's fees as payments.orders keeps them.
+func feesOf(o app.Order) ([]byte, error) {
+	fees := make([]fee, len(o.Fees))
+	for i, f := range o.Fees {
+		fees[i] = fee{Code: f.Code, Units: f.Amount.Units()}
+	}
+	b, err := json.Marshal(fees)
+	if err != nil {
+		return nil, fmt.Errorf("fees of order %s: %w", o.ID, err)
+	}
+	return b, nil
 }
 
 // orNull is id, or null if it is zero.
@@ -134,6 +143,19 @@ func (s Store) read(ctx context.Context, query string, key any, args ...any) (ap
 	o.Direction, o.Status = domain.Direction(direction), domain.Status(status)
 	o.Amount, o.Held, o.GMF = money.New(amount, c), money.New(held, c), money.New(gmf, c)
 	return o, nil
+}
+
+// HoldOrder stores that o, which waited for compliance, is held: its status, its hold and the charges it covers.
+func (s Store) HoldOrder(ctx context.Context, o app.Order) error {
+	feesJSON, err := feesOf(o)
+	if err != nil {
+		return err
+	}
+	if _, err := s.q.Exec(ctx, `UPDATE payments.orders SET status = $2, hold_id = $3, held_units = $4, fees = $5, gmf_units = $6
+		WHERE id = $1`, o.ID, o.Status, o.HoldID, o.Held.Units(), feesJSON, o.GMF.Units()); err != nil {
+		return fmt.Errorf("hold payment order %s: %w", o.ID, err)
+	}
+	return nil
 }
 
 // UpdateOrder stores where o stands: its status, why it was rejected and the rail's reference.

@@ -83,12 +83,22 @@ type Notification struct {
 	Body   []byte
 }
 
+// ReturnMessage is what the core hands a rail to send a transfer it received back to the bank that sent it, the
+// minimum of an ISO 20022 pacs.004: the transfer's end-to-end id, that bank (its debtor agent), its amount and why.
+type ReturnMessage struct {
+	EndToEndID, DebtorAgent string
+	Amount                  money.Amount
+	Reason                  string
+}
+
 // RailPort is a payment rail (Bre-B, ACH): its adapter speaks its protocol, and the core speaks of messages
 // (architecture §3, anticorruption layer). Send should return when ctx ends, though app.Send does not rely on
-// it, and is ErrRailRefused, wrapped, if the rail did not take the message. Outcome is the outcome n carries,
-// and Transfer the transfer it carries, if the rail sent it, and ErrUnverifiedNotification, wrapped, otherwise.
+// it, and is ErrRailRefused, wrapped, if the rail did not take the message; Return is the same for a return.
+// Outcome is the outcome n carries, and Transfer the transfer it carries, if the rail sent it, and
+// ErrUnverifiedNotification, wrapped, otherwise.
 type RailPort interface {
 	Send(ctx context.Context, msg OutboundMessage) (SendAck, error)
+	Return(ctx context.Context, msg ReturnMessage) error
 	Outcome(n Notification) (RailOutcome, error)
 	Transfer(n Notification) (InboundTransfer, error)
 	Name() string
@@ -98,21 +108,34 @@ type RailPort interface {
 // return when its context ends. After that the outcome is unknown: the rail may still have taken it and
 // notify it later.
 func Send(ctx context.Context, rail RailPort, msg OutboundMessage) (SendAck, error) {
+	return withinRailTimeout(ctx, func(ctx context.Context) (SendAck, error) { return rail.Send(ctx, msg) })
+}
+
+// HandReturn hands msg to rail and waits for it as Send does.
+func HandReturn(ctx context.Context, rail RailPort, msg ReturnMessage) error {
+	_, err := withinRailTimeout(ctx, func(ctx context.Context) (struct{}, error) { return struct{}{}, rail.Return(ctx, msg) })
+	return err
+}
+
+// withinRailTimeout runs call and waits up to sendTimeout for its answer, even if it does not return when its
+// context ends.
+func withinRailTimeout[T any](ctx context.Context, call func(context.Context) (T, error)) (T, error) { //nolint:ireturn // T is the rail's concrete answer (SendAck, or nothing for a return)
 	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
 	type answer struct {
-		ack SendAck
-		err error
+		value T
+		err   error
 	}
 	answered := make(chan answer, 1) // a rail that answers late does not block
 	go func() {
-		ack, err := rail.Send(ctx, msg)
-		answered <- answer{ack, err}
+		value, err := call(ctx)
+		answered <- answer{value, err}
 	}()
 	select {
 	case a := <-answered:
-		return a.ack, a.err
+		return a.value, a.err
 	case <-ctx.Done():
-		return SendAck{}, ctx.Err()
+		var zero T
+		return zero, ctx.Err()
 	}
 }

@@ -260,6 +260,29 @@ func TestASuspenseIsCreditedToItsAccount(t *testing.T) {
 	}
 }
 
+// TestASuspenseGoesBackToItsBank (FR-32): a suspended transfer is returned to its bank for its reason; without a
+// reason, with a blank one, one with spaces around it, one over 35 characters or one out of the rail's set, or for
+// a transfer that is not suspended, it is not.
+func TestASuspenseGoesBackToItsBank(t *testing.T) {
+	initiated, err := NewIncoming(incoming(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := suspendedTransfer(t)
+
+	if err := initiated.ReturnToSender("AC01"); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("returning an initiated transfer = %v, want ErrIllegalTransition", err)
+	}
+	for _, reason := range []string{"", "   ", " AC01", strings.Repeat("x", 36), "AC01\n", "Cuenta inexistente ñ"} {
+		if err := o.ReturnToSender(reason); !errors.Is(err, ErrInvalidOrder) || o.Status != StatusSuspended {
+			t.Fatalf("returning for %q = %v, the order %s, want ErrInvalidOrder and the order still suspended", reason, err, o.Status)
+		}
+	}
+	if err := o.ReturnToSender("AC01"); err != nil || o.Status != StatusReturned || o.Reason != "AC01" {
+		t.Fatalf("returning a suspended transfer = %v, %s for %q, want returned for AC01", err, o.Status, o.Reason)
+	}
+}
+
 // TestASuspenseNeedsAnAccountInItsCurrency (FR-32): without an account, or to one in another currency, a suspense is
 // not credited and stays suspended.
 func TestASuspenseNeedsAnAccountInItsCurrency(t *testing.T) {

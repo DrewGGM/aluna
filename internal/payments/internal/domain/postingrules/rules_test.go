@@ -107,6 +107,19 @@ func TestTheChargesBalance(t *testing.T) {
 	})
 }
 
+// TestASuspenseGoesBackThroughTheClearingAccount (FR-32): returning a transfer held in suspense to its bank debits
+// the rail's suspense account and credits its clearing account.
+func TestASuspenseGoesBackThroughTheClearingAccount(t *testing.T) {
+	suspense, clearing := ids.New(), ids.New()
+
+	entries, err := ReturnToSender(cop(t, 30000000), suspense, clearing)
+
+	want := []ledger.EntryInput{{AccountID: suspense, Amount: cop(t, 30000000)}, {AccountID: clearing, Amount: cop(t, -30000000)}}
+	if err != nil || !slices.Equal(entries, want) {
+		t.Fatalf("a return from suspense = %+v (%v), want %+v", entries, err, want)
+	}
+}
+
 // TestASuspenseIsCreditedOutOfTheSuspenseAccount (FR-32): crediting a transfer held in suspense debits the rail's
 // suspense account and credits the customer's.
 func TestASuspenseIsCreditedOutOfTheSuspenseAccount(t *testing.T) {

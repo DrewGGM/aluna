@@ -116,6 +116,11 @@ func (r storedResponse) VisitCreateDepositResponse(w http.ResponseWriter) error 
 // VisitCreateWithdrawalResponse writes the stored response of POST /v1/deposit-accounts/{id}/withdrawals.
 func (r storedResponse) VisitCreateWithdrawalResponse(w http.ResponseWriter) error { return r.write(w) }
 
+// VisitReturnSuspendedTransferResponse writes the stored response of POST /v1/payment-orders/{id}/return-to-sender.
+func (r storedResponse) VisitReturnSuspendedTransferResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitCreditSuspendedTransferResponse writes the stored response of POST /v1/payment-orders/{id}/credit.
 func (r storedResponse) VisitCreditSuspendedTransferResponse(w http.ResponseWriter) error {
 	return r.write(w)

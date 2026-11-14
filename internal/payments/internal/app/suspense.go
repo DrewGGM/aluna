@@ -13,7 +13,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/payments/internal/domain/postingrules"
 )
 
-// ErrNotSuspended means an order that is not a transfer held in suspense: there is nothing to credit.
+// ErrNotSuspended means an order that is not a transfer held in suspense: there is nothing to credit or return.
 var ErrNotSuspended = errors.New("the order is not a transfer held in suspense")
 
 // orderLocker locks orders.
@@ -31,6 +31,43 @@ type Crediting interface {
 	// Settle posts entries, o's credit from suspense, made by actor, on the entity's business date, and stores and
 	// publishes o.
 	Settle(ctx context.Context, o Order, actor string, entries []ledger.EntryInput) error
+}
+
+// ReturningToSender is what returning a transfer held in suspense to its bank needs, within its transaction.
+type ReturningToSender interface {
+	orderLocker
+	// RailAccounts are rail's clearing and suspense accounts in the entity, in currency c.
+	RailAccounts(ctx context.Context, entity ids.ID, rail string, c money.Currency) (clearing, suspense ids.ID, err error)
+	// Book posts entries, o's return to its bank, made by actor, on the entity's business date, stores and
+	// publishes o, and queues the return to the rail.
+	Book(ctx context.Context, o Order, actor string, entries []ledger.EntryInput) error
+}
+
+// ReturnSuspended returns transfer id of entity, held in suspense and of no customer of it, to the bank that sent
+// it, for reason, by actor (FR-32): its amount moves from the rail's suspense account back to its clearing account,
+// the order is returned, and the return is handed to the rail apart from the transaction (ReturnMessageOf).
+func ReturnSuspended(ctx context.Context, p ReturningToSender, entity, id ids.ID, reason, actor string) (Order, error) {
+	o, err := LockSuspended(ctx, p, entity, id)
+	if err != nil {
+		return Order{}, err
+	}
+	clearing, suspense, err := p.RailAccounts(ctx, entity, o.Rail, o.Amount.Currency())
+	if err != nil {
+		return Order{}, err
+	}
+	if err := o.ReturnToSender(reason); err != nil {
+		return Order{}, err
+	}
+	entries, err := postingrules.ReturnToSender(o.Amount, suspense, clearing)
+	if err != nil {
+		return Order{}, err
+	}
+	return o, p.Book(ctx, o, actor, entries)
+}
+
+// ReturnMessageOf is the return to its bank of o, a transfer received and returned.
+func ReturnMessageOf(o Order) ReturnMessage {
+	return ReturnMessage{EndToEndID: o.EndToEndID, DebtorAgent: o.DebtorAgent, Amount: o.Amount, Reason: o.Reason}
 }
 
 // LockSuspended locks order id of entity if it is a transfer held in suspense: ErrOrderNotFound if the entity has

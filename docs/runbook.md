@@ -85,8 +85,23 @@ su sujeto y la diferencia en unidades menores. Los controles corren cada 15 min:
    es, abónala con `POST /v1/payment-orders/{id}/credit` y la cuenta destino (maker-checker): el monto pasa
    de la suspense a la cuenta, que debe estar activa y dentro de los límites de su producto. Antes revisa que
    nadie la haya movido ya con un asiento manual o con la reversa de su asiento: la orden seguiría `suspended`.
-   Una devolución de un pago saliente que quedó en suspense no es una transferencia recibida (responde 409
-   `not_in_suspense`): se abona con un asiento manual.
+   Si no es de ningún cliente, devuélvela al banco que la mandó con
+   `POST /v1/payment-orders/{id}/return-to-sender` y su razón (por ejemplo `AC01`, maker-checker): el monto
+   vuelve de la suspense a la clearing y el job `payments.return` la entrega al rail. Si el rail no la toma o no
+   responde, el job se cancela sin reintentar (el rail pudo haberla recibido) y el extracto de ese día abre un
+   `order_without_line` saliente con el id de la transferencia: confirma con el rail si la recibió. Si no la
+   recibió, entrégala otra vez como dueño de las tablas, reencolando su job si River todavía lo guarda (borra los
+   cancelados al día) o, si no, con uno nuevo:
+
+   ```sql
+   UPDATE infra.river_job SET state = 'available', finalized_at = NULL, max_attempts = attempt + 1, scheduled_at = now()
+   WHERE kind = 'payments.return' AND args ->> 'order_id' = $1 AND state = 'cancelled';
+
+   INSERT INTO infra.river_job (kind, queue, args, max_attempts) VALUES ('payments.return', 'payments', jsonb_build_object('order_id', $1), 25);
+   ```
+
+   Una devolución de un pago saliente que quedó en suspense no es una transferencia
+   recibida (responde 409 `not_in_suspense`): se abona con un asiento manual.
 
 Hoy nada liquida la cuenta clearing del rail: el primer pago saliente abre `rail_accounts_at_zero` en
 cuanto cierra su día y lo reabre en cada corrida hasta que se liquide. Todo break abierto de la entidad
@@ -276,12 +291,13 @@ se restauró no cuenta: el ensayo corre cada trimestre.
      bloques salta adelante (lo usual), `audit verify` los lee como bloques anclados y borrados; si no
      salta, la base reusa un id ya anclado y el sellado se detiene. En los dos casos la cadena se rompe.
    - Antes de arrancar un worker, revisa los pagos que esperan salir: la base restaurada no sabe qué
-     recibió el rail después del instante, y el worker los enviaría otra vez. Concilia cada orden contra el
+     recibió el rail después del instante, y el worker los enviaría otra vez. Lo mismo vale para las
+     devoluciones al banco de origen que esperan salir (`payments.return`). Concilia cada orden contra el
      extracto del rail y cancela, como dueño de las tablas, el envío de las que el rail ya recibió:
 
      ```sql
-     SELECT id, args, state, scheduled_at FROM infra.river_job
-     WHERE kind = 'payments.send' AND state IN ('available', 'scheduled', 'retryable');
+     SELECT id, kind, args, state, scheduled_at FROM infra.river_job
+     WHERE kind IN ('payments.send', 'payments.return') AND state IN ('available', 'scheduled', 'retryable');
 
      UPDATE infra.river_job SET state = 'cancelled', finalized_at = now()
      WHERE id = $1 AND state IN ('available', 'scheduled', 'retryable');

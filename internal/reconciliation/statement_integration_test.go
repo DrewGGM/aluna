@@ -40,8 +40,9 @@ func (w world) order(t *testing.T, direction, e2e string, units int64, status st
 		}
 		id := ids.New().String()[:35]
 		_, err := tx.Exec(t.Context(), `INSERT INTO payments.orders (id, legal_entity_id, account_id, direction, rail, end_to_end_id, instr_id,
-				tx_id, currency, amount_units, creditor_number, status, external_ref, hold_id, debtor_agent, created_at)
-			VALUES ($1, $2, $3, $4, 'simbreb', $5, 'INSTR', 'TX', 'COP', $6, '123', $7, $8, $9, $10, $11)`,
+				tx_id, currency, amount_units, creditor_number, status, external_ref, hold_id, debtor_agent, created_at, returned_at)
+			VALUES ($1, $2, $3, $4, 'simbreb', $5, 'INSTR', 'TX', 'COP', $6, '123', $7, $8, $9, $10, $11,
+				CASE WHEN $7 = 'returned' THEN $11::timestamptz END)`,
 			ids.New(), w.entity, account, direction, e2e, units, status, id, hold, agent, at)
 		return err
 	})
@@ -150,6 +151,26 @@ func TestAReturnedPaymentWasSettled(t *testing.T) {
 		{"incoming/" + w.tag("SETTLED"), "line_without_order", "finance-a", 30_00, true},
 		{"outgoing/" + w.tag("UNREPORTED"), "order_without_line", "finance-a", -20_00, true},
 	}
+	if found := w.statementBreaks(t); !slices.Equal(found, want) {
+		t.Fatalf("breaks = %+v, want %+v", found, want)
+	}
+}
+
+// TestATransferReturnedToItsBankMatches (FR-32, FR-34): a transfer received and sent back to its bank shows as the
+// incoming line it came in and the outgoing line it went back: both match. The rail should report the return on the
+// day it was returned: without its line, the rail never sent it back.
+func TestATransferReturnedToItsBankMatches(t *testing.T) {
+	w := newWorld(t)
+	w.order(t, "incoming", w.tag("RETURNED"), 40_00, "returned", inTheMorning)
+	w.order(t, "incoming", w.tag("UNSENT"), 50_00, "returned", inTheMorning)
+
+	got := w.imported(t, w.statement(w.line(w.tag("RETURNED"), reconciliation.Incoming, 40_00), w.line(w.tag("RETURNED"), reconciliation.Outgoing, 40_00),
+		w.line(w.tag("UNSENT"), reconciliation.Incoming, 50_00)))
+
+	if want := (reconciliation.ImportResult{ID: got.ID, Lines: 3, Matched: 3, Exceptions: 1}); got != want {
+		t.Errorf("result = %+v, want %+v", got, want)
+	}
+	want := []statementBreak{{"outgoing/" + w.tag("UNSENT"), "order_without_line", "finance-a", -50_00, true}}
 	if found := w.statementBreaks(t); !slices.Equal(found, want) {
 		t.Fatalf("breaks = %+v, want %+v", found, want)
 	}

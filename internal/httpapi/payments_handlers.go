@@ -26,17 +26,21 @@ type PaymentHandlers struct {
 	reader    postgres.Querier
 }
 
-// The request kind of crediting a transfer held in suspense, and who decides it (config/roles.yaml).
+// The request kinds of resolving a transfer held in suspense, crediting it or returning it to its bank, and who
+// decides each (config/roles.yaml).
 const (
 	suspenseCreditKind       = "payments.suspense_credit"
 	suspenseCreditPermission = "payments.suspense.credit"
+	suspenseReturnKind       = "payments.return_to_sender"
+	suspenseReturnPermission = "payments.suspense.return"
 )
 
-// NewPaymentHandlers creates the payment handlers and registers in a the request kind of crediting a transfer held
-// in suspense, which goes through maker-checker; keys stores the responses of the commands with Idempotency-Key,
-// and reader serves the reads outside a transaction.
+// NewPaymentHandlers creates the payment handlers and registers in a the request kinds of crediting a transfer held
+// in suspense and of returning it to its bank, which go through maker-checker; keys stores the responses of the
+// commands with Idempotency-Key, and reader serves the reads outside a transaction.
 func NewPaymentHandlers(p *payments.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *PaymentHandlers {
 	a.RegisterKind(suspenseCreditKind, suspenseCreditPermission, creditOnApproval(p))
+	a.RegisterKind(suspenseReturnKind, suspenseReturnPermission, returnOnApproval(p))
 	return &PaymentHandlers{payments: p, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
 }
 
@@ -79,6 +83,64 @@ func (h *PaymentHandlers) CreditSuspendedTransfer(ctx context.Context, req gen.C
 		return nil, err
 	}
 	return resp, nil
+}
+
+// suspenseReturn is the payload of a request to return a transfer held in suspense to its bank, kept as evidence,
+// and what approving it returns: which transfer, why it goes back, and what the checker approves (its amount, its
+// end-to-end id and, as for a credit, why it went to suspense).
+type suspenseReturn struct {
+	OrderID      ids.ID    `json:"order_id"`
+	ReturnReason string    `json:"return_reason"`
+	Amount       gen.Money `json:"amount"`
+	EndToEndID   string    `json:"end_to_end_id"`
+	Reason       string    `json:"reason"`
+}
+
+// ReturnSuspendedTransfer requests the return of a transfer of the token's entity held in suspense to the bank that
+// sent it: a payments.return_to_sender request until another person approves it (FR-32, FR-39), once per
+// Idempotency-Key. An order that is not a transfer in suspense, or a reason a rail cannot carry, is rejected when
+// requested.
+func (h *PaymentHandlers) ReturnSuspendedTransfer(ctx context.Context, req gen.ReturnSuspendedTransferRequestObject) (gen.ReturnSuspendedTransferResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := ids.ID(req.Id)
+	op := resourceOperation("payment-orders", id, "return-to-sender", http.StatusAccepted)
+	noteTargets(ctx, op.targets) // before validating the body: its rejection also names the order
+	if err := payments.CheckReturnReason(req.Body.Reason); err != nil {
+		return nil, err
+	}
+	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		o, err := h.payments.Suspended(ctx, tx, p.LegalEntityID, id)
+		if err != nil {
+			return nil, err
+		}
+		payload := suspenseReturn{
+			OrderID: id, ReturnReason: req.Body.Reason, Amount: moneyJSON(o.Amount), EndToEndID: o.EndToEndID, Reason: o.Reason,
+		}
+		requested, err := h.approvals.Request(ctx, tx, suspenseReturnKind, payload, p)
+		if err != nil {
+			return nil, err
+		}
+		return toApprovalJSON(requested), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// returnOnApproval is the Executor of suspenseReturnKind: it returns the transfer to its bank in the approver's
+// entity, with the approver as who made it. One no longer in suspense, or a reason the rail cannot carry, leaves the
+// request failed.
+func returnOnApproval(s *payments.Service) approvals.Executor {
+	return onApproval("suspense return", func(ctx context.Context, tx postgres.Tx, r suspenseReturn, checker access.Principal) (suspenseReturn, error) {
+		if _, err := s.ReturnSuspended(ctx, tx, checker.LegalEntityID, r.OrderID, r.ReturnReason, checker.Subject); err != nil {
+			return suspenseReturn{}, err
+		}
+		return r, nil
+	})
 }
 
 // creditOnApproval is the Executor of suspenseCreditKind: it credits the transfer in the approver's entity, with the

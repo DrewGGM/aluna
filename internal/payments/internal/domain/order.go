@@ -27,8 +27,8 @@ const (
 // Status is where an order stands (architecture §5, outgoing payment order).
 type Status string
 
-// Statuses. An outgoing order ends settled, rejected or returned; an incoming one, settled (credited) or
-// suspended.
+// Statuses. An outgoing order ends settled, rejected or returned; an incoming one, settled (credited), suspended
+// or, from suspense, returned.
 const (
 	StatusInitiated        Status = "initiated"
 	StatusScreening        Status = "screening"
@@ -37,7 +37,7 @@ const (
 	StatusSent             Status = "sent"              // handed to the rail
 	StatusSettled          Status = "settled"
 	StatusRejected         Status = "rejected"
-	StatusReturned         Status = "returned"  // settled and then returned by the beneficiary's bank
+	StatusReturned         Status = "returned"  // outgoing: returned by the beneficiary's bank; incoming: sent back to its bank
 	StatusSuspended        Status = "suspended" // received for no account it can credit: held in the rail's suspense account
 )
 
@@ -206,6 +206,29 @@ func (o *Order) Reject(reason string) error {
 		return err
 	}
 	o.Reason = reason
+	return nil
+}
+
+// ReturnToSender moves a suspended incoming order to returned, for reason: it belongs to no customer of the entity
+// and goes back to the bank that sent it. A reason CheckReturnReason refuses is ErrInvalidOrder.
+func (o *Order) ReturnToSender(reason string) error {
+	if err := CheckReturnReason(reason); err != nil {
+		return err
+	}
+	if err := o.move(Incoming, StatusReturned, StatusSuspended); err != nil {
+		return err
+	}
+	o.Reason = reason
+	return nil
+}
+
+// CheckReturnReason is ErrInvalidOrder, wrapped, unless reason is what Bre-B carries as the reason of a return to
+// the sender: an ISO 20022 code, such as AC01, or a short text of its restricted set (validISOID), without spaces
+// around it. A reason the rail refuses would leave the money returned in the books and not sent.
+func CheckReturnReason(reason string) error {
+	if strings.TrimSpace(reason) != reason || !validISOID(reason) {
+		return fmt.Errorf("%w: a return needs its reason, up to 35 letters, digits or /-?:().,'+ and spaces", ErrInvalidOrder)
+	}
 	return nil
 }
 

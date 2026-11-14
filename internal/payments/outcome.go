@@ -27,6 +27,8 @@ type (
 	Rail = app.RailPort
 	// OutboundMessage is what the core hands a rail of a credit transfer.
 	OutboundMessage = app.OutboundMessage
+	// ReturnMessage is what the core hands a rail to send a transfer it received back to its bank.
+	ReturnMessage = app.ReturnMessage
 	// SendAck is a rail taking a message.
 	SendAck = app.SendAck
 	// RailOutcome is a rail's word on how a message ended.
@@ -53,8 +55,8 @@ var (
 	ErrInvalidNotification = app.ErrInvalidNotification
 	// ErrOutcomeConflict means the rail notified an order that already took another outcome.
 	ErrOutcomeConflict = app.ErrOutcomeConflict
-	// ErrNoAnswer means the rail did not answer whether it took an order: the order stays sent, with its hold,
-	// until reconciliation (FR-34) learns its outcome.
+	// ErrNoAnswer means the rail did not answer whether it took an order or a return: a payment stays sent, with its
+	// hold, and a transfer returned to its bank stays returned, until reconciliation (FR-34) learns what the rail did.
 	ErrNoAnswer = errors.New("the rail did not answer")
 )
 
@@ -128,10 +130,11 @@ func (r returns) Refund(ctx context.Context, o app.Order, code string, entries [
 	return r.postToday(ctx, o, code, "return", o.Rail, channelRail, entries)
 }
 
-// AddWorkers registers in w the worker of payments.send, which sends within uow. A send without the rail's
-// answer is canceled, not retried: the rail may have taken it, and reconciliation finds out.
+// AddWorkers registers in w the workers of payments.send and payments.return, which work within uow. A send without
+// the rail's answer is canceled, not retried: the rail may have taken it, and reconciliation finds out.
 func (s *Service) AddWorkers(w *river.Workers, uow *postgres.UnitOfWork) {
 	river.AddWorker(w, &sendWorker{s: s, uow: uow})
+	river.AddWorker(w, &returnWorker{s: s, uow: uow})
 }
 
 // sendArgs is the job that sends a held order through its rail (Send).

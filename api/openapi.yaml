@@ -970,6 +970,42 @@ paths:
         "413": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/payment-orders/{id}/return-to-sender:
+    post:
+      operationId: returnSuspendedTransfer
+      summary: Request the return of a transfer held in suspense to the bank that sent it
+      description: >-
+        When a transfer held in suspense belongs to no customer of the entity, this creates a
+        `payments.return_to_sender` maker-checker request to send it back to the bank that sent it, for `reason` (an
+        ISO 20022 return reason, such as AC01 for an account that does not exist), and answers 202 with it. A reason
+        that is not up to 35 letters, digits or /-?:().,'+ and inner spaces is 422 `invalid_payment_order`. When
+        another person with `payments.suspense.return` approves it at `POST /v1/approvals/{id}/approval`, the amount
+        moves from the rail's suspense account back to its clearing account, the order is `returned` for that reason,
+        and the return is handed to the rail. An order of another entity or unknown is 404; one that is not a
+        transfer in suspense, 409 `not_in_suspense`. Idempotent by `Idempotency-Key`.
+      x-aluna-permission: payments.suspense.return
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SuspenseReturn"}
+            example:
+              reason: AC01
+      responses:
+        "202":
+          description: Return request created, pending approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/cuif-mappings:
     post:
       operationId: requestCuifMappingsLoad
@@ -1603,6 +1639,11 @@ components:
       required: [reason]
       properties:
         reason: {type: string, minLength: 1}
+    SuspenseReturn:
+      type: object
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 35, description: "Why it goes back: an ISO 20022 return reason, such as AC01"}
     SuspenseCredit:
       type: object
       required: [account_id]

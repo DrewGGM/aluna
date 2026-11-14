@@ -198,7 +198,7 @@ var problems = []struct {
 	// account is a 500, which is not stored with the Idempotency-Key, and the request can be retried once the
 	// account exists
 	{payments.ErrDuplicatePayment, conflict("duplicate_payment", "A payment with that reference was already made")},
-	{payments.ErrInvalidOrder, unprocessable("invalid_payment_order", "The payment is in another currency than its account, through an unknown rail, without a reference, or its beneficiary is not one account of up to 64 characters or one key of up to 128")},
+	{payments.ErrInvalidOrder, unprocessable("invalid_payment_order", "The payment is in another currency than its account, through an unknown rail, without a reference, or its beneficiary is not one account of up to 64 characters or one key of up to 128; or the reason of a return to its bank is not up to 35 letters, digits or /-?:().,'+ and spaces")},
 	{payments.ErrUnverifiedNotification, Problem{
 		Status: http.StatusUnauthorized, Code: "invalid_signature", Title: "The rail did not sign the notification in the last 5 minutes",
 	}},

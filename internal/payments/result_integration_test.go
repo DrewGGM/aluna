@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,13 +36,33 @@ import (
 var railSecret = []byte("a secret of the simulated rail, for the tests")
 
 // testRail is the simulated rail, notifying the test. If answer is set, the rail gives it instead of taking a
-// message; if outcome is set, the core reads that instead of the notification. sends counts the messages.
+// message or a return; if outcome is set, the core reads that instead of the notification. sends counts the
+// messages, and returned keeps the returns.
 type testRail struct {
 	payments.Rail
 	notified chan payments.Notification
 	answer   func() error
 	outcome  func(payments.Notification) (payments.RailOutcome, error)
 	sends    atomic.Int32
+	mu       sync.Mutex
+	returned []payments.ReturnMessage
+}
+
+func (r *testRail) Return(_ context.Context, msg payments.ReturnMessage) error {
+	if r.answer != nil {
+		return r.answer()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.returned = append(r.returned, msg)
+	return nil
+}
+
+// returns are the returns the core handed the rail.
+func (r *testRail) returns() []payments.ReturnMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.returned)
 }
 
 // newTestRail is the simulated rail notifying a test server, which passes each notification to the test.

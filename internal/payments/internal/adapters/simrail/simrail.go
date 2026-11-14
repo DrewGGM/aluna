@@ -107,6 +107,21 @@ func (s *Simulator) Send(ctx context.Context, msg app.OutboundMessage) (app.Send
 	}
 }
 
+// Return takes msg, a transfer sent back to its bank: one with an end-to-end id, a positive amount, the bank to
+// send it to and a reason. Otherwise it is app.ErrRailRefused. A return has no outcome to notify.
+func (s *Simulator) Return(ctx context.Context, msg app.ReturnMessage) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	switch {
+	case msg.EndToEndID == "" || msg.DebtorAgent == "" || msg.Reason == "":
+		return fmt.Errorf("%w: a return needs the end-to-end id, the bank and the reason", app.ErrRailRefused)
+	case msg.Amount.Sign() <= 0:
+		return fmt.Errorf("%w: the amount must be positive", app.ErrRailRefused)
+	}
+	return nil
+}
+
 // check reports whether the rail takes msg: an end-to-end id, a positive amount, and a debtor and a creditor
 // each by account or by key. Otherwise it is app.ErrRailRefused.
 func check(msg app.OutboundMessage) error {

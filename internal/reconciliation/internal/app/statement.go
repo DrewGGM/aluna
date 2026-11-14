@@ -90,8 +90,9 @@ type Importing interface {
 	// RecordStatement stores s: ErrDuplicateStatement if the entity already imported it.
 	RecordStatement(ctx context.Context, s Statement) error
 	// OrdersOf are the orders of s's rail with the id of one of its lines, and those it should report, always in
-	// the same order. A returned outgoing payment comes back also as its return: incoming, of its end-to-end id and
-	// amount, settled and never expected.
+	// the same order. A returned order comes back also as its return, the other way, of its end-to-end id and amount,
+	// and settled: that of an outgoing payment, incoming and never expected; that of a transfer returned to its bank,
+	// outgoing and expected on the day it was returned.
 	OrdersOf(ctx context.Context, s Statement) ([]Order, error)
 }
 

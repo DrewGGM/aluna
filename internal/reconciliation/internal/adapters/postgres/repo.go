@@ -205,10 +205,11 @@ func (s Store) RecordStatement(ctx context.Context, st app.Statement) error {
 }
 
 // OrdersOf are the orders of st's rail with the id of one of its lines, of any day, and those of st's day the
-// rail should report: the ones that went out or came in. A returned payment is also its return, incoming with the
-// payment's end-to-end id and amount and already booked, so a line of the return pairs it on any day: the order
-// does not keep the day of the return. A day is one of America/Bogota, as the rail's. They come by id and
-// direction (a payment and its return share the id), so that the same import pairs the same way.
+// rail should report: the ones that went out or came in. A returned order is also its return, the other way and with
+// its end-to-end id and amount, already booked: a payment returned by the beneficiary's bank comes back incoming, and
+// a line of it pairs it on any day; a transfer returned to its bank goes out, and the rail should report it on the day
+// it was returned. A day is one of America/Bogota, as the rail's. They come by id and direction (a payment and its
+// return share the id), so that the same import pairs the same way.
 func (s Store) OrdersOf(ctx context.Context, st app.Statement) ([]app.Order, error) {
 	e2e := make([]string, len(st.Lines))
 	for i, l := range st.Lines {
@@ -220,8 +221,10 @@ func (s Store) OrdersOf(ctx context.Context, st app.Statement) ([]app.Order, err
 				status IN ('sent', 'settled', 'suspended', 'returned') AS moved, (created_at AT TIME ZONE 'America/Bogota')::date = $3 AS of_the_day
 			FROM payments.orders WHERE legal_entity_id = $1 AND rail = $2
 			UNION ALL
-			SELECT id, 'incoming' AS direction, end_to_end_id, currency, amount_units, true AS settled, false AS moved, false AS of_the_day
-			FROM payments.orders WHERE legal_entity_id = $1 AND rail = $2 AND direction = 'outgoing' AND status = 'returned') o
+			SELECT id, CASE direction WHEN 'outgoing' THEN 'incoming' ELSE 'outgoing' END AS direction, end_to_end_id, currency, amount_units,
+				true AS settled, direction = 'incoming' AS moved,
+				coalesce((returned_at AT TIME ZONE 'America/Bogota')::date = $3, false) AS of_the_day
+			FROM payments.orders WHERE legal_entity_id = $1 AND rail = $2 AND status = 'returned') o
 		WHERE end_to_end_id = ANY($4) OR (moved AND of_the_day)
 		ORDER BY id, direction`, st.LegalEntityID, st.Rail, st.Date, e2e)
 	if err != nil {

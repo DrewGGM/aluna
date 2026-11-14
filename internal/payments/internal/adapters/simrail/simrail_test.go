@@ -168,6 +168,30 @@ func TestAnAmountEndingIn07IsReturned(t *testing.T) {
 	}
 }
 
+// TestTheRailTakesAReturn (FR-32): the rail takes a return with its end-to-end id, its bank, its reason and a
+// positive amount, and refuses one without them.
+func TestTheRailTakesAReturn(t *testing.T) {
+	ts, _ := receiver(t)
+	rail := simulator(ts, discard())
+	good := app.ReturnMessage{EndToEndID: "BANKX1", DebtorAgent: "BANKXCOBB", Amount: message(t, 300000, 1).Amount, Reason: "AC01"}
+
+	if err := rail.Return(t.Context(), good); err != nil {
+		t.Fatalf("a return = %v, want it taken", err)
+	}
+	for name, change := range map[string]func(*app.ReturnMessage){
+		"without its end-to-end id": func(m *app.ReturnMessage) { m.EndToEndID = "" },
+		"without its bank":          func(m *app.ReturnMessage) { m.DebtorAgent = "" },
+		"without its reason":        func(m *app.ReturnMessage) { m.Reason = "" },
+		"of nothing":                func(m *app.ReturnMessage) { m.Amount = money.New(0, m.Amount.Currency()) },
+	} {
+		bad := good
+		change(&bad)
+		if err := rail.Return(t.Context(), bad); !errors.Is(err, app.ErrRailRefused) {
+			t.Errorf("a return %s = %v, want ErrRailRefused", name, err)
+		}
+	}
+}
+
 // TestAnAmountEndingIn99IsSlow (FR-31): the rail takes a message of an amount ending in 99 pesos after its
 // delay (over 20 seconds) and notifies its outcome then. A sender that stops waiting gets its context's error,
 // and the notification still comes, after the delay: until then the sender does not know the outcome.

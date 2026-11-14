@@ -615,6 +615,9 @@ func TestTheDatabaseKeepsTheOrders(t *testing.T) {
 		"a held order back to pending screening": {
 			asOwner(t, `UPDATE payments.orders SET status = 'pending_screening' WHERE id = $1`, o.ID), "23514 orders_pending_holds_nothing",
 		},
+		"an outgoing order that changes its account": {
+			asOwner(t, `UPDATE payments.orders SET account_id = gen_random_uuid() WHERE id = $1`, o.ID), "2F003 ",
+		},
 	}
 	for name, tc := range cases {
 		if got := sqlState(tc.err); got != tc.want {

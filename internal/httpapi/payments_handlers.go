@@ -9,6 +9,8 @@ import (
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
+	"github.com/DrewGGM/aluna/internal/access"
+	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -18,15 +20,77 @@ import (
 
 // PaymentHandlers implements the contract's payment order operations (api/openapi.yaml).
 type PaymentHandlers struct {
-	payments *payments.Service
-	commands commands
-	reader   postgres.Querier
+	payments  *payments.Service
+	approvals *approvals.Service
+	commands  commands
+	reader    postgres.Querier
 }
 
-// NewPaymentHandlers creates the payment handlers; keys stores the responses of the commands with
-// Idempotency-Key, and reader serves the reads outside a transaction.
-func NewPaymentHandlers(p *payments.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *PaymentHandlers {
-	return &PaymentHandlers{payments: p, commands: commands{uow: uow, keys: keys}, reader: reader}
+// The request kind of crediting a transfer held in suspense, and who decides it (config/roles.yaml).
+const (
+	suspenseCreditKind       = "payments.suspense_credit"
+	suspenseCreditPermission = "payments.suspense.credit"
+)
+
+// NewPaymentHandlers creates the payment handlers and registers in a the request kind of crediting a transfer held
+// in suspense, which goes through maker-checker; keys stores the responses of the commands with Idempotency-Key,
+// and reader serves the reads outside a transaction.
+func NewPaymentHandlers(p *payments.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *PaymentHandlers {
+	a.RegisterKind(suspenseCreditKind, suspenseCreditPermission, creditOnApproval(p))
+	return &PaymentHandlers{payments: p, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
+}
+
+// suspenseCredit is the payload of a request to credit a transfer held in suspense, kept as evidence, and what
+// approving it returns: which transfer, the account it is credited to, and what the checker approves (its amount,
+// its end-to-end id and why it went to suspense), since a transfer received is not read through the API.
+type suspenseCredit struct {
+	OrderID    ids.ID    `json:"order_id"`
+	AccountID  ids.ID    `json:"account_id"`
+	Amount     gen.Money `json:"amount"`
+	EndToEndID string    `json:"end_to_end_id"`
+	Reason     string    `json:"reason"`
+}
+
+// CreditSuspendedTransfer requests the credit of a transfer of the token's entity held in suspense to the account
+// someone found for it: a payments.suspense_credit request until another person approves it (FR-32, FR-39), once
+// per Idempotency-Key. An order that is not a transfer in suspense is rejected when requested.
+func (h *PaymentHandlers) CreditSuspendedTransfer(ctx context.Context, req gen.CreditSuspendedTransferRequestObject) (gen.CreditSuspendedTransferResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := ids.ID(req.Id)
+	op := resourceOperation("payment-orders", id, "credit", http.StatusAccepted)
+	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		o, err := h.payments.Suspended(ctx, tx, p.LegalEntityID, id)
+		if err != nil {
+			return nil, err
+		}
+		payload := suspenseCredit{
+			OrderID: id, AccountID: ids.ID(req.Body.AccountId), Amount: moneyJSON(o.Amount), EndToEndID: o.EndToEndID, Reason: o.Reason,
+		}
+		requested, err := h.approvals.Request(ctx, tx, suspenseCreditKind, payload, p)
+		if err != nil {
+			return nil, err
+		}
+		return toApprovalJSON(requested), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// creditOnApproval is the Executor of suspenseCreditKind: it credits the transfer in the approver's entity, with the
+// approver as who made it. One no longer in suspense, or an account that cannot take it (not active, another
+// currency, over a limit), leaves the request failed.
+func creditOnApproval(s *payments.Service) approvals.Executor {
+	return onApproval("suspense credit", func(ctx context.Context, tx postgres.Tx, r suspenseCredit, checker access.Principal) (suspenseCredit, error) {
+		if _, err := s.CreditSuspended(ctx, tx, checker.LegalEntityID, r.OrderID, r.AccountID, checker.Subject); err != nil {
+			return suspenseCredit{}, err
+		}
+		return r, nil
+	})
 }
 
 // CreatePaymentOrder initiates an outgoing payment from an account of the token's entity, once per

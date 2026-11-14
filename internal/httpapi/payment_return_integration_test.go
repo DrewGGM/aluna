@@ -11,7 +11,6 @@ import (
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/postgres"
-	"github.com/DrewGGM/aluna/internal/postgres/pgtest"
 )
 
 // returningPayment pays 300,007 COP from a, an amount the simulated rail accepts and then returns, and sends it:
@@ -54,11 +53,7 @@ func TestAReturnedPaymentCreditsTheAccount(t *testing.T) {
 	if balance := w.natural(t, a); balance != 100000000-gmf {
 		t.Fatalf("balance = %d, want 1,000,000 COP less the payment's GMF (%d): the amount comes back once", balance, gmf)
 	}
-	var types []string
-	for _, e := range pgtest.EventsAbout(t, testPool, "payment-orders/"+o.Id.String()) {
-		types = append(types, e.Type)
-	}
-	if !slices.Contains(types, "aluna.payments.order.returned.v1") {
+	if types := eventTypes(t, "payment-orders/"+o.Id.String()); !slices.Contains(types, "aluna.payments.order.returned.v1") {
 		t.Fatalf("events = %v, want the return", types)
 	}
 }

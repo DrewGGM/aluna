@@ -19,6 +19,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/DrewGGM/aluna/config"
+	"github.com/DrewGGM/aluna/internal/access"
+	"github.com/DrewGGM/aluna/internal/approvals"
 	"github.com/DrewGGM/aluna/internal/calendar"
 	"github.com/DrewGGM/aluna/internal/compliance"
 	"github.com/DrewGGM/aluna/internal/deposits"
@@ -215,7 +218,11 @@ func newRailSide(t *testing.T) railSide {
 	if r.payments, err = payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, testPool, r.rail); err != nil {
 		t.Fatal(err)
 	}
-	handlers := NewPaymentHandlers(r.payments, postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool)
+	policy, err := access.ParsePolicy(config.Roles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers := NewPaymentHandlers(r.payments, approvals.New(policy, events), postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool), testPool)
 	r.ts = httptest.NewServer(NewServer(ServerConfig{}, RailRoutes(handlers, log), log).Handler)
 	t.Cleanup(r.ts.Close)
 	return r

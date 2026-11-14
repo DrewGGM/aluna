@@ -174,10 +174,11 @@ func (s Store) HoldOrder(ctx context.Context, o app.Order) error {
 	return nil
 }
 
-// UpdateOrder stores where o stands: its status, why it was rejected and the rail's reference.
+// UpdateOrder stores where o stands: its status, why it was rejected, the rail's reference and its account, which
+// only a transfer credited from suspense changes (the database refuses any other change of it).
 func (s Store) UpdateOrder(ctx context.Context, o app.Order) error {
-	if _, err := s.q.Exec(ctx, `UPDATE payments.orders SET status = $2, reason = nullif($3, ''), rail_ref = nullif($4, '') WHERE id = $1`,
-		o.ID, o.Status, o.Reason, o.RailRef); err != nil {
+	if _, err := s.q.Exec(ctx, `UPDATE payments.orders SET status = $2, reason = nullif($3, ''), rail_ref = nullif($4, ''), account_id = $5
+		WHERE id = $1`, o.ID, o.Status, o.Reason, o.RailRef, orNull(o.AccountID)); err != nil {
 		return fmt.Errorf("update payment order %s: %w", o.ID, err)
 	}
 	return nil

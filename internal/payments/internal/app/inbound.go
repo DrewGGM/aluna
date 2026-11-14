@@ -22,13 +22,19 @@ const (
 	ReasonAccountInAnotherCurrency = "ACCOUNT_IN_ANOTHER_CURRENCY"
 )
 
-// Receiving is what receiving a transfer needs, within its transaction.
-type Receiving interface {
+// railCrediting is what crediting money that came through a rail needs: the account it goes to and the rail's
+// accounts it comes from.
+type railCrediting interface {
 	// LockActive locks and returns deposit account id of the entity if it is active: deposits.ErrAccountNotActive
 	// if it is not, deposits.ErrAccountNotFound if the entity has no such account.
 	LockActive(ctx context.Context, entity, id ids.ID) (deposits.Account, error)
 	// RailAccounts are rail's clearing and suspense accounts in the entity, in currency c.
 	RailAccounts(ctx context.Context, entity ids.ID, rail string, c money.Currency) (clearing, suspense ids.ID, err error)
+}
+
+// Receiving is what receiving a transfer needs, within its transaction.
+type Receiving interface {
+	railCrediting
 	// Record stores o and reports whether it is new: false if the entity already received its transfer.
 	Record(ctx context.Context, o Order) (bool, error)
 	// Book posts entries, o's movement, as a transaction of code valued on valueDate, and publishes o.

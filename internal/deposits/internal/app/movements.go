@@ -298,18 +298,29 @@ func move(ctx context.Context, s Movements, l Limiting, m movement) (ledger.Tran
 // within the product's limits on the entity's business date (FR-24), and adds it to the account's counters: a
 // *domain.LimitError if it exceeds one.
 func CountDebit(ctx context.Context, s Movements, l Limiting, a domain.Account, units int64) error {
-	today, err := s.BusinessDate(ctx, a.LegalEntityID)
+	return countOutside(ctx, s, l, leg{account: a, side: debit}, units)
+}
+
+// CountCredit is CountDebit for a credit of units to account a (a transfer credited from suspense).
+func CountCredit(ctx context.Context, s Movements, l Limiting, a domain.Account, units int64) error {
+	return countOutside(ctx, s, l, leg{account: a, side: credit}, units)
+}
+
+// countOutside keeps g, a leg of a movement another module posts, within its account's limits and counts it.
+func countOutside(ctx context.Context, s Movements, l Limiting, g leg, units int64) error {
+	today, err := s.BusinessDate(ctx, g.account.LegalEntityID)
 	if err != nil {
 		return err
 	}
-	limits, err := limitsOf(ctx, l, a, today)
+	limits, err := limitsOf(ctx, l, g.account, today)
 	if err != nil {
 		return err
 	}
-	if err := limits.check(debit, units); err != nil {
+	if err := limits.check(g.side, units); err != nil {
 		return err
 	}
-	return l.Count(ctx, a.ID, today, units, 0)
+	debits, credits := g.moved(units)
+	return l.Count(ctx, g.account.ID, today, debits, credits)
 }
 
 // limitsOn are an account's limits on a day and what it used of them before a movement.

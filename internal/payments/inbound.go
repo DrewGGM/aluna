@@ -6,10 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/DrewGGM/aluna/internal/deposits"
-	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
-	"github.com/DrewGGM/aluna/internal/money"
 	pg "github.com/DrewGGM/aluna/internal/payments/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/payments/internal/app"
 	"github.com/DrewGGM/aluna/internal/payments/internal/domain/postingrules"
@@ -39,28 +36,11 @@ func (s *Service) ReadTransfer(n Notification) (InboundTransfer, error) { return
 // bank's end-to-end id again changes nothing. A transfer with invalid data is ErrInvalidNotification; an entity
 // without the rail's clearing or suspense account, ErrRailNotConfigured.
 func (s *Service) ReceiveTransfer(ctx context.Context, tx postgres.Tx, in InboundTransfer) error {
-	return app.Receive(ctx, receiving{s: s, tx: tx}, s.rail.Name(), in)
+	return app.Receive(ctx, receiving{orders{s: s, tx: tx}}, s.rail.Name(), in)
 }
 
-// receiving is app.Receiving within tx.
-type receiving struct {
-	s  *Service
-	tx postgres.Tx
-}
-
-func (r receiving) LockActive(ctx context.Context, entity, id ids.ID) (deposits.Account, error) {
-	return r.s.deposits.LockActive(ctx, r.tx, entity, id)
-}
-
-func (r receiving) RailAccounts(ctx context.Context, entity ids.ID, rail string, c money.Currency) (clearing, suspense ids.ID, err error) {
-	if clearing, err = r.s.railAccount(ctx, r.tx, entity, clearingAccount, rail, c); err != nil {
-		return ids.ID{}, ids.ID{}, err
-	}
-	if suspense, err = r.s.railAccount(ctx, r.tx, entity, suspenseAccount, rail, c); err != nil {
-		return ids.ID{}, ids.ID{}, err
-	}
-	return clearing, suspense, nil
-}
+// receiving is app.Receiving within tx: the orders, recorded as transfers received.
+type receiving struct{ orders }
 
 func (r receiving) Record(ctx context.Context, o app.Order) (bool, error) {
 	err := pg.NewStore(r.tx).InsertOrder(ctx, o)

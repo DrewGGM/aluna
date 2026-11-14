@@ -222,6 +222,35 @@ func TestADebitOfAnotherModuleKeepsWithinTheLimits(t *testing.T) {
 	}
 }
 
+// TestACreditOfAnotherModuleKeepsWithinTheLimits (FR-24): a credit another module posts (a transfer credited from
+// suspense) counts as a credit of the account, not a debit: within its limits it is counted, over one it is a
+// LimitError and nothing more counts.
+func TestACreditOfAnotherModuleKeepsWithinTheLimits(t *testing.T) {
+	w := newWorld(t)
+	w.vault(t)
+	a := w.limited(t, `{"per_operation": {"units": 1000}}`)
+	countCredit := func(units int64) error {
+		return try(t, func(tx postgres.Tx) error {
+			locked, err := w.deposits.LockActive(t.Context(), tx, w.entity, a.ID)
+			if err != nil {
+				return err
+			}
+			return w.deposits.CountCredit(t.Context(), tx, locked, money.New(units, a.Currency))
+		})
+	}
+
+	if err := countCredit(700); err != nil {
+		t.Fatal(err)
+	}
+	expectExceeds(t, "a credit over the operation", countCredit(1001), "per_operation", 1000)
+
+	for period, m := range counters(t, a.ID) {
+		if m.credits != 700 || m.debits != 0 {
+			t.Errorf("the account moved %+v in %s, want 700 of credits and no debits", m, period)
+		}
+	}
+}
+
 // TestATransferStaysWithinBothAccountsLimits (FR-24): a transfer is a debit of its origin and a credit of its
 // destination, each within its own product's limits; when one is exceeded, nothing moves.
 func TestATransferStaysWithinBothAccountsLimits(t *testing.T) {

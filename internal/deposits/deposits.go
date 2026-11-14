@@ -178,6 +178,13 @@ func (s *Service) CountDebit(ctx context.Context, tx postgres.Tx, a Account, amo
 	return app.CountDebit(ctx, m, m, a, amount.Units())
 }
 
+// CountCredit is CountDebit for a credit of amount to account a: a transfer held in suspense credited through the
+// ledger, not through a movement of this module.
+func (s *Service) CountCredit(ctx context.Context, tx postgres.Tx, a Account, amount money.Amount) error {
+	m := s.movements(tx)
+	return app.CountCredit(ctx, m, m, a, amount.Units())
+}
+
 // Transfer moves, within tx, money between two active accounts of the entity, as Withdraw, within the limits
 // of both; a transfer to the same account is ErrInvalidMovement.
 func (s *Service) Transfer(ctx context.Context, tx postgres.Tx, in TransferInput) (ledger.Transaction, error) {

@@ -32,6 +32,7 @@ operator:
     - deposits.transfers.post
     - payments.orders.create
     - payments.orders.read
+    - payments.suspense.credit
     - pricing.quotes.create
     - pricing.gmf_exemptions.create
     - ledger.accounts.create

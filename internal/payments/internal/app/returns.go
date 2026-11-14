@@ -6,9 +6,7 @@ import (
 	"fmt"
 
 	"github.com/DrewGGM/aluna/internal/deposits"
-	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
-	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/payments/internal/domain"
 	"github.com/DrewGGM/aluna/internal/payments/internal/domain/postingrules"
 )
@@ -17,11 +15,7 @@ import (
 type Returning interface {
 	// LockByEndToEndID locks and returns the order with end-to-end id e2e, or ErrOrderNotFound.
 	LockByEndToEndID(ctx context.Context, e2e string) (Order, error)
-	// LockActive locks and returns deposit account id of the entity if it is active: deposits.ErrAccountNotActive
-	// if it is not.
-	LockActive(ctx context.Context, entity, id ids.ID) (deposits.Account, error)
-	// RailAccounts are rail's clearing and suspense accounts in the entity, in currency c.
-	RailAccounts(ctx context.Context, entity ids.ID, rail string, c money.Currency) (clearing, suspense ids.ID, err error)
+	railCrediting
 	// Refund posts entries, o's return, as a transaction of code on the entity's business date.
 	Refund(ctx context.Context, o Order, code string, entries []ledger.EntryInput) error
 	// Update stores where o stands and publishes it.

@@ -108,7 +108,7 @@ Cada contexto de negocio es un módulo en `internal/<módulo>/`; los demás solo
 | `deposits` | Cuentas de depósito: apertura, estados, depósitos, retiros, transferencias, intereses, inactividad y extractos | `POST /v1/deposit-accounts`, `GET /v1/deposit-accounts/{id}` y sus `/transactions`, `/statements/{period}`, `/deposits`, `/withdrawals`, `/status-changes`; `POST /v1/transfers` |
 | `ledger` | Cuentas, transacciones balanceadas, reversas, holds de dos fases y saldos `sync` o `async` | `POST /v1/ledger-accounts`, `GET /v1/ledger-accounts/{id}` y `/balance`, `POST /v1/transactions`, `GET /v1/transactions/{id}`, `POST /v1/transactions/{id}/reversal`, `POST /v1/holds` y `/capture`, `/release` |
 | `party` | Clientes de la entidad con su estado de KYC, versionados; los datos documentales quedan en el sistema de vinculación | `POST /v1/parties`, `GET /v1/parties/{id}`, `POST /v1/parties/{id}/kyc-status-changes` |
-| `payments` | Órdenes de pago salientes (screening, hold, envío, liquidación, rechazo o devolución) y entrantes (abono o suspense) | `POST /v1/payment-orders`, `GET /v1/payment-orders/{id}`; en el puerto de rails, las notificaciones |
+| `payments` | Órdenes de pago salientes (screening, hold, envío, liquidación, rechazo o devolución) y entrantes (abono o suspense) | `POST /v1/payment-orders`, `GET /v1/payment-orders/{id}`, `POST /v1/payment-orders/{id}/credit`; en el puerto de rails, las notificaciones |
 | `pricing` | Comisiones y GMF de un retiro o una transferencia, cotizados antes y cobrados exactamente; exención del GMF | `POST /v1/quotes`, `POST /v1/deposit-accounts/{id}/gmf-exemption` |
 | `products` | Productos de depósito con versiones inmutables publicadas por maker-checker y parámetros de mercado con vigencia | `POST /v1/products`, `POST /v1/products/{id}/versions`, `GET /v1/product-versions/{id}`, `POST .../publication`, `POST` y `GET /v1/market-parameters` |
 | `reconciliation` | Controles continuos sobre el ledger, importación de extractos del rail y breaks hasta que alguien los resuelve | `POST /v1/reconciliation/statements`, `GET /v1/reconciliation/breaks`, `POST /v1/reconciliation/breaks/{id}/resolution` |
@@ -158,13 +158,14 @@ su `trace_id`. Los montos son enteros de 64 bits en unidades menores.
 
 ### Maker-checker
 
-Ocho tipos de comando no corren al pedirlos: crean una solicitud pendiente y responden 202.
+Nueve tipos de comando no corren al pedirlos: crean una solicitud pendiente y responden 202.
 
 | Solicitud | Se pide con |
 |---|---|
 | `ledger.reversal` | `POST /v1/transactions/{id}/reversal` |
 | `party.kyc_status_change` | `POST /v1/parties/{id}/kyc-status-changes` |
 | `deposits.account_status_change` | `POST /v1/deposit-accounts/{id}/status-changes` que congela o descongela una cuenta (activarla, reactivarla o cerrarla es inmediato y responde 200) |
+| `payments.suspense_credit` | `POST /v1/payment-orders/{id}/credit` que abona a una cuenta una transferencia que quedó en suspense |
 | `compliance.screening_resolution` | `POST /v1/screening-cases/{id}/resolution` |
 | `products.publish` | `POST /v1/product-versions/{id}/publication` |
 | `products.market_parameter_load` | `POST /v1/market-parameters` |
@@ -212,7 +213,7 @@ Cada evento se escribe en `infra.outbox` en la transacción de su efecto, como C
 | `aluna.payments.order.initiated.v1` | `POST /v1/payment-orders` |
 | `aluna.payments.order.held.v1` | `POST /v1/payment-orders` cuando el screening despeja y los fondos quedan retenidos, o la resolución aprobada que despeja una orden que esperaba a cumplimiento |
 | `aluna.payments.order.sent.v1` | El job `payments.send` |
-| `aluna.payments.order.settled.v1` | La notificación del rail que acepta un pago saliente, o una transferencia recibida que se abona |
+| `aluna.payments.order.settled.v1` | La notificación del rail que acepta un pago saliente, una transferencia recibida que se abona, o una transferencia en suspense que se abona después a su cuenta |
 | `aluna.payments.order.rejected.v1` | La notificación del rail que rechaza un pago saliente, el rail que no lo toma, la resolución de una orden que esperaba a cumplimiento y no puede salir, o el job `payments.pending.expire` |
 | `aluna.payments.order.suspended.v1` | Una transferencia recibida que va a la cuenta de suspense |
 | `aluna.payments.order.returned.v1` | La notificación del rail de que el banco del beneficiario devolvió un pago liquidado |

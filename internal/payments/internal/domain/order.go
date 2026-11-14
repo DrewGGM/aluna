@@ -165,6 +165,23 @@ func (o *Order) Settle() error { return o.move(Outgoing, StatusSettled, StatusSe
 // Credit moves an initiated incoming order to settled: it credits its account.
 func (o *Order) Credit() error { return o.move(Incoming, StatusSettled, StatusInitiated) }
 
+// CreditFromSuspense moves a suspended incoming order to settled, for account, in currency: someone found whose it
+// was and it is credited from the rail's suspense account. Without an account, or one in another currency than the
+// transfer's, it is ErrInvalidOrder.
+func (o *Order) CreditFromSuspense(account ids.ID, currency money.Currency) error {
+	switch {
+	case account == (ids.ID{}):
+		return fmt.Errorf("%w: a credit from suspense needs its account", ErrInvalidOrder)
+	case currency != o.Amount.Currency():
+		return fmt.Errorf("%w: the transfer is in %s and the account in %s", ErrInvalidOrder, o.Amount.Currency().Code(), currency.Code())
+	}
+	if err := o.move(Incoming, StatusSettled, StatusSuspended); err != nil {
+		return err
+	}
+	o.AccountID = account
+	return nil
+}
+
 // Suspend moves an initiated incoming order to suspended, for reason: it credits the rail's suspense account,
 // for no account of the entity can take it. A suspense says why: without a reason it is ErrInvalidOrder.
 func (o *Order) Suspend(reason string) error {

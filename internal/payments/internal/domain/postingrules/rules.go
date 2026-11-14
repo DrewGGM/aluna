@@ -23,6 +23,7 @@ const (
 	CodeInboundSuspense = "payments.inbound_suspense"
 	CodeReturnCredit    = "payments.return_credit"
 	CodeReturnSuspense  = "payments.return_suspense"
+	CodeSuspenseCredit  = "payments.suspense_credit"
 )
 
 // ErrInvalidMovement means a charge or a transfer the rules cannot post: an amount that is not positive or has
@@ -74,6 +75,12 @@ func ReturnCredit(amount money.Amount, clearing, customer ids.ID) ([]ledger.Entr
 // it debits the rail's clearing account and credits its suspense account until someone resolves it.
 func ReturnSuspense(amount money.Amount, clearing, suspense ids.ID) ([]ledger.EntryInput, error) {
 	return move(amount, clearing, suspense)
+}
+
+// SuspenseCredit is a transfer held in suspense credited to the account someone found it was for (FR-32), posted
+// as CodeSuspenseCredit: it debits the rail's suspense account and credits customer.
+func SuspenseCredit(amount money.Amount, suspense, customer ids.ID) ([]ledger.EntryInput, error) {
+	return move(amount, suspense, customer)
 }
 
 // move is amount out of debited and into credited.

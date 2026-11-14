@@ -206,6 +206,7 @@ var problems = []struct {
 		"A notification of the rail carries an outcome, accepted, or rejected or returned with its reason, or a transfer with ISO 20022 identifiers, the code of the bank that sent it, a positive amount, its settlement date and its creditor by account or by key; references and reasons are text of up to 255 characters.")},
 	{payments.ErrOrderNotFound, notFound},
 	{payments.ErrOutcomeConflict, conflict("outcome_conflict", "The payment order already took another outcome")},
+	{payments.ErrNotSuspended, conflict("not_in_suspense", "The payment order is not a transfer held in suspense")},
 	// accounting
 	{accounting.ErrInvalidMapping, unprocessable("invalid_mapping", "A file of CUIF mappings has the header pattern,cuif_code,valid_from,valid_to and rows with the start of an internal code, a code of 6 to 10 digits and a period")},
 	{accounting.ErrMappingOverlap, conflict("mapping_overlap", "Another mapping of the pattern holds in that period")},

@@ -107,6 +107,22 @@ func TestTheChargesBalance(t *testing.T) {
 	})
 }
 
+// TestASuspenseIsCreditedOutOfTheSuspenseAccount (FR-32): crediting a transfer held in suspense debits the rail's
+// suspense account and credits the customer's.
+func TestASuspenseIsCreditedOutOfTheSuspenseAccount(t *testing.T) {
+	suspense, customer := ids.New(), ids.New()
+
+	entries, err := SuspenseCredit(cop(t, 30000000), suspense, customer)
+
+	want := []ledger.EntryInput{{AccountID: suspense, Amount: cop(t, 30000000)}, {AccountID: customer, Amount: cop(t, -30000000)}}
+	if err != nil || !slices.Equal(entries, want) {
+		t.Fatalf("a credit from suspense = %+v (%v), want %+v", entries, err, want)
+	}
+	if _, err := SuspenseCredit(cop(t, 1), suspense, suspense); !errors.Is(err, ErrInvalidMovement) {
+		t.Errorf("a credit to the suspense account itself = %v, want ErrInvalidMovement", err)
+	}
+}
+
 // TestWhatComesThroughTheRailComesFromTheClearingAccount (FR-31, FR-32): a transfer received and a payment
 // returned, each credited or held in suspense, debit the rail's clearing account and credit the customer's account
 // or the rail's suspense account.

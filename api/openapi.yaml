@@ -934,6 +934,42 @@ paths:
         "400": {$ref: "#/components/responses/Problem"}
         "404": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/payment-orders/{id}/credit:
+    post:
+      operationId: creditSuspendedTransfer
+      summary: Request the credit of a transfer held in suspense
+      description: >-
+        A transfer received for no account the entity could credit is `suspended` in the rail's suspense account
+        (its order id comes in the `aluna.payments.order.suspended.v1` event). Once someone finds whose it is, this
+        creates a `payments.suspense_credit` maker-checker request to credit it to `account_id` and answers 202
+        with it. When another person with `payments.suspense.credit` approves it at
+        `POST /v1/approvals/{id}/approval`, the amount moves from the suspense account to the account, which must
+        be active, in the transfer's currency and within its product's limits, and the order is `settled` with that
+        account; otherwise approving it leaves the request `failed`. An order of another entity or unknown is 404;
+        one that is not a transfer in suspense, 409 `not_in_suspense`. Idempotent by `Idempotency-Key`.
+      x-aluna-permission: payments.suspense.credit
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SuspenseCredit"}
+            example:
+              account_id: 0196f3a2-7c41-7d1e-9b2a-3c4d5e6f7a8b
+      responses:
+        "202":
+          description: Credit request created, pending approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/cuif-mappings:
     post:
       operationId: requestCuifMappingsLoad
@@ -1567,6 +1603,11 @@ components:
       required: [reason]
       properties:
         reason: {type: string, minLength: 1}
+    SuspenseCredit:
+      type: object
+      required: [account_id]
+      properties:
+        account_id: {type: string, format: uuid, description: "The deposit account the transfer is for"}
     RequestReversal:
       type: object
       required: [reason]

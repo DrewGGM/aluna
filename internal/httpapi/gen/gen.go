@@ -1159,6 +1159,12 @@ type StatementLine struct {
 // StatementLineDirection defines model for StatementLine.Direction.
 type StatementLineDirection string
 
+// SuspenseCredit defines model for SuspenseCredit.
+type SuspenseCredit struct {
+	// AccountId The deposit account the transfer is for
+	AccountId openapi_types.UUID `json:"account_id"`
+}
+
 // Transaction defines model for Transaction.
 type Transaction struct {
 	BusinessDate openapi_types.Date `json:"business_date"`
@@ -1306,6 +1312,11 @@ type CreatePaymentOrderParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// CreditSuspendedTransferParams defines parameters for CreditSuspendedTransfer.
+type CreditSuspendedTransferParams struct {
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // RequestProductPublicationParams defines parameters for RequestProductPublication.
 type RequestProductPublicationParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
@@ -1411,6 +1422,9 @@ type RequestKYCStatusChangeJSONRequestBody = RequestKYCStatusChange
 
 // CreatePaymentOrderJSONRequestBody defines body for CreatePaymentOrder for application/json ContentType.
 type CreatePaymentOrderJSONRequestBody = CreatePaymentOrder
+
+// CreditSuspendedTransferJSONRequestBody defines body for CreditSuspendedTransfer for application/json ContentType.
+type CreditSuspendedTransferJSONRequestBody = SuspenseCredit
 
 // CreateProductJSONRequestBody defines body for CreateProduct for application/json ContentType.
 type CreateProductJSONRequestBody = CreateProduct
@@ -1534,6 +1548,9 @@ type ServerInterface interface {
 	// GetPaymentOrder Read an outgoing payment order
 	// (GET /v1/payment-orders/{id})
 	GetPaymentOrder(w http.ResponseWriter, r *http.Request, id ID)
+	// CreditSuspendedTransfer Request the credit of a transfer held in suspense
+	// (POST /v1/payment-orders/{id}/credit)
+	CreditSuspendedTransfer(w http.ResponseWriter, r *http.Request, id ID, params CreditSuspendedTransferParams)
 	// GetProductVersion Read a product version
 	// (GET /v1/product-versions/{id})
 	GetProductVersion(w http.ResponseWriter, r *http.Request, id ID)
@@ -2819,6 +2836,60 @@ func (siw *ServerInterfaceWrapper) GetPaymentOrder(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// CreditSuspendedTransfer operation middleware
+func (siw *ServerInterfaceWrapper) CreditSuspendedTransfer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreditSuspendedTransferParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreditSuspendedTransfer(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetProductVersion operation middleware
 func (siw *ServerInterfaceWrapper) GetProductVersion(w http.ResponseWriter, r *http.Request) {
 
@@ -3589,6 +3660,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/quotes", wrapper.CreateQuote)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/payment-orders", wrapper.CreatePaymentOrder)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/payment-orders/{id}", wrapper.GetPaymentOrder)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/payment-orders/{id}/credit", wrapper.CreditSuspendedTransfer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/cuif-mappings", wrapper.RequestCuifMappingsLoad)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/accounting-periods/{period}/closure", wrapper.RequestPeriodClose)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/general-ledger/daily", wrapper.GetDailyGL)
@@ -6231,6 +6303,119 @@ func (response GetPaymentOrderdefaultApplicationProblemPlusJSONResponse) VisitGe
 	return err
 }
 
+type CreditSuspendedTransferRequestObject struct {
+	Id     ID `json:"id"`
+	Params CreditSuspendedTransferParams
+	Body   *CreditSuspendedTransferJSONRequestBody
+}
+
+type CreditSuspendedTransferResponseObject interface {
+	VisitCreditSuspendedTransferResponse(w http.ResponseWriter) error
+}
+
+type CreditSuspendedTransfer202JSONResponse Approval
+
+func (response CreditSuspendedTransfer202JSONResponse) VisitCreditSuspendedTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreditSuspendedTransfer400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreditSuspendedTransfer400ApplicationProblemPlusJSONResponse) VisitCreditSuspendedTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreditSuspendedTransfer404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreditSuspendedTransfer404ApplicationProblemPlusJSONResponse) VisitCreditSuspendedTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreditSuspendedTransfer409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreditSuspendedTransfer409ApplicationProblemPlusJSONResponse) VisitCreditSuspendedTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreditSuspendedTransfer413ApplicationProblemPlusJSONResponse Problem
+
+func (response CreditSuspendedTransfer413ApplicationProblemPlusJSONResponse) VisitCreditSuspendedTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreditSuspendedTransfer422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreditSuspendedTransfer422ApplicationProblemPlusJSONResponse) VisitCreditSuspendedTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreditSuspendedTransferdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CreditSuspendedTransferdefaultApplicationProblemPlusJSONResponse) VisitCreditSuspendedTransferResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetProductVersionRequestObject struct {
 	Id ID `json:"id"`
 }
@@ -7622,6 +7807,9 @@ type StrictServerInterface interface {
 	// GetPaymentOrder Read an outgoing payment order
 	// (GET /v1/payment-orders/{id})
 	GetPaymentOrder(ctx context.Context, request GetPaymentOrderRequestObject) (GetPaymentOrderResponseObject, error)
+	// CreditSuspendedTransfer Request the credit of a transfer held in suspense
+	// (POST /v1/payment-orders/{id}/credit)
+	CreditSuspendedTransfer(ctx context.Context, request CreditSuspendedTransferRequestObject) (CreditSuspendedTransferResponseObject, error)
 	// GetProductVersion Read a product version
 	// (GET /v1/product-versions/{id})
 	GetProductVersion(ctx context.Context, request GetProductVersionRequestObject) (GetProductVersionResponseObject, error)
@@ -8584,6 +8772,40 @@ func (sh *strictHandler) GetPaymentOrder(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetPaymentOrderResponseObject); ok {
 		if err := validResponse.VisitGetPaymentOrderResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreditSuspendedTransfer operation middleware
+func (sh *strictHandler) CreditSuspendedTransfer(w http.ResponseWriter, r *http.Request, id ID, params CreditSuspendedTransferParams) {
+	var request CreditSuspendedTransferRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body CreditSuspendedTransferJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreditSuspendedTransfer(ctx, request.(CreditSuspendedTransferRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreditSuspendedTransfer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreditSuspendedTransferResponseObject); ok {
+		if err := validResponse.VisitCreditSuspendedTransferResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

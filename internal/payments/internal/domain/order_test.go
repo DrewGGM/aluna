@@ -230,6 +230,54 @@ func TestASuspenseKeepsItsReason(t *testing.T) {
 	}
 }
 
+// suspendedTransfer is an incoming order held in suspense.
+func suspendedTransfer(t *testing.T) Order {
+	t.Helper()
+	o, err := NewIncoming(incoming(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Suspend("UNKNOWN_ACCOUNT"); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+// TestASuspenseIsCreditedToItsAccount (FR-32): a suspended transfer settles for the account it is credited to, and a
+// transfer that is not suspended is not credited from suspense.
+func TestASuspenseIsCreditedToItsAccount(t *testing.T) {
+	initiated, err := NewIncoming(incoming(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, account := suspendedTransfer(t), ids.New()
+
+	if err := initiated.CreditFromSuspense(account, initiated.Amount.Currency()); !errors.Is(err, ErrIllegalTransition) || initiated.AccountID != (ids.ID{}) {
+		t.Fatalf("crediting an initiated transfer from suspense = %v with account %s, want ErrIllegalTransition and none", err, initiated.AccountID)
+	}
+	if err := o.CreditFromSuspense(account, o.Amount.Currency()); err != nil || o.Status != StatusSettled || o.AccountID != account {
+		t.Fatalf("crediting a suspended transfer = %v, %s for %s, want settled for %s", err, o.Status, o.AccountID, account)
+	}
+}
+
+// TestASuspenseNeedsAnAccountInItsCurrency (FR-32): without an account, or to one in another currency, a suspense is
+// not credited and stays suspended.
+func TestASuspenseNeedsAnAccountInItsCurrency(t *testing.T) {
+	usd, err := money.CurrencyOf("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := suspendedTransfer(t)
+
+	for name, err := range map[string]error{
+		"without an account": o.CreditFromSuspense(ids.ID{}, o.Amount.Currency()), "to an account in dollars": o.CreditFromSuspense(ids.New(), usd),
+	} {
+		if !errors.Is(err, ErrInvalidOrder) || o.Status != StatusSuspended {
+			t.Errorf("crediting %s = %v, the order %s, want ErrInvalidOrder and the order still suspended", name, err, o.Status)
+		}
+	}
+}
+
 // TestARejectionKeepsItsReason (FR-31): a rejected order keeps why, and an illegal rejection does not.
 func TestARejectionKeepsItsReason(t *testing.T) {
 	o, err := NewOutgoing(outgoing(t))

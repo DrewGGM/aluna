@@ -61,6 +61,7 @@ var (
 // What the ledger records of a payment's capture and charges.
 const (
 	channelRail    = "rail"
+	channelAPI     = "api" // a person, through the API, as an approver
 	sourcePayments = "payments"
 	codeCharges    = "payments.charges"
 )
@@ -119,32 +120,12 @@ func (s *Service) TakeOutcome(ctx context.Context, tx postgres.Tx, out RailOutco
 	return app.TakeOutcome(ctx, orders{s: s, tx: tx}, out)
 }
 
-// returns is app.Returning within tx: the outgoing orders, with the deposit account and the rail accounts read
-// as a transfer received reads them (orders and receiving are the same fields, so one converts to the other).
+// returns is app.Returning within tx: the outgoing orders.
 type returns struct{ orders }
 
-func (r returns) LockActive(ctx context.Context, entity, id ids.ID) (deposits.Account, error) {
-	return receiving(r.orders).LockActive(ctx, entity, id)
-}
-
-func (r returns) RailAccounts(ctx context.Context, entity ids.ID, rail string, c money.Currency) (clearing, suspense ids.ID, err error) {
-	return receiving(r.orders).RailAccounts(ctx, entity, rail, c)
-}
-
-// Refund posts entries on the entity's business date, with the payments rules and the order's return as their
-// reference.
+// Refund posts entries on the entity's business date, by the rail, with the order's return as their reference.
 func (r returns) Refund(ctx context.Context, o app.Order, code string, entries []ledger.EntryInput) error {
-	today, err := r.s.ledger.BusinessDate(ctx, r.tx, o.LegalEntityID)
-	if err != nil {
-		return err
-	}
-	if _, err := r.s.ledger.Post(ctx, r.tx, ledger.PostInput{
-		LegalEntityID: o.LegalEntityID, Code: code, ValueDate: today, BusinessDate: today, Source: sourcePayments,
-		ExternalRef: o.ID.String() + "/return", Actor: o.Rail, Channel: channelRail, RuleVersion: postingrules.RuleVersion, Entries: entries,
-	}); err != nil {
-		return fmt.Errorf("book the return of order %s: %w", o.ID, err)
-	}
-	return nil
+	return r.postToday(ctx, o, code, "return", o.Rail, channelRail, entries)
 }
 
 // AddWorkers registers in w the worker of payments.send, which sends within uow. A send without the rail's
@@ -176,10 +157,42 @@ func (w *sendWorker) Work(ctx context.Context, job *river.Job[sendArgs]) error {
 	return err
 }
 
-// orders is app.Sending and app.Settling within tx.
+// orders is the payment orders within tx: app.Sending, app.Settling and app.Expiring, and what the adapters that
+// embed it share.
 type orders struct {
 	s  *Service
 	tx postgres.Tx
+}
+
+func (r orders) LockActive(ctx context.Context, entity, id ids.ID) (deposits.Account, error) {
+	return r.s.deposits.LockActive(ctx, r.tx, entity, id)
+}
+
+func (r orders) RailAccounts(ctx context.Context, entity ids.ID, rail string, c money.Currency) (clearing, suspense ids.ID, err error) {
+	if clearing, err = r.s.railAccount(ctx, r.tx, entity, clearingAccount, rail, c); err != nil {
+		return ids.ID{}, ids.ID{}, err
+	}
+	if suspense, err = r.s.railAccount(ctx, r.tx, entity, suspenseAccount, rail, c); err != nil {
+		return ids.ID{}, ids.ID{}, err
+	}
+	return clearing, suspense, nil
+}
+
+// postToday posts entries, a movement of order o after it was made (its return, its credit from suspense), as a
+// transaction of code on the entity's business date, with the payments rules; its reference is the order's id and
+// what the movement is, so that each posts once.
+func (r orders) postToday(ctx context.Context, o app.Order, code, what, actor, channel string, entries []ledger.EntryInput) error {
+	today, err := r.s.ledger.BusinessDate(ctx, r.tx, o.LegalEntityID)
+	if err != nil {
+		return err
+	}
+	if _, err := r.s.ledger.Post(ctx, r.tx, ledger.PostInput{
+		LegalEntityID: o.LegalEntityID, Code: code, ValueDate: today, BusinessDate: today, Source: sourcePayments,
+		ExternalRef: o.ID.String() + "/" + what, Actor: actor, Channel: channel, RuleVersion: postingrules.RuleVersion, Entries: entries,
+	}); err != nil {
+		return fmt.Errorf("book the %s of order %s: %w", what, o.ID, err)
+	}
+	return nil
 }
 
 func (r orders) LockOrder(ctx context.Context, id ids.ID) (app.Order, error) {

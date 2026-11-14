@@ -1277,6 +1277,64 @@
             },
             "description": "Where an outgoing payment order of the entity stands (FR-30): its status, its amount, what it holds on the account while it is `held`, its ISO 20022 identifiers, the rail's reference once the rail gives it, and why it was rejected, if it was. Its beneficiary is not shown. A transfer received from another bank, or an order of another entity, is 404.\n\nPermission: `payments.orders.read`"
           }
+        },
+        {
+          "name": "Request the credit of a transfer held in suspense",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_id\": \"00000000-0000-0000-0000-000000000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/payment-orders/:id/credit",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "payment-orders",
+                ":id",
+                "credit"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "A transfer received for no account the entity could credit is `suspended` in the rail's suspense account (its order id comes in the `aluna.payments.order.suspended.v1` event). Once someone finds whose it is, this creates a `payments.suspense_credit` maker-checker request to credit it to `account_id` and answers 202 with it. When another person with `payments.suspense.credit` approves it at `POST /v1/approvals/{id}/approval`, the amount moves from the suspense account to the account, which must be active, in the transfer's currency and within its product's limits, and the order is `settled` with that account; otherwise approving it leaves the request `failed`. An order of another entity or unknown is 404; one that is not a transfer in suspense, 409 `not_in_suspense`. Idempotent by `Idempotency-Key`.\n\nPermission: `payments.suspense.credit`"
+          }
         }
       ]
     },

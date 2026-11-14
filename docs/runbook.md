@@ -80,6 +80,13 @@ su sujeto y la diferencia en unidades menores. Los controles corren cada 15 min:
 4. `accounts_mapped_to_cuif`: carga el mapeo (`POST /v1/cuif-mappings`, maker-checker) antes de que
    cierre el día siguiente. Un mapeo no puede empezar antes de la fecha de negocio, así que un día ya
    cerrado sin mapeo queda `unmapped`.
+5. `rail_accounts_at_zero` por la suspense: cada transferencia en suspense llegó con un evento
+   `aluna.payments.order.suspended.v1`, con el id de su orden y por qué no se abonó. Cuando se sabe de quién
+   es, abónala con `POST /v1/payment-orders/{id}/credit` y la cuenta destino (maker-checker): el monto pasa
+   de la suspense a la cuenta, que debe estar activa y dentro de los límites de su producto. Antes revisa que
+   nadie la haya movido ya con un asiento manual o con la reversa de su asiento: la orden seguiría `suspended`.
+   Una devolución de un pago saliente que quedó en suspense no es una transferencia recibida (responde 409
+   `not_in_suspense`): se abona con un asiento manual.
 
 Hoy nada liquida la cuenta clearing del rail: el primer pago saliente abre `rail_accounts_at_zero` en
 cuanto cierra su día y lo reabre en cada corrida hasta que se liquide. Todo break abierto de la entidad

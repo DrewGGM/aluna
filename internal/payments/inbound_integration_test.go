@@ -302,7 +302,7 @@ func TestATransferTheCoreDoesNotTake(t *testing.T) {
 
 // TestTheDatabaseKeepsIncomingOrders (FR-32): an incoming order names its debtor agent and an outgoing one does
 // not, an outgoing order has its account, the same bank's end-to-end id is one incoming order, and not even the
-// owner changes its debtor agent.
+// owner changes its debtor agent; an order's account changes only when a suspense settles for it.
 func TestTheDatabaseKeepsIncomingOrders(t *testing.T) {
 	w := newWorld(t, true)
 	in := w.transfer(t, 1000000, payments.AccountRef{Key: "@customer"})
@@ -333,10 +333,19 @@ func TestTheDatabaseKeepsIncomingOrders(t *testing.T) {
 		"an outgoing order without account": {asOwner(t, `INSERT INTO payments.orders (id, legal_entity_id, direction, rail, end_to_end_id,
 			instr_id, tx_id, currency, amount_units, creditor_key, status, external_ref) VALUES (gen_random_uuid(), $1, 'outgoing', 'simbreb',
 			'E2E3', 'I1', 'T1', 'COP', 100, '@x', 'rejected', gen_random_uuid()::text)`, w.entity), "23514 orders_outgoing_account"},
+		"a suspense that takes an account and stays suspended": {
+			asOwner(t, `UPDATE payments.orders SET account_id = $2 WHERE id = $1`, o.id, w.account.ID), "2F003 ",
+		},
 	}
 	for name, tc := range cases {
 		if got := sqlState(tc.err); got != tc.want {
 			t.Errorf("%s = %q (%v), want %q", name, got, tc.err, tc.want)
 		}
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE payments.orders SET status = 'settled', account_id = $2 WHERE id = $1`, o.id, w.account.ID); err != nil {
+		t.Fatalf("the core crediting a suspense to its account = %v, want it taken", err)
+	}
+	if got := sqlState(asOwner(t, `UPDATE payments.orders SET account_id = gen_random_uuid() WHERE id = $1`, o.id)); got != "2F003 " {
+		t.Errorf("a settled transfer that changes its account = %q, want 2F003", got)
 	}
 }

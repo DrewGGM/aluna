@@ -107,14 +107,18 @@ func TestTheChargesBalance(t *testing.T) {
 	})
 }
 
-// TestATransferReceivedComesFromTheClearingAccount (FR-32): a credit and a suspense each debit the rail's
-// clearing account and credit the customer's account or the rail's suspense account.
-func TestATransferReceivedComesFromTheClearingAccount(t *testing.T) {
+// TestWhatComesThroughTheRailComesFromTheClearingAccount (FR-31, FR-32): a transfer received and a payment
+// returned, each credited or held in suspense, debit the rail's clearing account and credit the customer's account
+// or the rail's suspense account.
+func TestWhatComesThroughTheRailComesFromTheClearingAccount(t *testing.T) {
 	clearing, customer, suspense := ids.New(), ids.New(), ids.New()
 	cases := map[string]struct {
 		rule     func(money.Amount, ids.ID, ids.ID) ([]ledger.EntryInput, error)
 		credited ids.ID
-	}{"a credit": {InboundCredit, customer}, "a suspense": {InboundSuspense, suspense}}
+	}{
+		"a credit": {InboundCredit, customer}, "a suspense": {InboundSuspense, suspense},
+		"a return credited": {ReturnCredit, customer}, "a return in suspense": {ReturnSuspense, suspense},
+	}
 	for name, tc := range cases {
 		entries, err := tc.rule(cop(t, 30000000), clearing, tc.credited)
 

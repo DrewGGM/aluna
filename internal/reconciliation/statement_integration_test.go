@@ -130,6 +130,23 @@ func TestALineInAnotherAmountOpensAnException(t *testing.T) {
 	}
 }
 
+// TestAReturnedPaymentWasSettled (FR-31, FR-34): a payment the beneficiary's bank returned later went out all the
+// same: its line matches, and without one the rail left it out.
+func TestAReturnedPaymentWasSettled(t *testing.T) {
+	w := newWorld(t)
+	w.order(t, "outgoing", w.tag("RETURNED"), 10_00, "returned", inTheMorning)
+	w.order(t, "outgoing", w.tag("UNREPORTED"), 20_00, "returned", inTheMorning)
+
+	got := w.imported(t, w.statement(w.line(w.tag("RETURNED"), reconciliation.Outgoing, 10_00)))
+
+	if want := (reconciliation.ImportResult{ID: got.ID, Lines: 1, Matched: 1, Exceptions: 1}); got != want {
+		t.Errorf("result = %+v, want %+v", got, want)
+	}
+	if found := w.statementBreaks(t); len(found) != 1 || found[0] != (statementBreak{"outgoing/" + w.tag("UNREPORTED"), "order_without_line", "finance-a", -20_00, true}) {
+		t.Fatalf("breaks = %+v, want only the returned payment without its line", found)
+	}
+}
+
 // TestBothSidesOfAStatementAreCompared (FR-34): a line nobody knows, a line of an order the core did not settle
 // and an order of the day the rail does not report are exceptions; an incoming order that went to suspense came
 // in all the same, and an order held or of another day does not concern the day's statement.

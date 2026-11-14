@@ -192,8 +192,18 @@ func (o *Order) Reject(reason string) error {
 	return nil
 }
 
-// Return moves a settled order to returned: the beneficiary's bank sent it back.
-func (o *Order) Return() error { return o.move(Outgoing, StatusReturned, StatusSettled) }
+// Return moves a settled order to returned, for reason: the beneficiary's bank sent it back. A return says why:
+// without a reason it is ErrInvalidOrder.
+func (o *Order) Return(reason string) error {
+	if reason == "" {
+		return fmt.Errorf("%w: a return needs its reason", ErrInvalidOrder)
+	}
+	if err := o.move(Outgoing, StatusReturned, StatusSettled); err != nil {
+		return err
+	}
+	o.Reason = reason
+	return nil
+}
 
 // move takes an order of direction d to status to if it stands in one of from, and is ErrIllegalTransition
 // otherwise.

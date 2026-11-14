@@ -98,7 +98,7 @@ var transitions = map[string]func(*Order) error{
 	"send":             (*Order).Send,
 	"settle":           (*Order).Settle,
 	"reject":           func(o *Order) error { return o.Reject("insufficient_funds") },
-	"return":           (*Order).Return,
+	"return":           func(o *Order) error { return o.Return("AC04") },
 	"credit":           (*Order).Credit,
 	"suspend":          func(o *Order) error { return o.Suspend("UNKNOWN_ACCOUNT") },
 }
@@ -246,6 +246,23 @@ func TestARejectionKeepsItsReason(t *testing.T) {
 
 	if err := o.Reject("rail_rejected"); err != nil || o.Reason != "rail_rejected" {
 		t.Fatalf("rejecting a sent order = %v with reason %q, want rail_rejected", err, o.Reason)
+	}
+}
+
+// TestAReturnKeepsItsReason (FR-31): a returned order keeps why the beneficiary's bank sent it back, and without a
+// reason it is not returned.
+func TestAReturnKeepsItsReason(t *testing.T) {
+	o, err := NewOutgoing(outgoing(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Status = StatusSettled
+	if err := o.Return(""); !errors.Is(err, ErrInvalidOrder) || o.Status != StatusSettled {
+		t.Fatalf("returning without a reason = %v, the order %s, want ErrInvalidOrder and the order still settled", err, o.Status)
+	}
+
+	if err := o.Return("AC04"); err != nil || o.Status != StatusReturned || o.Reason != "AC04" {
+		t.Fatalf("returning a settled order = %v, %s with reason %q, want returned as AC04", err, o.Status, o.Reason)
 	}
 }
 

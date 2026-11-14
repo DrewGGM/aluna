@@ -208,7 +208,7 @@ func (i initiation) Hold(ctx context.Context, a deposits.Account, rail string, a
 // The accounts of a rail in an entity's ledger (railAccount).
 const (
 	clearingAccount = "CLEARING" // what the entity owes the rail, or the rail owes it, until they settle
-	suspenseAccount = "SUSPENSE" // transfers received for no account the entity can credit
+	suspenseAccount = "SUSPENSE" // transfers received, or payments returned, for no account the entity can credit
 )
 
 // railAccount is rail's account of kind in the entity's ledger, in currency c: L.<KIND>.<RAIL>, as

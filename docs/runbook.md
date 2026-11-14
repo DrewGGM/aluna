@@ -62,7 +62,7 @@ su sujeto y la diferencia en unidades menores. Los controles corren cada 15 min:
 | `trial_balance` | Σ entries por moneda = 0 | no debería ocurrir: la base lo garantiza; tratarlo como incidente de integridad |
 | `balances_match_entries` | saldo materializado = Σ entries de cada cuenta (en una `async`, hasta donde llegó el agregador) | alguien escribió `ledger.balances` a mano: incidente de integridad |
 | `customers_match_control` | saldos de clientes contra el journal de esas cuentas | igual que el anterior, en cuentas de depósito |
-| `rail_accounts_at_zero` | clearing y suspense del rail en cero | pagos sin liquidar o transferencias en suspense |
+| `rail_accounts_at_zero` | clearing y suspense del rail en cero | pagos sin liquidar, o transferencias o devoluciones en suspense |
 | `accounts_mapped_to_cuif` | toda cuenta con movimiento tiene mapeo CUIF el día | una cuenta nueva sin mapeo cuando el día cerró |
 | breaks de extracto | líneas del extracto del rail contra las órdenes | orden sin línea, línea sin orden, montos distintos |
 

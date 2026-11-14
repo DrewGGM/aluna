@@ -214,8 +214,8 @@ func (s Store) OrdersOf(ctx context.Context, st app.Statement) ([]app.Order, err
 	}
 	rows, err := s.q.Query(ctx, `SELECT direction, end_to_end_id, currency::text, amount_units, settled, moved AND of_the_day
 		FROM (
-			SELECT id, direction, end_to_end_id, currency, amount_units, status IN ('settled', 'suspended') AS settled,
-				status IN ('sent', 'settled', 'suspended') AS moved, (created_at AT TIME ZONE 'America/Bogota')::date = $3 AS of_the_day
+			SELECT id, direction, end_to_end_id, currency, amount_units, status IN ('settled', 'suspended', 'returned') AS settled,
+				status IN ('sent', 'settled', 'suspended', 'returned') AS moved, (created_at AT TIME ZONE 'America/Bogota')::date = $3 AS of_the_day
 			FROM payments.orders WHERE legal_entity_id = $1 AND rail = $2) o
 		WHERE end_to_end_id = ANY($4) OR (moved AND of_the_day)
 		ORDER BY id`, st.LegalEntityID, st.Rail, st.Date, e2e)

@@ -53,9 +53,11 @@ type RailStatus string
 const (
 	RailAccepted RailStatus = "accepted"
 	RailRejected RailStatus = "rejected"
+	RailReturned RailStatus = "returned" // accepted, settled, and later sent back by the beneficiary's bank
 )
 
-// RailOutcome is the rail's word on how a message ended: accepted, or rejected with its ISO 20022 reason code.
+// RailOutcome is the rail's word on how a message ended: accepted, or rejected with its ISO 20022 reason code; or,
+// after it settled, returned by the beneficiary's bank with its ISO 20022 return reason.
 type RailOutcome struct {
 	EndToEndID, TxID, RailRef string
 	Status                    RailStatus

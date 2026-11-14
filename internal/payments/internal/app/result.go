@@ -88,6 +88,9 @@ func TakeOutcome(ctx context.Context, p Settling, out RailOutcome) error {
 	if err := checkOutcome(out); err != nil {
 		return err
 	}
+	if out.Status == RailReturned {
+		return fmt.Errorf("%w: a return is not an outcome of a sent order", ErrInvalidNotification)
+	}
 	o, err := p.LockByEndToEndID(ctx, out.EndToEndID)
 	if err != nil {
 		return err
@@ -109,19 +112,21 @@ func TakeOutcome(ctx context.Context, p Settling, out RailOutcome) error {
 
 func checkOutcome(out RailOutcome) error {
 	switch {
-	case out.Status != RailAccepted && out.Status != RailRejected:
+	case out.Status != RailAccepted && out.Status != RailRejected && out.Status != RailReturned:
 		return fmt.Errorf("%w: unknown status %q", ErrInvalidNotification, out.Status)
-	case out.Status == RailRejected && out.Reason == "":
-		return fmt.Errorf("%w: a rejection without its reason", ErrInvalidNotification)
+	case out.Status != RailAccepted && out.Reason == "":
+		return fmt.Errorf("%w: a %s outcome without its reason", ErrInvalidNotification, out.Status)
 	case !validText(out.RailRef, maxRailRef) || !validText(out.Reason, maxReason):
 		return fmt.Errorf("%w: the reference and the reason are text of up to %d characters", ErrInvalidNotification, maxReason)
 	}
 	return nil
 }
 
-// tookAlready is nil if o, no longer sent, took out's outcome, and ErrOutcomeConflict if it took another.
+// tookAlready is nil if o, no longer sent, took out's outcome (a returned order was accepted before), and
+// ErrOutcomeConflict if it took another.
 func tookAlready(o Order, out RailOutcome) error {
-	if (out.Status == RailAccepted && o.Status == domain.StatusSettled) || (out.Status == RailRejected && o.Status == domain.StatusRejected) {
+	accepted := o.Status == domain.StatusSettled || o.Status == domain.StatusReturned
+	if (out.Status == RailAccepted && accepted) || (out.Status == RailRejected && o.Status == domain.StatusRejected) {
 		return nil
 	}
 	return fmt.Errorf("%w: order %s is %s and the rail says %s", ErrOutcomeConflict, o.ID, o.Status, out.Status)

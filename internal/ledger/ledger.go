@@ -176,6 +176,11 @@ func (s *Service) CaptureHold(ctx context.Context, tx postgres.Tx, in CaptureInp
 	return app.CaptureHold(ctx, pg.NewStore(tx), s.guard(tx), s.emitter(tx), in)
 }
 
+// BusinessDate is the entity's business date, read within tx, for a posting that values on it.
+func (s *Service) BusinessDate(ctx context.Context, tx postgres.Tx, entity ids.ID) (time.Time, error) {
+	return s.businessDay(ctx, tx, entity, time.Time{})
+}
+
 // businessDay is the business date to post with: given, or the entity's in the calendar if given is zero
 // (read at the start, in the same tx, without blocking the rollover).
 func (s *Service) businessDay(ctx context.Context, tx postgres.Tx, entity ids.ID, given time.Time) (time.Time, error) {

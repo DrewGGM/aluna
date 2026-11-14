@@ -1490,7 +1490,7 @@ components:
         tx_id: {type: string, description: ISO 20022 TxId}
         held: {$ref: "#/components/schemas/Money", description: "What is held on the account: the amount, its fees and its GMF"}
         rail_ref: {type: string, description: "The rail's reference to the order, once the rail gives it"}
-        reason: {type: string, description: "Why it was rejected: the rail's reason as it said it, RAIL_REFUSED if the rail did not take it, or RR04, AM04 or AC06 if it waited for compliance and a confirmed match, missing funds or an account no longer active stopped it"}
+        reason: {type: string, description: "Why it was rejected or returned: the rail's reason as it said it, RAIL_REFUSED if the rail did not take it, or RR04, AM04 or AC06 if it waited for compliance and a confirmed match, missing funds or an account no longer active stopped it"}
     RegisterWebhookEndpoint:
       type: object
       required: [url]

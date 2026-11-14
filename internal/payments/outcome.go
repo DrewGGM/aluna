@@ -9,8 +9,10 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
+	"github.com/DrewGGM/aluna/internal/money"
 	pg "github.com/DrewGGM/aluna/internal/payments/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/payments/internal/adapters/simrail"
 	"github.com/DrewGGM/aluna/internal/payments/internal/app"
@@ -36,6 +38,7 @@ type (
 const (
 	RailAccepted = app.RailAccepted
 	RailRejected = app.RailRejected
+	RailReturned = app.RailReturned
 )
 
 var (
@@ -102,12 +105,45 @@ func (s *Service) ReadNotification(n Notification) (RailOutcome, error) { return
 
 // TakeOutcome applies, within tx, the rail's outcome to its order, which it finds by its end-to-end id (FR-31):
 // accepted, the order settles and its hold is captured against the rail's clearing account, with its charges
-// posted to their accounts; rejected, the order is rejected for the rail's reason and its hold released. An
+// posted to their accounts; rejected, the order is rejected for the rail's reason and its hold released;
+// returned, a settled order is returned for the rail's reason and its amount, not its charges, comes back from the
+// clearing account to its account, or to the rail's suspense account if the account is no longer active. An
 // order that already took that outcome does not change; another outcome is ErrOutcomeConflict, an unknown
-// order ErrOrderNotFound, and an outcome that is neither, or whose reference or reason is not text of up to
+// order ErrOrderNotFound, and an outcome that is none of them, or whose reference or reason is not text of up to
 // 255 characters, ErrInvalidNotification.
 func (s *Service) TakeOutcome(ctx context.Context, tx postgres.Tx, out RailOutcome) error {
+	if out.Status == RailReturned {
+		return app.TakeReturn(ctx, returns{orders{s: s, tx: tx}}, out)
+	}
 	return app.TakeOutcome(ctx, orders{s: s, tx: tx}, out)
+}
+
+// returns is app.Returning within tx: the outgoing orders, with the deposit account and the rail accounts read
+// as a transfer received reads them (orders and receiving are the same fields, so one converts to the other).
+type returns struct{ orders }
+
+func (r returns) LockActive(ctx context.Context, entity, id ids.ID) (deposits.Account, error) {
+	return receiving(r.orders).LockActive(ctx, entity, id)
+}
+
+func (r returns) RailAccounts(ctx context.Context, entity ids.ID, rail string, c money.Currency) (clearing, suspense ids.ID, err error) {
+	return receiving(r.orders).RailAccounts(ctx, entity, rail, c)
+}
+
+// Refund posts entries on the entity's business date, with the payments rules and the order's return as their
+// reference.
+func (r returns) Refund(ctx context.Context, o app.Order, code string, entries []ledger.EntryInput) error {
+	today, err := r.s.ledger.BusinessDate(ctx, r.tx, o.LegalEntityID)
+	if err != nil {
+		return err
+	}
+	if _, err := r.s.ledger.Post(ctx, r.tx, ledger.PostInput{
+		LegalEntityID: o.LegalEntityID, Code: code, ValueDate: today, BusinessDate: today, Source: sourcePayments,
+		ExternalRef: o.ID.String() + "/return", Actor: o.Rail, Channel: channelRail, RuleVersion: postingrules.RuleVersion, Entries: entries,
+	}); err != nil {
+		return fmt.Errorf("book the return of order %s: %w", o.ID, err)
+	}
+	return nil
 }
 
 // AddWorkers registers in w the worker of payments.send, which sends within uow. A send without the rail's

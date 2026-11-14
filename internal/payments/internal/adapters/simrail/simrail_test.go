@@ -144,6 +144,30 @@ func TestTheRailTakesAMessageAndNotifiesItsOutcome(t *testing.T) {
 	}
 }
 
+// TestAnAmountEndingIn07IsReturned (FR-31): the rail accepts a message of an amount ending in 07 pesos and then
+// notifies that the beneficiary's bank returned it, as AC04.
+func TestAnAmountEndingIn07IsReturned(t *testing.T) {
+	ts, got := receiver(t)
+	rail := simulator(ts, discard())
+	msg := message(t, 50007, 1)
+
+	ack, err := rail.Send(t.Context(), msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, accepted := notified(t, got)
+	_, returned := notified(t, got)
+	want := notification{EndToEndID: msg.EndToEndID, TxID: msg.TxID, RailRef: ack.RailRef, Status: app.RailAccepted}
+	if accepted != want {
+		t.Errorf("first notification = %+v, want %+v", accepted, want)
+	}
+	want.Status, want.Reason = app.RailReturned, "AC04"
+	if returned != want {
+		t.Errorf("second notification = %+v, want %+v", returned, want)
+	}
+}
+
 // TestAnAmountEndingIn99IsSlow (FR-31): the rail takes a message of an amount ending in 99 pesos after its
 // delay (over 20 seconds) and notifies its outcome then. A sender that stops waiting gets its context's error,
 // and the notification still comes, after the delay: until then the sender does not know the outcome.

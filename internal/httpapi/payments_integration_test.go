@@ -310,10 +310,7 @@ func signedTransfer(body string) notification {
 // 401 and credits nothing.
 func TestATransferReceivedOverHTTP(t *testing.T) {
 	w, a := payingWorld(t)
-	if status := call(t, w.ts, http.MethodPost, "/v1/ledger-accounts",
-		`{"code":"L.SUSPENSE.SIMBREB","kind":"liability","currency":"COP","balance_mode":"async"}`, nil); status != http.StatusCreated {
-		t.Fatalf("create the suspense account = %d", status)
-	}
+	withSuspense(t, w)
 	rails := newRailSide(t)
 	body := `{"creditor_agent":"` + w.entity.String() + `","end_to_end_id":"BANKX` + strconv.FormatInt(time.Now().UnixNano(), 10) +
 		`","instr_id":"INSTR1","tx_id":"TX1","rail_ref":"SIMIN1","debtor_agent":"BANKXCOBB","amount":30000000,"currency":"COP",` +
@@ -330,6 +327,18 @@ func TestATransferReceivedOverHTTP(t *testing.T) {
 	if w.natural(t, a) != 130000000 {
 		t.Fatalf("the balance = %d, want 1,300,000 COP: the transfer once", w.natural(t, a))
 	}
+}
+
+// withSuspense creates the rail's suspense account of the world's entity, sync so that its balance reads at once,
+// and returns its id.
+func withSuspense(t *testing.T, w depositWorld) string {
+	t.Helper()
+	var suspense gen.LedgerAccount
+	if status := call(t, w.ts, http.MethodPost, "/v1/ledger-accounts",
+		`{"code":"L.SUSPENSE.SIMBREB","kind":"liability","currency":"COP","balance_mode":"sync"}`, &suspense); status != http.StatusCreated {
+		t.Fatalf("create the suspense account = %d", status)
+	}
+	return suspense.Id.String()
 }
 
 // readOrder reads order id over ts, which must be 200.
@@ -381,10 +390,7 @@ func TestAPaymentOrderIsReadOverHTTP(t *testing.T) {
 // TestAPaymentOrderOfNowhereIsNotFound: an unknown order, another entity's and a transfer received are 404.
 func TestAPaymentOrderOfNowhereIsNotFound(t *testing.T) {
 	w, a := payingWorld(t)
-	if status := call(t, w.ts, http.MethodPost, "/v1/ledger-accounts",
-		`{"code":"L.SUSPENSE.SIMBREB","kind":"liability","currency":"COP","balance_mode":"async"}`, nil); status != http.StatusCreated {
-		t.Fatalf("create the suspense account = %d", status)
-	}
+	withSuspense(t, w)
 	o := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30000000, "simbreb", "@beneficiary")))
 	e2e := "BANKX" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	received := deliverTo(t, newRailSide(t).ts, "transfers", signedTransfer(`{"creditor_agent":"`+w.entity.String()+`","end_to_end_id":"`+e2e+

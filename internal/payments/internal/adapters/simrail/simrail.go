@@ -1,6 +1,7 @@
 // Package simrail is a simulated Bre-B rail (AR-2) until the real one can be reached (D-1). It takes every
 // valid message and decides by the whole part of its amount: ending in 13 it is rejected, ending in 99 the
-// rail takes over 20 seconds to take it, and anything else is accepted. The outcome comes as a notification
+// rail takes over 20 seconds to take it, ending in 07 it is accepted and then returned by the beneficiary's bank,
+// and anything else is accepted. The outcome comes as a notification
 // signed as Standard Webhooks says (HMAC-SHA256 of id.timestamp.body) to /v1/rails/simbreb/notifications,
 // where the core reads it back with Outcome. The transfers other banks send to the entity's customers come
 // signed the same way to /v1/rails/simbreb/transfers, and the core reads them with Transfer. Notifications
@@ -32,7 +33,7 @@ const (
 	notificationPath = "/v1/rails/" + name + "/notifications"
 	slowTake         = 21 * time.Second // over 20 s: longer than the core waits (app.Send)
 	notifyTimeout    = 10 * time.Second
-	closedAccount    = "AC04"          // ISO 20022 reason of a rejection
+	closedAccount    = "AC04"          // ISO 20022 reason of a rejection or a return
 	replayWindow     = 5 * time.Minute // how far from now a notification may be signed (ADR-0010)
 )
 
@@ -80,16 +81,21 @@ func (s *Simulator) Send(ctx context.Context, msg app.OutboundMessage) (app.Send
 	if err := check(msg); err != nil {
 		return app.SendAck{}, err
 	}
-	outcome := app.RailOutcome{EndToEndID: msg.EndToEndID, TxID: msg.TxID, RailRef: "SIM" + msg.EndToEndID, Status: app.RailAccepted}
+	of := func(status app.RailStatus, reason string) app.RailOutcome {
+		return app.RailOutcome{EndToEndID: msg.EndToEndID, TxID: msg.TxID, RailRef: "SIM" + msg.EndToEndID, Status: status, Reason: reason}
+	}
+	outcomes := []app.RailOutcome{of(app.RailAccepted, "")}
 	var wait time.Duration
 	switch whole := wholePart(msg); {
 	case strings.HasSuffix(whole, "13"):
-		outcome.Status, outcome.Reason = app.RailRejected, closedAccount
+		outcomes = []app.RailOutcome{of(app.RailRejected, closedAccount)}
 	case strings.HasSuffix(whole, "99"):
 		wait = s.delay
+	case strings.HasSuffix(whole, "07"):
+		outcomes = append(outcomes, of(app.RailReturned, closedAccount))
 	}
-	ack := app.SendAck{RailRef: outcome.RailRef}
-	go s.notifyAfter(context.WithoutCancel(ctx), wait, outcome) // the rail notifies even if the sender stops waiting
+	ack := app.SendAck{RailRef: outcomes[0].RailRef}
+	go s.notifyAfter(context.WithoutCancel(ctx), wait, outcomes...) // the rail notifies even if the sender stops waiting
 	if wait == 0 {
 		return ack, nil
 	}
@@ -205,9 +211,15 @@ func (s *Simulator) verify(n app.Notification) error {
 	return fmt.Errorf("%w: no signature of the rail", app.ErrUnverifiedNotification)
 }
 
-// notifyAfter sends outcome to the core after wait, and logs it if the core does not take it.
-func (s *Simulator) notifyAfter(ctx context.Context, wait time.Duration, outcome app.RailOutcome) {
+// notifyAfter sends outcomes to the core after wait, one after the other, and logs each the core does not take.
+func (s *Simulator) notifyAfter(ctx context.Context, wait time.Duration, outcomes ...app.RailOutcome) {
 	time.Sleep(wait)
+	for _, outcome := range outcomes {
+		s.notifyOne(ctx, outcome)
+	}
+}
+
+func (s *Simulator) notifyOne(ctx context.Context, outcome app.RailOutcome) {
 	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
 	defer cancel()
 	if err := s.notify(ctx, outcome); err != nil {

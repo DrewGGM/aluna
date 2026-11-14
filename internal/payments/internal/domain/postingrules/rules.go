@@ -17,10 +17,12 @@ import (
 // RuleVersion is the version of these rules, recorded as the transaction's rule_version.
 const RuleVersion = "payments/v1"
 
-// Transaction codes of a transfer received, one per rule.
+// Transaction codes of a transfer received and of a payment returned, one per rule.
 const (
 	CodeInboundCredit   = "payments.inbound_credit"
 	CodeInboundSuspense = "payments.inbound_suspense"
+	CodeReturnCredit    = "payments.return_credit"
+	CodeReturnSuspense  = "payments.return_suspense"
 )
 
 // ErrInvalidMovement means a charge or a transfer the rules cannot post: an amount that is not positive or has
@@ -58,6 +60,19 @@ func InboundCredit(amount money.Amount, clearing, customer ids.ID) ([]ledger.Ent
 // CodeInboundSuspense: it debits the rail's clearing account and credits its suspense account until someone
 // resolves it.
 func InboundSuspense(amount money.Amount, clearing, suspense ids.ID) ([]ledger.EntryInput, error) {
+	return move(amount, clearing, suspense)
+}
+
+// ReturnCredit is a settled payment the beneficiary's bank returned, for an account still active (FR-31), posted
+// as CodeReturnCredit: it debits the rail's clearing account and credits customer with the payment's amount; its
+// charges are not returned.
+func ReturnCredit(amount money.Amount, clearing, customer ids.ID) ([]ledger.EntryInput, error) {
+	return move(amount, clearing, customer)
+}
+
+// ReturnSuspense is a returned payment whose account is no longer active (FR-31), posted as CodeReturnSuspense:
+// it debits the rail's clearing account and credits its suspense account until someone resolves it.
+func ReturnSuspense(amount money.Amount, clearing, suspense ids.ID) ([]ledger.EntryInput, error) {
 	return move(amount, clearing, suspense)
 }
 

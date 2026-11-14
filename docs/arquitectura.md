@@ -57,9 +57,13 @@ El puerto `ALUNA_RAIL_ADDR` recibe el resultado de un pago saliente (`POST /v1/r
 y la transferencia que otro banco manda a un cliente (`POST /v1/rails/simbreb/transfers`). No llevan token:
 el rail firma cada notificación (Standard Webhooks, HMAC-SHA256 con `ALUNA_SIMBREB_SECRET`), y una con otra
 firma, o firmada hace más de 5 min, responde 401. El worker envía los pagos por el rail simulado, que
-notifica a `ALUNA_SIMBREB_NOTIFY_URL`. Una transferencia recibida se acredita a la cuenta de depósito que
-nombra si está activa y en su moneda; si no, o si llega por llave (no hay directorio de llaves), va a la
-cuenta de suspense del rail y su orden queda `suspended`.
+notifica a `ALUNA_SIMBREB_NOTIFY_URL`; decide por la parte entera del monto: si termina en 13 lo rechaza, en
+99 tarda más de 20 s en tomarlo, en 07 lo acepta y después lo devuelve, y cualquier otro lo acepta. Una
+transferencia recibida se acredita a la cuenta de depósito que nombra si está activa y en su moneda; si no, o
+si llega por llave (no hay directorio de llaves), va a la cuenta de suspense del rail y su orden queda
+`suspended`. Un pago liquidado que el banco del beneficiario devuelve (`status: returned`, con su razón) queda
+`returned`: su monto vuelve de la clearing a la cuenta si sigue activa, o a la suspense si no; sus cargos no
+se devuelven.
 
 ## Alta de una entidad
 
@@ -104,7 +108,7 @@ Cada contexto de negocio es un módulo en `internal/<módulo>/`; los demás solo
 | `deposits` | Cuentas de depósito: apertura, estados, depósitos, retiros, transferencias, intereses, inactividad y extractos | `POST /v1/deposit-accounts`, `GET /v1/deposit-accounts/{id}` y sus `/transactions`, `/statements/{period}`, `/deposits`, `/withdrawals`, `/status-changes`; `POST /v1/transfers` |
 | `ledger` | Cuentas, transacciones balanceadas, reversas, holds de dos fases y saldos `sync` o `async` | `POST /v1/ledger-accounts`, `GET /v1/ledger-accounts/{id}` y `/balance`, `POST /v1/transactions`, `GET /v1/transactions/{id}`, `POST /v1/transactions/{id}/reversal`, `POST /v1/holds` y `/capture`, `/release` |
 | `party` | Clientes de la entidad con su estado de KYC, versionados; los datos documentales quedan en el sistema de vinculación | `POST /v1/parties`, `GET /v1/parties/{id}`, `POST /v1/parties/{id}/kyc-status-changes` |
-| `payments` | Órdenes de pago salientes (screening, hold, envío, liquidación o rechazo) y entrantes (abono o suspense) | `POST /v1/payment-orders`, `GET /v1/payment-orders/{id}`; en el puerto de rails, las notificaciones |
+| `payments` | Órdenes de pago salientes (screening, hold, envío, liquidación, rechazo o devolución) y entrantes (abono o suspense) | `POST /v1/payment-orders`, `GET /v1/payment-orders/{id}`; en el puerto de rails, las notificaciones |
 | `pricing` | Comisiones y GMF de un retiro o una transferencia, cotizados antes y cobrados exactamente; exención del GMF | `POST /v1/quotes`, `POST /v1/deposit-accounts/{id}/gmf-exemption` |
 | `products` | Productos de depósito con versiones inmutables publicadas por maker-checker y parámetros de mercado con vigencia | `POST /v1/products`, `POST /v1/products/{id}/versions`, `GET /v1/product-versions/{id}`, `POST .../publication`, `POST` y `GET /v1/market-parameters` |
 | `reconciliation` | Controles continuos sobre el ledger, importación de extractos del rail y breaks hasta que alguien los resuelve | `POST /v1/reconciliation/statements`, `GET /v1/reconciliation/breaks`, `POST /v1/reconciliation/breaks/{id}/resolution` |
@@ -211,6 +215,7 @@ Cada evento se escribe en `infra.outbox` en la transacción de su efecto, como C
 | `aluna.payments.order.settled.v1` | La notificación del rail que acepta un pago saliente, o una transferencia recibida que se abona |
 | `aluna.payments.order.rejected.v1` | La notificación del rail que rechaza un pago saliente, el rail que no lo toma, o la resolución de una orden que esperaba a cumplimiento y no puede salir |
 | `aluna.payments.order.suspended.v1` | Una transferencia recibida que va a la cuenta de suspense |
+| `aluna.payments.order.returned.v1` | La notificación del rail de que el banco del beneficiario devolvió un pago liquidado |
 | `aluna.approvals.request.created.v1` | Todo comando de maker-checker al pedirse |
 | `aluna.approvals.request.approved.v1` | `POST /v1/approvals/{id}/approval` cuando el comando corre (uno que falla no emite) |
 | `aluna.approvals.request.rejected.v1` | `POST /v1/approvals/{id}/rejection` |

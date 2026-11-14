@@ -5,6 +5,7 @@ package reconciliation_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -131,19 +132,43 @@ func TestALineInAnotherAmountOpensAnException(t *testing.T) {
 }
 
 // TestAReturnedPaymentWasSettled (FR-31, FR-34): a payment the beneficiary's bank returned later went out all the
-// same: its line matches, and without one the rail left it out.
+// same: its line matches, and without one the rail left it out. The return comes back as an incoming line of the
+// same end-to-end id, and that line matches too; for a payment that was not returned it is a line without order.
 func TestAReturnedPaymentWasSettled(t *testing.T) {
 	w := newWorld(t)
 	w.order(t, "outgoing", w.tag("RETURNED"), 10_00, "returned", inTheMorning)
 	w.order(t, "outgoing", w.tag("UNREPORTED"), 20_00, "returned", inTheMorning)
+	w.order(t, "outgoing", w.tag("SETTLED"), 30_00, "settled", inTheMorning)
 
-	got := w.imported(t, w.statement(w.line(w.tag("RETURNED"), reconciliation.Outgoing, 10_00)))
+	got := w.imported(t, w.statement(w.line(w.tag("RETURNED"), reconciliation.Outgoing, 10_00), w.line(w.tag("RETURNED"), reconciliation.Incoming, 10_00),
+		w.line(w.tag("SETTLED"), reconciliation.Outgoing, 30_00), w.line(w.tag("SETTLED"), reconciliation.Incoming, 30_00)))
 
-	if want := (reconciliation.ImportResult{ID: got.ID, Lines: 1, Matched: 1, Exceptions: 1}); got != want {
+	if want := (reconciliation.ImportResult{ID: got.ID, Lines: 4, Matched: 3, Exceptions: 2}); got != want {
 		t.Errorf("result = %+v, want %+v", got, want)
 	}
-	if found := w.statementBreaks(t); len(found) != 1 || found[0] != (statementBreak{"outgoing/" + w.tag("UNREPORTED"), "order_without_line", "finance-a", -20_00, true}) {
-		t.Fatalf("breaks = %+v, want only the returned payment without its line", found)
+	want := []statementBreak{
+		{"incoming/" + w.tag("SETTLED"), "line_without_order", "finance-a", 30_00, true},
+		{"outgoing/" + w.tag("UNREPORTED"), "order_without_line", "finance-a", -20_00, true},
+	}
+	if found := w.statementBreaks(t); !slices.Equal(found, want) {
+		t.Fatalf("breaks = %+v, want %+v", found, want)
+	}
+}
+
+// TestAReturnLineOfALaterDayMatches (FR-34): the rail may report a return days after the payment, in another
+// statement: its line still matches the return.
+func TestAReturnLineOfALaterDayMatches(t *testing.T) {
+	w := newWorld(t)
+	w.order(t, "outgoing", w.tag("RETURNED"), 10_00, "returned", inTheMorning.AddDate(0, 0, -3))
+	later := w.statement(w.line(w.tag("RETURNED"), reconciliation.Incoming, 10_00))
+
+	got := w.imported(t, later)
+
+	if want := (reconciliation.ImportResult{ID: got.ID, Lines: 1, Matched: 1}); got != want {
+		t.Errorf("result = %+v, want %+v", got, want)
+	}
+	if found := w.statementBreaks(t); len(found) != 0 {
+		t.Fatalf("breaks = %+v, want none", found)
 	}
 }
 

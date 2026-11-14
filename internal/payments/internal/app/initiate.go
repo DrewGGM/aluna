@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/DrewGGM/aluna/internal/deposits"
@@ -39,6 +40,9 @@ type Order struct {
 	Fees        []pricing.Fee
 	GMF         money.Amount
 	RailRef     string
+	// DebitCountedOn is the business date its amount was counted as a debit of its account, once it is held: a
+	// rejection gives that debit back.
+	DebitCountedOn time.Time
 }
 
 // InitiateInput is an outgoing payment of Amount from deposit account AccountID of LegalEntityID to Creditor,
@@ -54,8 +58,8 @@ type InitiateInput struct {
 // funds is what holding an order's funds needs, step by step.
 type funds interface {
 	// Debit locks a, which must still be active, and counts a debit of amount against its product's limits
-	// (deposits.ErrLimitExceeded if it would exceed one).
-	Debit(ctx context.Context, a deposits.Account, amount money.Amount) error
+	// (deposits.ErrLimitExceeded if it would exceed one); it returns the business date it counted on.
+	Debit(ctx context.Context, a deposits.Account, amount money.Amount) (time.Time, error)
 	// Charges are the fees and GMF of a transfer of amount from a, by its quote if quoteID names one.
 	Charges(ctx context.Context, a deposits.Account, amount money.Amount, quoteID ids.ID) (pricing.Charges, error)
 	// Hold holds amount on a, already locked, against the clearing account of rail, and returns the hold.
@@ -166,7 +170,8 @@ func validText(s string, most int) bool {
 
 // hold counts o's amount as a debit of a, holds it with its charges on a and moves o to held.
 func hold(ctx context.Context, p funds, a deposits.Account, o *Order, quoteID ids.ID) error {
-	if err := p.Debit(ctx, a, o.Amount); err != nil {
+	counted, err := p.Debit(ctx, a, o.Amount)
+	if err != nil {
 		return err
 	}
 	charges, err := p.Charges(ctx, a, o.Amount, quoteID)
@@ -188,5 +193,6 @@ func hold(ctx context.Context, p funds, a deposits.Account, o *Order, quoteID id
 		return err
 	}
 	o.Held, o.Fees, o.GMF = total, charges.Fees, charges.GMF
+	o.DebitCountedOn = counted
 	return o.Hold()
 }

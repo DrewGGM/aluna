@@ -296,32 +296,34 @@ func move(ctx context.Context, s Movements, l Limiting, m movement) (ledger.Tran
 
 // CountDebit keeps a debit of units from account a, already locked, that another module posts (a payment's hold)
 // within the product's limits on the entity's business date (FR-24), and adds it to the account's counters: a
-// *domain.LimitError if it exceeds one.
-func CountDebit(ctx context.Context, s Movements, l Limiting, a domain.Account, units int64) error {
+// *domain.LimitError if it exceeds one. It returns the business date it counted on, which giving the debit back needs.
+func CountDebit(ctx context.Context, s Movements, l Limiting, a domain.Account, units int64) (calendar.Date, error) {
 	return countOutside(ctx, s, l, leg{account: a, side: debit}, units)
 }
 
 // CountCredit is CountDebit for a credit of units to account a (a transfer received, credited at once or from
 // suspense).
 func CountCredit(ctx context.Context, s Movements, l Limiting, a domain.Account, units int64) error {
-	return countOutside(ctx, s, l, leg{account: a, side: credit}, units)
+	_, err := countOutside(ctx, s, l, leg{account: a, side: credit}, units)
+	return err
 }
 
-// countOutside keeps g, a leg of a movement another module posts, within its account's limits and counts it.
-func countOutside(ctx context.Context, s Movements, l Limiting, g leg, units int64) error {
+// countOutside keeps g, a leg of a movement another module posts, within its account's limits and counts it on the
+// entity's business date, which it returns.
+func countOutside(ctx context.Context, s Movements, l Limiting, g leg, units int64) (calendar.Date, error) {
 	today, err := s.BusinessDate(ctx, g.account.LegalEntityID)
 	if err != nil {
-		return err
+		return calendar.Date{}, err
 	}
 	limits, err := limitsOf(ctx, l, g.account, today)
 	if err != nil {
-		return err
+		return calendar.Date{}, err
 	}
 	if err := limits.check(g.side, units); err != nil {
-		return err
+		return calendar.Date{}, err
 	}
 	debits, credits := g.moved(units)
-	return l.Count(ctx, g.account.ID, today, debits, credits)
+	return today, l.Count(ctx, g.account.ID, today, debits, credits)
 }
 
 // limitsOn are an account's limits on a day and what it used of them before a movement.

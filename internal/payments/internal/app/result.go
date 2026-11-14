@@ -73,7 +73,7 @@ type Settling interface {
 	// Capture captures o's amount from its hold against its rail's clearing account, which releases the rest
 	// of the hold, and posts charges, the entries of o's charges, unless there are none.
 	Capture(ctx context.Context, o Order, charges []ledger.EntryInput) error
-	// Release releases o's hold.
+	// Release releases o's hold and gives back the debit it counted, if it counted one: its money never left.
 	Release(ctx context.Context, o Order) error
 	// Update stores where o stands and publishes it.
 	Update(ctx context.Context, o Order) error

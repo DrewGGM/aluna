@@ -108,15 +108,33 @@ func (s Store) RecordActivity(ctx context.Context, id ids.ID, on calendar.Date) 
 	return nil
 }
 
-// Debits reads the debits of account id on day on and in its month, 0 for a period without movements.
+// Debits reads the debits of account id on day on and in its month, less what was released of them, 0 for a period
+// without movements.
 func (s Store) Debits(ctx context.Context, id ids.ID, on calendar.Date) (daily, monthly int64, err error) {
 	day, month := periods(on)
-	err = s.q.QueryRow(ctx, `SELECT coalesce(sum(debits) FILTER (WHERE period = $2), 0), coalesce(sum(debits) FILTER (WHERE period = $3), 0)
+	err = s.q.QueryRow(ctx, `SELECT coalesce(sum(debits - released_debits) FILTER (WHERE period = $2), 0),
+			coalesce(sum(debits - released_debits) FILTER (WHERE period = $3), 0)
 		FROM deposits.counters WHERE account_id = $1 AND period IN ($2, $3)`, id, day, month).Scan(&daily, &monthly)
 	if err != nil {
 		return 0, 0, fmt.Errorf("read the counters of deposit account %s: %w", id, err)
 	}
 	return daily, monthly, nil
+}
+
+// Release adds debits to what was released of the debits of account id of day on and of its month. Both counters
+// exist, as the debit was counted in them; a release that finds them missing fails loudly rather than giving back
+// nothing.
+func (s Store) Release(ctx context.Context, id ids.ID, on calendar.Date, debits int64) error {
+	day, month := periods(on)
+	tag, err := s.q.Exec(ctx, `UPDATE deposits.counters SET released_debits = released_debits + $4
+		WHERE account_id = $1 AND period IN ($2, $3)`, id, day, month, debits)
+	if err != nil {
+		return fmt.Errorf("release debits of deposit account %s: %w", id, err)
+	}
+	if tag.RowsAffected() != 2 {
+		return fmt.Errorf("release debits of deposit account %s: the counters of %s and %s were not both there", id, day, month)
+	}
+	return nil
 }
 
 // Count adds debits and credits to the counters of account id of day on and of its month.

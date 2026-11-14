@@ -188,10 +188,10 @@ func (i initiation) ScreenBeneficiary(ctx context.Context, o app.Order) (bool, e
 	return outcome == compliance.OutcomeClear, err
 }
 
-func (i initiation) Debit(ctx context.Context, a deposits.Account, amount money.Amount) error {
+func (i initiation) Debit(ctx context.Context, a deposits.Account, amount money.Amount) (time.Time, error) {
 	locked, err := i.s.deposits.LockActive(ctx, i.tx, a.LegalEntityID, a.ID)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	return i.s.deposits.CountDebit(ctx, i.tx, locked, amount)
 }

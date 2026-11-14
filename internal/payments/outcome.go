@@ -255,7 +255,18 @@ func (r orders) Capture(ctx context.Context, o app.Order, charges []ledger.Entry
 	return err
 }
 
+// Release gives back the debit o counted, under its account's lock taken before the ledger's as every movement
+// does, and releases its hold. An order held before migration 0036 has no counted date and gives nothing back.
 func (r orders) Release(ctx context.Context, o app.Order) error {
+	if !o.DebitCountedOn.IsZero() {
+		a, err := r.s.deposits.LockAccount(ctx, r.tx, o.LegalEntityID, o.AccountID)
+		if err != nil {
+			return err
+		}
+		if err := r.s.deposits.ReleaseDebit(ctx, r.tx, a, o.Amount, o.DebitCountedOn); err != nil {
+			return err
+		}
+	}
 	_, err := r.s.ledger.ReleaseHold(ctx, r.tx, ledger.ReleaseInput{LegalEntityID: o.LegalEntityID, HoldID: o.HoldID})
 	return err
 }

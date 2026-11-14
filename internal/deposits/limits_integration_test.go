@@ -5,6 +5,7 @@ package deposits_test
 import (
 	"errors"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,7 +202,8 @@ func TestADebitOfAnotherModuleKeepsWithinTheLimits(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			return w.deposits.CountDebit(t.Context(), tx, locked, money.New(units, a.Currency))
+			_, err = w.deposits.CountDebit(t.Context(), tx, locked, money.New(units, a.Currency))
+			return err
 		})
 	}
 
@@ -220,6 +222,41 @@ func TestADebitOfAnotherModuleKeepsWithinTheLimits(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestAReleasedDebitFreesTheLimit (FR-24): a debit another module counted and then gave back (a payment the rail
+// rejected) no longer uses the day's limit, and what is released never exceeds what was debited.
+func TestAReleasedDebitFreesTheLimit(t *testing.T) {
+	w := newWorld(t)
+	w.vault(t)
+	a := w.limited(t, `{"daily_debits": {"units": 1500}}`)
+	var counted time.Time
+	debit := func(units int64) error {
+		return try(t, func(tx postgres.Tx) error {
+			locked, err := w.deposits.LockActive(t.Context(), tx, w.entity, a.ID)
+			if err != nil {
+				return err
+			}
+			counted, err = w.deposits.CountDebit(t.Context(), tx, locked, money.New(units, a.Currency))
+			return err
+		})
+	}
+	release := func(units int64) error {
+		return try(t, func(tx postgres.Tx) error {
+			locked, err := w.deposits.LockAccount(t.Context(), tx, w.entity, a.ID)
+			if err != nil {
+				return err
+			}
+			return w.deposits.ReleaseDebit(t.Context(), tx, locked, money.New(units, a.Currency), counted)
+		})
+	}
+
+	steps(t, func() error { return debit(1000) }, func() error { return release(1000) }, func() error { return debit(1200) })
+
+	if err := release(1300); err == nil || !strings.Contains(err.Error(), "counters_released_within_debits") {
+		t.Fatalf("releasing more than was debited = %v, want counters_released_within_debits", err)
+	}
+	expectExceeds(t, "a debit over the day after the release", debit(400), "daily_debits", 1500)
 }
 
 // TestACreditOfAnotherModuleKeepsWithinTheLimits (FR-24): a credit another module posts (a transfer credited from
@@ -333,6 +370,7 @@ func TestTheDatabaseGuardsTheCounters(t *testing.T) {
 	where := ` WHERE account_id = '` + a.ID.String() + `'`
 	expectProhibited(t, []prohibited{
 		{"lower the credits", `UPDATE deposits.counters SET credits = credits - 1` + where, "only grow"},
+		{"take back a release", `UPDATE deposits.counters SET released_debits = released_debits - 1` + where, "only grow"},
 		{"move to another period", `UPDATE deposits.counters SET period = '2020-01'` + where + ` AND period = '2026-03'`, "only grow"},
 		{"delete", `DELETE FROM deposits.counters` + where, "never deleted or truncated"},
 		{"truncate", `TRUNCATE deposits.counters`, "never deleted or truncated"},

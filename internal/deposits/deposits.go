@@ -170,12 +170,24 @@ func (s *Service) Withdraw(ctx context.Context, tx postgres.Tx, in CashInput) (l
 
 // CountDebit keeps a debit of amount, in a's currency, from account a, which the caller locked (LockActive), within
 // the limits of its product on the entity's business date (FR-24) and counts it: a payment holds its amount through
-// the ledger, not through a movement of this module. Counters only add: a debit counted for a payment the rail
-// later rejects stays counted. ErrLimitExceeded (a *LimitError) if it exceeds one; ErrMinimumWageMissing,
-// ErrMinimumWageTooLow or ErrSMMLVOutsideCOP as Deposit.
-func (s *Service) CountDebit(ctx context.Context, tx postgres.Tx, a Account, amount money.Amount) error {
+// the ledger, not through a movement of this module; if the payment's money never leaves, ReleaseDebit gives the
+// debit back. ErrLimitExceeded (a *LimitError) if it exceeds one; ErrMinimumWageMissing, ErrMinimumWageTooLow or
+// ErrSMMLVOutsideCOP as Deposit. It returns the business date it counted on, which ReleaseDebit needs.
+func (s *Service) CountDebit(ctx context.Context, tx postgres.Tx, a Account, amount money.Amount) (time.Time, error) {
 	m := s.movements(tx)
-	return app.CountDebit(ctx, m, m, a, amount.Units())
+	on, err := app.CountDebit(ctx, m, m, a, amount.Units())
+	if err != nil {
+		return time.Time{}, err
+	}
+	return on.Time(), nil
+}
+
+// ReleaseDebit gives back a debit of amount from account a, which the caller locked (LockAccount), that CountDebit
+// counted on business date on and whose money never left (a payment the rail rejected): it no longer uses that
+// day's and that month's limits. The counters only grow, so a release is recorded apart and never exceeds what was
+// debited.
+func (s *Service) ReleaseDebit(ctx context.Context, tx postgres.Tx, a Account, amount money.Amount, on time.Time) error {
+	return pg.NewStore(tx).Release(ctx, a.ID, calendar.DateOf(on), amount.Units())
 }
 
 // CountCredit is CountDebit for a credit of amount to account a: a transfer received, credited through the ledger,

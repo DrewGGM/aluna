@@ -404,6 +404,7 @@ lecturas incluidas, mientras se valida, y una llave foránea nueva bloquea sus e
 | `0028_gl.sql` | índice sobre `ledger.transactions` y `CHECK` en `recon.control_runs` y `recon.breaks` | los postings y los controles |
 | `0031_events.sql` | dos índices sobre `infra.outbox` | todo comando que emite eventos |
 | `0034_payments_pending_index.sql` | índice parcial sobre `payments.orders` | los pagos |
+| `0036_released_debits.sql` | columna con `CHECK` en `deposits.counters` | los movimientos de depósitos y los pagos |
 
 Aplícalas en una ventana de mantenimiento, con la API fuera de rotación: tardan lo que tarde recorrer la
 tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y migrándolo (ver

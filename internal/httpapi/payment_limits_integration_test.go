@@ -30,6 +30,45 @@ func TestAPaymentKeepsWithinTheAccountsLimits(t *testing.T) {
 	}
 }
 
+// TestARejectedPaymentGivesBackItsLimit (FR-24, FR-31): a payment the rail rejects took no money, so its debit no
+// longer counts against the day's limit: another payment of the same day fits again.
+func TestARejectedPaymentGivesBackItsLimit(t *testing.T) {
+	w, a := limitedPayingWorld(t)
+	rails := newRailSide(t)
+	rejected := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30001300, "simbreb", "@beneficiary")))
+	sentAndNotified(t, rails, rejected)
+	if now := readOrder(t, w.ts, rejected.Id.String()); now.Status != gen.PaymentOrderStatusRejected {
+		t.Fatalf("the first payment = %+v, want it rejected by the rail", now)
+	}
+
+	again := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30000000, "simbreb", "@beneficiary")))
+
+	if again.Status != gen.PaymentOrderStatusHeld {
+		t.Fatalf("the second payment = %+v, want it held: the rejected one gave back its limit", again)
+	}
+}
+
+// TestAClearedPaymentTheRailRejectsGivesBackItsLimit (FR-24, FR-42): a payment that waited for compliance counts its
+// debit when it is cleared, and gives it back if the rail then rejects it.
+func TestAClearedPaymentTheRailRejectsGivesBackItsLimit(t *testing.T) {
+	w, a := limitedPayingWorld(t)
+	rails := newRailSide(t)
+	pending := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30001300, "simbreb", "match-sanctioned")))
+	if cleared := w.resolvePayment(t, pending, "cleared"); cleared.Status != gen.PaymentOrderStatusHeld {
+		t.Fatalf("the cleared payment = %+v, want it held", cleared)
+	}
+	sentAndNotified(t, rails, pending)
+	if now := readOrder(t, w.ts, pending.Id.String()); now.Status != gen.PaymentOrderStatusRejected {
+		t.Fatalf("the cleared payment = %+v, want it rejected by the rail", now)
+	}
+
+	again := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30000000, "simbreb", "@beneficiary")))
+
+	if again.Status != gen.PaymentOrderStatusHeld {
+		t.Fatalf("the second payment = %+v, want it held: the cleared and rejected one gave back its limit", again)
+	}
+}
+
 // TestAClearedPaymentOverTheLimitsIsRejected (FR-24, FR-42): a payment that waited for compliance is a debit when
 // it is cleared: if it would take the account's debits of the day over the limit, it is rejected as AM02.
 func TestAClearedPaymentOverTheLimitsIsRejected(t *testing.T) {

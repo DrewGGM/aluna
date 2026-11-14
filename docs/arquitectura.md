@@ -213,7 +213,7 @@ Cada evento se escribe en `infra.outbox` en la transacción de su efecto, como C
 | `aluna.payments.order.held.v1` | `POST /v1/payment-orders` cuando el screening despeja y los fondos quedan retenidos, o la resolución aprobada que despeja una orden que esperaba a cumplimiento |
 | `aluna.payments.order.sent.v1` | El job `payments.send` |
 | `aluna.payments.order.settled.v1` | La notificación del rail que acepta un pago saliente, o una transferencia recibida que se abona |
-| `aluna.payments.order.rejected.v1` | La notificación del rail que rechaza un pago saliente, el rail que no lo toma, o la resolución de una orden que esperaba a cumplimiento y no puede salir |
+| `aluna.payments.order.rejected.v1` | La notificación del rail que rechaza un pago saliente, el rail que no lo toma, la resolución de una orden que esperaba a cumplimiento y no puede salir, o el job `payments.pending.expire` |
 | `aluna.payments.order.suspended.v1` | Una transferencia recibida que va a la cuenta de suspense |
 | `aluna.payments.order.returned.v1` | La notificación del rail de que el banco del beneficiario devolvió un pago liquidado |
 | `aluna.approvals.request.created.v1` | Todo comando de maker-checker al pedirse |
@@ -258,6 +258,7 @@ siguiente. Los marcados con *una a la vez* no se encolan si ya hay uno esperando
 | `accounting.gl.project` | `gl` | 15 min | Proyecta el GL diario de los días cerrados con el mapeo CUIF vigente (una a la vez) |
 | `deposits.statements.generate` | `default` | 1 h | Genera los extractos mensuales de los periodos cerrados (una a la vez) |
 | `webhooks.deliver` | `webhooks` | 10 s | Encola los eventos nuevos de cada endpoint e intenta las entregas pendientes (una a la vez) |
+| `payments.pending.expire` | `payments` | 1 h | Rechaza (`SCREENING_EXPIRED`) las órdenes que llevan más de 7 días esperando a cumplimiento |
 | `outbox.publish` | `default` | por evento | Entrega un evento a los consumidores internos |
 | `payments.send` | `payments` | por orden | Envía una orden `held` al rail |
 
@@ -398,6 +399,7 @@ lecturas incluidas, mientras se valida, y una llave foránea nueva bloquea sus e
 | `0026_recon_statements.sql` | columnas con `CHECK` e índice sobre `recon.breaks` | los controles y los breaks |
 | `0028_gl.sql` | índice sobre `ledger.transactions` y `CHECK` en `recon.control_runs` y `recon.breaks` | los postings y los controles |
 | `0031_events.sql` | dos índices sobre `infra.outbox` | todo comando que emite eventos |
+| `0034_payments_pending_index.sql` | índice parcial sobre `payments.orders` | los pagos |
 
 Aplícalas en una ventana de mantenimiento, con la API fuera de rotación: tardan lo que tarde recorrer la
 tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y migrándolo (ver

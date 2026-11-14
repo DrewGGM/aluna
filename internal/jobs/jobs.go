@@ -40,10 +40,13 @@ const (
 	QueueWebhooks = "webhooks"
 )
 
-// The two ledger jobs keep taking batches until they catch up; the size bounds each transaction.
+// The two ledger jobs and the expiry of pending payments keep taking batches until they catch up; the size
+// bounds each transaction. An expired payment emits its event in the batch's transaction, so its batches are
+// smaller.
 const (
-	holdsBatch     = 500
-	aggregateBatch = 1000
+	holdsBatch           = 500
+	aggregateBatch       = 1000
+	pendingPaymentsBatch = 100
 )
 
 // The accrual (FR-25) locks accounts batch by batch, so a batch also bounds how long a movement on one of
@@ -188,6 +191,7 @@ func Register(w *river.Workers, deps Deps) {
 		return deps.Accounting.ProjectGL(ctx, deps.UnitOfWork)
 	}})
 	river.AddWorker(w, deliveringWebhooks(deps))
+	river.AddWorker(w, expiringPendingPayments(deps))
 	river.AddWorker(w, &task[generateStatements]{timeout: statementsTimeout, run: func(ctx context.Context) error {
 		_, err := deps.Deposits.GenerateStatements(ctx, deps.UnitOfWork, statementsBatch)
 		return err
@@ -201,6 +205,14 @@ func Register(w *river.Workers, deps Deps) {
 func deliveringWebhooks(deps Deps) *task[deliverWebhooks] {
 	return &task[deliverWebhooks]{timeout: webhooksTimeout, run: func(ctx context.Context) error {
 		return deps.Webhooks.Deliver(ctx, deps.UnitOfWork, deps.WebhookSender, time.Now, webhooksBatch)
+	}}
+}
+
+// expiringPendingPayments is the worker of expirePendingPayments.
+func expiringPendingPayments(deps Deps) *task[expirePendingPayments] {
+	return &task[expirePendingPayments]{run: func(ctx context.Context) error {
+		_, err := deps.Payments.ExpirePending(ctx, deps.UnitOfWork, time.Now(), pendingPaymentsBatch)
+		return err
 	}}
 }
 
@@ -234,6 +246,7 @@ func Periodic() []*river.PeriodicJob {
 		every(glInterval, projectGL{}),
 		every(statementsInterval, generateStatements{}),
 		every(webhooksInterval, deliverWebhooks{}),
+		every(time.Hour, expirePendingPayments{}),
 	}
 }
 
@@ -268,6 +281,12 @@ type aggregateAsync struct{}
 
 func (aggregateAsync) Kind() string                 { return "ledger.balances.aggregate" }
 func (aggregateAsync) InsertOpts() river.InsertOpts { return insertOpts(QueueLedger) }
+
+// expirePendingPayments rejects the payments that waited for compliance too long (payments.ExpirePending).
+type expirePendingPayments struct{}
+
+func (expirePendingPayments) Kind() string                 { return "payments.pending.expire" }
+func (expirePendingPayments) InsertOpts() river.InsertOpts { return insertOpts(payments.Queue) }
 
 type purgeIdempotency struct{}
 

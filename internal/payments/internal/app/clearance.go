@@ -32,11 +32,12 @@ type Clearance interface {
 
 // ResolveScreening applies compliance's decision (FR-42) on order id of entity, pending_screening: a confirmed
 // match rejects it (RR04); a cleared one holds its amount and charges, priced as it is cleared, and the order is
-// held and queued to be sent. Another entity's order is ErrOrderNotFound. If the funds cannot be held it returns
-// why (HoldRefusal names the reason): the caller undoes what tx did since and calls RejectPending.
+// held and queued to be sent. An order that is no longer pending_screening expired meanwhile (ExpirePending) and
+// is left as it is. Another entity's order is ErrOrderNotFound. If the funds cannot be held it returns why
+// (HoldRefusal names the reason): the caller undoes what tx did since and calls RejectPending.
 func ResolveScreening(ctx context.Context, p Clearance, entity, id ids.ID, cleared bool) error {
-	o, err := lockPending(ctx, p, entity, id)
-	if err != nil {
+	o, err := lockOrderOf(ctx, p, entity, id)
+	if err != nil || o.Status != domain.StatusPendingScreening {
 		return err
 	}
 	if !cleared {
@@ -64,28 +65,25 @@ func HoldRefusal(err error) string {
 	return ""
 }
 
-// RejectPending rejects order id of entity, still pending_screening, for reason. It locks the order again: rolling
-// back to the savepoint taken before ResolveScreening released the lock that call took.
+// RejectPending rejects order id of entity for reason if it is still pending_screening, and leaves it as it is if it
+// expired meanwhile. It locks the order again: rolling back to the savepoint taken before ResolveScreening released
+// the lock that call took, and the expiry may have taken the order in between.
 func RejectPending(ctx context.Context, p Clearance, entity, id ids.ID, reason string) error {
-	o, err := lockPending(ctx, p, entity, id)
-	if err != nil {
+	o, err := lockOrderOf(ctx, p, entity, id)
+	if err != nil || o.Status != domain.StatusPendingScreening {
 		return err
 	}
 	return rejectPending(ctx, p, o, reason)
 }
 
-// lockPending locks order id of entity; another entity's is ErrOrderNotFound, and one not pending_screening
-// domain.ErrIllegalTransition, for a case is resolved once.
-func lockPending(ctx context.Context, p Clearance, entity, id ids.ID) (Order, error) {
+// lockOrderOf locks order id of entity; another entity's is ErrOrderNotFound.
+func lockOrderOf(ctx context.Context, p Clearance, entity, id ids.ID) (Order, error) {
 	o, err := p.LockOrder(ctx, id)
 	if err != nil {
 		return Order{}, err
 	}
-	switch {
-	case o.LegalEntityID != entity:
+	if o.LegalEntityID != entity {
 		return Order{}, fmt.Errorf("%w: %s", ErrOrderNotFound, id)
-	case o.Status != domain.StatusPendingScreening:
-		return Order{}, fmt.Errorf("%w: order %s is %s, not pending_screening", domain.ErrIllegalTransition, id, o.Status)
 	}
 	return o, nil
 }

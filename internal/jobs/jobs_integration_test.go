@@ -205,7 +205,8 @@ func TestTheWorkerRunsEveryJob(t *testing.T) {
 
 	waitFor(t, startWorker(t, deps),
 		"ledger.holds.expire", "ledger.balances.aggregate", "idempotency.purge", "outbox.purge", "outbox.publish", "audit.seal",
-		"deposits.interest.accrue", "deposits.accounts.mark_dormant", "reconciliation.controls.run", "accounting.gl.project", "payments.send")
+		"deposits.interest.accrue", "deposits.accounts.mark_dormant", "reconciliation.controls.run", "accounting.gl.project", "payments.send",
+		"payments.pending.expire")
 
 	var block *int64
 	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil || block == nil {

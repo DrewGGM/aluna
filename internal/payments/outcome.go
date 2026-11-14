@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/riverqueue/river"
 
@@ -183,6 +184,10 @@ type orders struct {
 
 func (r orders) LockOrder(ctx context.Context, id ids.ID) (app.Order, error) {
 	return pg.NewStore(r.tx).LockOrder(ctx, id)
+}
+
+func (r orders) LockStalePending(ctx context.Context, before time.Time, limit int) ([]ids.ID, error) {
+	return pg.NewStore(r.tx).LockStalePending(ctx, before, limit)
 }
 
 func (r orders) LockByEndToEndID(ctx context.Context, e2e string) (app.Order, error) {

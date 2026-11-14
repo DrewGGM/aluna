@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -97,6 +98,21 @@ func (s Store) LockOrder(ctx context.Context, id ids.ID) (app.Order, error) {
 // app.ErrOrderNotFound.
 func (s Store) LockByEndToEndID(ctx context.Context, e2e string) (app.Order, error) {
 	return s.read(ctx, lockByE2ESQL, e2e)
+}
+
+// LockStalePending locks (FOR UPDATE SKIP LOCKED) and returns up to limit outgoing orders pending_screening made
+// before before, the oldest first.
+func (s Store) LockStalePending(ctx context.Context, before time.Time, limit int) ([]ids.ID, error) {
+	rows, err := s.q.Query(ctx, `SELECT id FROM payments.orders WHERE direction = 'outgoing' AND status = 'pending_screening'
+		AND created_at < $1 ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED`, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("lock the stale pending orders: %w", err)
+	}
+	stale, err := pgx.CollectRows(rows, pgx.RowTo[ids.ID])
+	if err != nil {
+		return nil, fmt.Errorf("lock the stale pending orders: %w", err)
+	}
+	return stale, nil
 }
 
 // Outgoing reads outgoing order id of entity, or app.ErrOrderNotFound: another entity's order, or a transfer received,

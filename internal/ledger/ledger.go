@@ -4,7 +4,6 @@ package ledger
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
@@ -217,50 +216,18 @@ func (s *Service) ReleaseHold(ctx context.Context, tx postgres.Tx, in ReleaseInp
 // progress are skipped; if they are still pending, a later run takes them. It returns how many it
 // expired, also when a batch fails (the earlier ones are already committed).
 func (s *Service) ExpireDueHolds(ctx context.Context, uow *postgres.UnitOfWork, now time.Time, batch int) (int, error) {
-	if batch < 1 {
-		return 0, fmt.Errorf("expiry batch %d: must be positive", batch)
-	}
-	expired := 0
-	for {
-		var n int
-		err := uow.Do(ctx, func(tx postgres.Tx) error {
-			var err error
-			n, err = app.ExpireDueHolds(ctx, pg.NewStore(tx), s.emitter(tx), now, batch)
-			return err
-		})
-		if err != nil {
-			return expired, err
-		}
-		expired += n
-		if n < batch {
-			return expired, nil
-		}
-	}
+	return uow.DoBatches(ctx, batch, func(tx postgres.Tx) (int, error) {
+		return app.ExpireDueHolds(ctx, pg.NewStore(tx), s.emitter(tx), now, batch)
+	})
 }
 
 // AggregateAsyncBalances adds to the async accounts' balances the entries not yet aggregated (FR-9), in
 // batches of batch entries, each in its own transaction, until one comes out incomplete. It returns how
 // many entries it aggregated, also when a batch fails (the earlier ones are already committed).
 func (s *Service) AggregateAsyncBalances(ctx context.Context, uow *postgres.UnitOfWork, batch int) (int, error) {
-	if batch < 1 {
-		return 0, fmt.Errorf("aggregation batch %d: must be positive", batch)
-	}
-	aggregated := 0
-	for {
-		var n int
-		err := uow.Do(ctx, func(tx postgres.Tx) error {
-			var err error
-			n, err = app.AggregateAsyncBalances(ctx, pg.NewStore(tx), batch)
-			return err
-		})
-		if err != nil {
-			return aggregated, err
-		}
-		aggregated += n
-		if n < batch {
-			return aggregated, nil
-		}
-	}
+	return uow.DoBatches(ctx, batch, func(tx postgres.Tx) (int, error) {
+		return app.AggregateAsyncBalances(ctx, pg.NewStore(tx), batch)
+	})
 }
 
 // Account reads one of the entity's accounts: another entity's account does not exist for it. q can be

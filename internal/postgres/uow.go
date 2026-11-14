@@ -108,6 +108,33 @@ func (u *UnitOfWork) Do(ctx context.Context, fn func(Tx) error) error {
 	}
 }
 
+// DoBatches runs batches, each a call of fn that does up to size items in its own transaction (Do), until one does
+// fewer than size: a job that catches up in bounded transactions. Do may retry a batch, so fn must be repeatable: it
+// works from what the database holds, not from state it changes outside the transaction. It returns how many items
+// the batches did, also when one fails, since the earlier ones are already committed. A size below one is refused
+// before any transaction: no batch would ever come short.
+func (u *UnitOfWork) DoBatches(ctx context.Context, size int, fn func(Tx) (int, error)) (int, error) {
+	if size < 1 {
+		return 0, fmt.Errorf("batch size %d: must be positive", size)
+	}
+	total := 0
+	for {
+		var n int
+		err := u.Do(ctx, func(tx Tx) error {
+			var err error
+			n, err = fn(tx)
+			return err
+		})
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if n < size {
+			return total, nil
+		}
+	}
+}
+
 func (u *UnitOfWork) once(ctx context.Context, fn func(Tx) error) error {
 	tx, err := u.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {

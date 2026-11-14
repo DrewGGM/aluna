@@ -262,3 +262,63 @@ func TestDoRollsBackWhenFnExitsGoroutine(t *testing.T) {
 		t.Errorf("%d pool connections left acquired", acquired)
 	}
 }
+
+// TestDoBatchesGoesOnUntilABatchIsShort: each batch commits in its own transaction and the batches go on while they
+// come full; the total is what they did. The batch works from what the database holds, as a retry needs.
+func TestDoBatchesGoesOnUntilABatchIsShort(t *testing.T) {
+	cleanProbes(t)
+	ctx := context.Background()
+	const items, size = 7, 3
+	batch := func(tx Tx) (int, error) {
+		var done int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM uow_probe`).Scan(&done); err != nil {
+			return 0, err
+		}
+		n := min(size, items-done)
+		for i := range n {
+			if err := insertProbe(ctx, tx, done+i+1); err != nil {
+				return 0, err
+			}
+		}
+		return n, nil
+	}
+
+	total, err := NewUnitOfWork(testPool).DoBatches(ctx, size, batch)
+
+	if err != nil || total != items || !probeExists(t, items) || probeExists(t, items+1) {
+		t.Fatalf("batches = %d (%v), want the %d items committed and no more", total, err, items)
+	}
+}
+
+// TestDoBatchesRefusesASizeBelowOne: a size below one would never come short, so it is refused without running a
+// batch.
+func TestDoBatchesRefusesASizeBelowOne(t *testing.T) {
+	for _, size := range []int{0, -1} {
+		if _, err := NewUnitOfWork(testPool).DoBatches(context.Background(), size, func(Tx) (int, error) {
+			t.Fatalf("a batch ran with size %d", size)
+			return 0, nil
+		}); err == nil {
+			t.Errorf("a size of %d = nil, want it refused", size)
+		}
+	}
+}
+
+// TestDoBatchesStopsAtAFailingBatch: a failing batch stops the batches with its error, keeping what the earlier
+// ones committed.
+func TestDoBatchesStopsAtAFailingBatch(t *testing.T) {
+	cleanProbes(t)
+	ctx := context.Background()
+	uow := NewUnitOfWork(testPool)
+	failing := errors.New("the batch fails")
+	calls := 0
+	total, err := uow.DoBatches(ctx, 1, func(tx Tx) (int, error) {
+		calls++
+		if calls == 2 {
+			return 0, failing
+		}
+		return 1, insertProbe(ctx, tx, 100+calls)
+	})
+	if !errors.Is(err, failing) || total != 1 || calls != 2 || !probeExists(t, 101) {
+		t.Fatalf("batches with a failure = %d (%v) after %d calls, want 1, the error after 2 calls, and the first committed", total, err, calls)
+	}
+}

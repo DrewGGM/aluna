@@ -47,7 +47,56 @@ SELECT max(id) FROM audit.blocks;
 ALUNA_DATABASE_URL=… ALUNA_AUDIT_ANCHOR_DIR=… aluna audit verify --from 1 --to <último bloque>
 ```
 
-Sale con 0 si cada bloque cuadra con su ancla, y si no, nombra el primer bloque que no cuadra.
+Sale con 0 si cada bloque cuadra con su ancla, y si no, nombra el primer bloque que no cuadra. Con el ancla
+en S3, `audit verify` lee las mismas variables que el worker.
+
+### El ancla de auditoría en S3
+
+El ancla de producción es un bucket S3 con Object Lock (ADR-0017). Cada bloque es un objeto
+`<prefijo>/<id con 20 dígitos>.sha256` con su hash en hexadecimal. Se crea solo si no existe
+(`If-None-Match`) y queda retenido en modo compliance `ALUNA_AUDIT_ANCHOR_RETENTION_DAYS` días: durante la
+retención nadie reescribe ni borra esa versión, tampoco la cuenta raíz. Object Lock protege versiones, no
+llaves: encima de la versión retenida se puede poner otra o un marcador de borrado. Por eso el ancla solo se
+lee si su llave tiene esa única versión; con más, `audit verify` falla con "the audit anchor was replaced or
+deleted" y nombra el bloque. Eso es evidencia de manipulación: la versión original sigue retenida en el bucket.
+Un marcador de borrado puesto en la llave de un bloque antes de anclarlo también la deja así: el sellado se
+detiene en ese bloque hasta que se investigue, sin perder registros.
+
+1. Crea el bucket con Object Lock activado (solo se puede al crearlo) y sin reglas de ciclo de vida que
+   expiren versiones:
+
+   ```bash
+   aws s3api create-bucket --bucket <bucket> --object-lock-enabled-for-bucket --region <región> \
+     --create-bucket-configuration LocationConstraint=<región>
+   ```
+
+2. Dale al usuario del worker, y al de `audit verify`, solo:
+   - `s3:PutObject` y `s3:PutObjectRetention` sobre `arn:aws:s3:::<bucket>/<prefijo>/*` (verify no los
+     necesita);
+   - `s3:GetObject` y `s3:GetObjectVersion` sobre `arn:aws:s3:::<bucket>/<prefijo>/*`: el ancla se lee por el
+     id de su única versión;
+   - `s3:ListBucketVersions` sobre `arn:aws:s3:::<bucket>`, con `"StringLike": {"s3:prefix": "<prefijo>/*"}`
+     (sin prefijo, sin la condición): el ancla lista con la llave completa como prefijo. Sin este permiso,
+     `audit verify` no distingue un bloque sin ancla de uno reemplazado y falla.
+3. Ponle al bucket una política que niegue a todos `s3:PutObject` sin la condición `s3:if-none-match`
+   (`"Null": {"s3:if-none-match": "true"}`), `s3:DeleteObject` y `s3:DeleteObjectVersion`, y cualquier
+   solicitud sin TLS (`"Bool": {"aws:SecureTransport": "false"}`). Así ni las llaves del worker ponen una
+   versión encima. La cuenta raíz puede cambiar la política; lo que ponga encima, `audit verify` lo detecta.
+4. Configura el worker con `ALUNA_AUDIT_ANCHOR_S3_URL` (`https://`), `ALUNA_AUDIT_ANCHOR_S3_PREFIX`,
+   `ALUNA_AUDIT_ANCHOR_S3_REGION` y las llaves `AWS_*`, sin `ALUNA_AUDIT_ANCHOR_DIR`. Las llaves se leen al
+   arrancar: credenciales temporales (`AWS_SESSION_TOKEN`) que se renuevan exigen reiniciar el worker antes de
+   que venzan. Si no, el sellado se detiene con un 403 y los registros se acumulan sin sellar (no se pierden).
+5. Comprueba la retención de un ancla, fuera del proceso:
+
+   ```bash
+   aws s3api get-object-retention --bucket <bucket> --key <prefijo>/00000000000000000001.sha256
+   ```
+
+   Debe decir `"Mode": "COMPLIANCE"` y una fecha `RetainUntilDate` unos diez años adelante.
+
+Si el worker no puede anclar (el bucket no responde o niega el permiso), el bloque queda sellado sin ancla y
+el siguiente sellado lo completa antes de sellar otro: no se pierde nada, pero `audit verify` no cuadra
+hasta que se ancle.
 
 ## Breaks de reconciliación
 
@@ -286,11 +335,13 @@ se restauró no cuenta: el ensayo corre cada trimestre.
      después del instante, que la base restaurada ya no tiene: no se verifican, y sus comandos se
      perdieron con la restauración.
    - **Abre una generación nueva del ancla** antes de que cualquier worker selle: copia a una ubicación
-     WORM nueva las anclas de los bloques 1 al último restaurado (`<id con 20 dígitos>.sha256`) y apunta
-     `ALUNA_AUDIT_ANCHOR_DIR` de los workers a ella. La generación vieja queda como evidencia. La vieja
-     guarda las anclas de los bloques perdidos, y un ancla WORM no se puede quitar: si la secuencia de
-     bloques salta adelante (lo usual), `audit verify` los lee como bloques anclados y borrados; si no
-     salta, la base reusa un id ya anclado y el sellado se detiene. En los dos casos la cadena se rompe.
+     WORM nueva (otro prefijo del bucket, o otro bucket con Object Lock) las anclas de los bloques 1 al
+     último restaurado (`<id con 20 dígitos>.sha256`) y apunta los workers a ella:
+     `ALUNA_AUDIT_ANCHOR_S3_PREFIX` u `ALUNA_AUDIT_ANCHOR_S3_URL` (o `ALUNA_AUDIT_ANCHOR_DIR`). La
+     generación vieja queda como evidencia. La vieja guarda las anclas de los bloques perdidos, y un ancla
+     WORM no se puede quitar: si la secuencia de bloques salta adelante (lo usual), `audit verify` los lee
+     como bloques anclados y borrados; si no salta, la base reusa un id ya anclado y el sellado se detiene.
+     En los dos casos la cadena se rompe.
    - Antes de arrancar un worker, revisa los pagos que esperan salir: la base restaurada no sabe qué
      recibió el rail después del instante, y el worker los enviaría otra vez. Lo mismo vale para las
      devoluciones al banco de origen que esperan salir (`payments.return`). Concilia cada orden contra el

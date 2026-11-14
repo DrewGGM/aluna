@@ -1,6 +1,7 @@
 // Package anchorfs anchors the audit blocks in a directory, for development and testing (ADR-0012): one
-// read-only file per block with its hash in hex, never overwritten. In production the anchor is WORM
-// storage (Q-6).
+// read-only file per block with its hash in hex, never overwritten. It writes through hard links, which a
+// directory mounted on object storage does not have: in production the anchor is an S3 bucket with Object Lock
+// (anchors3, ADR-0017).
 package anchorfs
 
 import (
@@ -16,12 +17,8 @@ import (
 	"github.com/DrewGGM/aluna/internal/audit/internal/app"
 )
 
-var (
-	// ErrAnchored means the block already has a different anchored hash: the anchor is not rewritten.
-	ErrAnchored = errors.New("the block already has a different anchored hash")
-	// errNotADir means an anchor path that is not an existing directory.
-	errNotADir = errors.New("the audit anchor is not an existing directory")
-)
+// errNotADir means an anchor path that is not an existing directory.
+var errNotADir = errors.New("the audit anchor is not an existing directory")
 
 // Dir is the anchor in a directory.
 type Dir struct{ path string }
@@ -44,7 +41,7 @@ func (d *Dir) file(blockID int64) string {
 
 // Put anchors hash for blockID. It writes a temporary file, syncs it to disk and links it under the block's
 // name: the link fails if it already exists, so an anchor is never rewritten or left half written.
-// Repeating it with the same hash does nothing (a retried seal); with a different one it is ErrAnchored.
+// Repeating it with the same hash does nothing (a retried seal); with a different one it is app.ErrAnchored.
 func (d *Dir) Put(ctx context.Context, blockID int64, hash [32]byte) error {
 	tmp, err := d.written(hash)
 	if err != nil {
@@ -87,14 +84,14 @@ func (d *Dir) written(hash [32]byte) (string, error) {
 	return f.Name(), nil
 }
 
-// checkAnchored is nil if blockID already has hash anchored and ErrAnchored if it has a different one.
+// checkAnchored is nil if blockID already has hash anchored and app.ErrAnchored if it has a different one.
 func (d *Dir) checkAnchored(ctx context.Context, blockID int64, hash [32]byte) error {
 	anchored, err := d.Get(ctx, blockID)
 	if err != nil {
 		return err
 	}
 	if anchored != hash {
-		return fmt.Errorf("%w: %d", ErrAnchored, blockID)
+		return fmt.Errorf("%w: %d", app.ErrAnchored, blockID)
 	}
 	return nil
 }

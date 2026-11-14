@@ -6,8 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/DrewGGM/aluna/internal/audit/internal/adapters/anchorfs"
+	"github.com/DrewGGM/aluna/internal/audit/internal/adapters/anchors3"
 	pg "github.com/DrewGGM/aluna/internal/audit/internal/adapters/postgres"
 	"github.com/DrewGGM/aluna/internal/audit/internal/app"
 	"github.com/DrewGGM/aluna/internal/postgres"
@@ -55,10 +58,24 @@ func New() *Service { return &Service{} }
 // NewSealing creates the service that also seals and verifies against anchor.
 func NewSealing(anchor AnchorStore) *Service { return &Service{anchor: anchor} }
 
-// WithFileAnchor is NewSealing with the anchor in directory dir, which must exist; in production the
-// anchor is WORM (Q-6).
+// WithFileAnchor is NewSealing with the anchor in directory dir, which must exist: one read-only file per block,
+// for development, or for a WORM volume that keeps hard links (ADR-0017).
 func WithFileAnchor(dir string) (*Service, error) {
 	anchor, err := anchorfs.New(dir)
+	if err != nil {
+		return nil, err
+	}
+	return NewSealing(anchor), nil
+}
+
+// S3Credentials are the keys that sign the requests to the anchor bucket.
+type S3Credentials = anchors3.Credentials
+
+// WithS3Anchor is NewSealing with the anchor in the S3 bucket with Object Lock at bucketURL (ADR-0017), under key
+// prefix, in region, signed with creds through client: each block's anchor is created once and retained in
+// compliance mode for retain, and one whose key has another version or a deletion does not read.
+func WithS3Anchor(bucketURL, prefix, region string, creds S3Credentials, retain time.Duration, client *http.Client) (*Service, error) {
+	anchor, err := anchors3.New(bucketURL, prefix, region, creds, retain, client)
 	if err != nil {
 		return nil, err
 	}

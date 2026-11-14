@@ -44,7 +44,12 @@ Todo sale del entorno:
 | `ALUNA_OIDC_ISSUER` | `api` | obligatoria | Emisor de los tokens; se descubre al arrancar |
 | `ALUNA_OIDC_AUDIENCE` | `api` | obligatoria | Audiencia que deben traer los tokens |
 | `ALUNA_SIMBREB_SECRET` | `api`, `worker` | obligatoria | Secreto, de al menos 32 bytes y el mismo en los dos, con que el rail simulado firma sus notificaciones |
-| `ALUNA_AUDIT_ANCHOR_DIR` | `worker`, `audit verify` | obligatoria | Directorio, ya existente, del ancla de los bloques de auditoría |
+| `ALUNA_AUDIT_ANCHOR_DIR` | `worker`, `audit verify` | esta o la siguiente | Directorio, ya existente, del ancla de los bloques de auditoría: desarrollo, o un volumen WORM que admita enlaces duros |
+| `ALUNA_AUDIT_ANCHOR_S3_URL` | `worker`, `audit verify` | esta o la anterior | Bucket S3 con Object Lock del ancla (ADR-0017): `https://<bucket>.s3.<región>.amazonaws.com`, o con la ruta `https://<host>/<bucket>` |
+| `ALUNA_AUDIT_ANCHOR_S3_PREFIX` | `worker`, `audit verify` | sin prefijo | Prefijo de las llaves de las anclas en el bucket, por ejemplo `audit` |
+| `ALUNA_AUDIT_ANCHOR_S3_REGION` | `worker`, `audit verify` | `us-east-1` | Región del bucket, con la que se firman las solicitudes |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | `worker`, `audit verify` | obligatorias con el bucket (el token, si es temporal) | Llaves que firman las solicitudes al bucket (permisos en el [runbook](runbook.md#el-ancla-de-auditoría-en-s3)). Se leen al arrancar: rotarlas exige reiniciar |
+| `ALUNA_AUDIT_ANCHOR_RETENTION_DAYS` | `worker`, `audit verify` | `3653` | Días, de 1 a 36525, que el bucket retiene cada ancla en modo compliance: diez años (Código de Comercio, art. 60). `audit verify` solo lo valida |
 | `ALUNA_HTTP_ADDR` | `api`, `healthcheck` | `:8080` | Dirección de la API de los canales |
 | `ALUNA_RAIL_ADDR` | `api` | `:8081` | Dirección de las notificaciones de los rails; no se expone a los canales |
 | `ALUNA_SIMBREB_NOTIFY_URL` | `worker` | `http://localhost:8081` | A dónde notifica el rail simulado: el puerto de rails de la `api` |
@@ -319,7 +324,8 @@ nocturno.
 - **Auditoría.** Cada `POST` de la API de los canales deja un registro con quién, con qué rol, desde dónde,
   la correlación, el comando, los ids que tocó y su resultado, sin datos personales; las notificaciones de
   los rails no pasan por ese registro. El job `audit.seal` agrupa los registros en bloques encadenados por
-  hash y escribe el hash de cada bloque en `ALUNA_AUDIT_ANCHOR_DIR`. `aluna audit verify --from N --to M`
+  hash y escribe el hash de cada bloque en el ancla: `ALUNA_AUDIT_ANCHOR_DIR` o el bucket S3 con Object
+  Lock de `ALUNA_AUDIT_ANCHOR_S3_URL`. `aluna audit verify --from N --to M`
   recalcula la cadena y nombra el primer bloque que no cuadra con su ancla
   ([Verificar la cadena](runbook.md#verificar-la-cadena-de-auditoría)).
 - **Fallar cerrado.** Sin respuesta del screening, la party o el pago quedan pendientes; con el IAM caído, la
@@ -390,7 +396,9 @@ docker run --rm --env-file migrate.env aluna:0.1.0 migrate up
   reiniciar todas las réplicas.
 - `ALUNA_SIMBREB_NOTIFY_URL` del worker debe llegar al puerto de rails de la `api`: su valor por defecto
   apunta al propio contenedor del worker, y los pagos se quedarían `sent`.
-- El ancla de auditoría (`ALUNA_AUDIT_ANCHOR_DIR`) es WORM en producción y sobrevive a la base.
+- El ancla de auditoría es WORM en producción y sobrevive a la base: un bucket S3 con Object Lock
+  (`ALUNA_AUDIT_ANCHOR_S3_URL`, ver [El ancla en S3](runbook.md#el-ancla-de-auditoría-en-s3)). Un directorio
+  montado sobre S3 no sirve: el ancla en directorio escribe con enlaces duros, que esos montajes no tienen.
 
 ### Configuración de PostgreSQL
 

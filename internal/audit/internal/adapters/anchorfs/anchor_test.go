@@ -13,7 +13,7 @@ import (
 )
 
 // TestAnAnchorIsWrittenOnce: the anchored hash reads back the same; anchoring it again with the same hash
-// does nothing and with a different one is ErrAnchored, without changing the anchored one.
+// does nothing and with a different one is app.ErrAnchored, without changing the anchored one.
 func TestAnAnchorIsWrittenOnce(t *testing.T) {
 	d, err := New(t.TempDir())
 	if err != nil {
@@ -27,7 +27,7 @@ func TestAnAnchorIsWrittenOnce(t *testing.T) {
 	if err := d.Put(t.Context(), 7, first); err != nil {
 		t.Fatalf("repeating the same anchor = %v", err)
 	}
-	if err := d.Put(t.Context(), 7, second); !errors.Is(err, ErrAnchored) {
+	if err := d.Put(t.Context(), 7, second); !errors.Is(err, app.ErrAnchored) {
 		t.Fatalf("rewriting the anchor = %v, want ErrAnchored", err)
 	}
 

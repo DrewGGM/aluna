@@ -35,6 +35,8 @@ type Block struct {
 var (
 	// ErrNotAnchored means a block with no anchored hash.
 	ErrNotAnchored = errors.New("the block has no anchor")
+	// ErrAnchored means a block that already has a different anchored hash: an anchor is not rewritten.
+	ErrAnchored = errors.New("the block already has a different anchored hash")
 	// ErrNoBlocks means a range with no sealed or anchored blocks: there is nothing to verify.
 	ErrNoBlocks = errors.New("no sealed blocks in the range")
 )

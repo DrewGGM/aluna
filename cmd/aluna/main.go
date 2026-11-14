@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -74,14 +75,18 @@ commands:
                              (lower_of, the default, of those quoted and the tariff, or honor)
   worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls, GL,
                              payments) on ALUNA_DATABASE_URL, anchoring blocks in
-                             ALUNA_AUDIT_ANCHOR_DIR; multiple workers elect a leader for the
-                             periodic jobs; it reads ALUNA_GMF_MODALITY, the variables of what a
-                             payment gives back and ALUNA_SIMBREB_SECRET as api does, and the
-                             simulated rail notifies ALUNA_SIMBREB_NOTIFY_URL (default
-                             http://localhost:8081)
+                             ALUNA_AUDIT_ANCHOR_DIR or, with Object Lock, in the S3 bucket at
+                             ALUNA_AUDIT_ANCHOR_S3_URL (under ALUNA_AUDIT_ANCHOR_S3_PREFIX, in
+                             ALUNA_AUDIT_ANCHOR_S3_REGION, us-east-1 by default; AWS_ACCESS_KEY_ID,
+                             AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN; retained
+                             ALUNA_AUDIT_ANCHOR_RETENTION_DAYS, 3653 by default); multiple workers
+                             elect a leader for the periodic jobs; it reads ALUNA_GMF_MODALITY,
+                             the variables of what a payment gives back and ALUNA_SIMBREB_SECRET as
+                             api does, and the simulated rail notifies ALUNA_SIMBREB_NOTIFY_URL
+                             (default http://localhost:8081)
   audit verify --from N --to M
                              recomputes the audit chain of blocks N to M and checks it against
-                             their anchors in ALUNA_AUDIT_ANCHOR_DIR
+                             their anchors, read as worker anchors them
   migrate up|down|status     applies, rolls back the latest or lists the migrations on
                              ALUNA_DATABASE_URL
   entity create [--id ID] --name NAME --business-date YYYY-MM-DD --currency CODE
@@ -554,16 +559,38 @@ func workerCommand(ctx context.Context, stdout io.Writer) int {
 	return runWorker(ctx, dsn, records, c, rail, log)
 }
 
-var errNoAnchorDir = errors.New("missing ALUNA_AUDIT_ANCHOR_DIR")
+var (
+	errAnchorChoice    = errors.New("set exactly one of ALUNA_AUDIT_ANCHOR_DIR and ALUNA_AUDIT_ANCHOR_S3_URL")
+	errAnchorRetention = fmt.Errorf("ALUNA_AUDIT_ANCHOR_RETENTION_DAYS must be a whole number of days from 1 to %d", maxRetentionDays)
+)
 
-// auditFromEnv returns the audit service that seals and verifies, anchoring blocks in
-// ALUNA_AUDIT_ANCHOR_DIR.
+const (
+	// anchorTimeout bounds each request to the anchor bucket: a seal that does not anchor is completed by the next
+	// one.
+	anchorTimeout = 30 * time.Second
+	// maxRetentionDays is a century, far below the days a time.Duration overflows at.
+	maxRetentionDays = 36525
+)
+
+// auditFromEnv returns the audit service that seals and verifies, anchoring blocks in the directory
+// ALUNA_AUDIT_ANCHOR_DIR or in the S3 bucket ALUNA_AUDIT_ANCHOR_S3_URL (ADR-0017), one of them.
 func auditFromEnv() (*audit.Service, error) {
-	dir := os.Getenv("ALUNA_AUDIT_ANCHOR_DIR")
-	if dir == "" {
-		return nil, errNoAnchorDir
+	dir, bucket := os.Getenv("ALUNA_AUDIT_ANCHOR_DIR"), os.Getenv("ALUNA_AUDIT_ANCHOR_S3_URL")
+	switch {
+	case (dir == "") == (bucket == ""):
+		return nil, errAnchorChoice
+	case dir != "":
+		return audit.WithFileAnchor(dir)
 	}
-	return audit.WithFileAnchor(dir)
+	days, err := strconv.Atoi(envOr("ALUNA_AUDIT_ANCHOR_RETENTION_DAYS", "3653")) // ten years (Código de Comercio, art. 60)
+	if err != nil || days < 1 || days > maxRetentionDays {
+		return nil, errAnchorRetention
+	}
+	creds := audit.S3Credentials{
+		AccessKeyID: os.Getenv("AWS_ACCESS_KEY_ID"), SecretAccessKey: os.Getenv("AWS_SECRET_ACCESS_KEY"), SessionToken: os.Getenv("AWS_SESSION_TOKEN"),
+	}
+	return audit.WithS3Anchor(bucket, os.Getenv("ALUNA_AUDIT_ANCHOR_S3_PREFIX"), envOr("ALUNA_AUDIT_ANCHOR_S3_REGION", "us-east-1"), creds,
+		time.Duration(days)*24*time.Hour, &http.Client{Timeout: anchorTimeout})
 }
 
 // runWorker connects to the database, wires the jobs by hand and runs River until ctx is canceled; payments go

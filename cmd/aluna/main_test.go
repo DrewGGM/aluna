@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -217,6 +218,44 @@ func TestEntityCreateChecksItsFlags(t *testing.T) {
 
 // railSecret is a secret of the simulated rail as long as the shortest it takes.
 const railSecret = "a secret of the simulated rail.."
+
+// TestTheAuditAnchorComesFromTheEnvironment (ADR-0017): the anchor is a directory or an S3 bucket, exactly one of
+// them; a bucket needs its keys and a retention of whole days, from one to a century.
+func TestTheAuditAnchorComesFromTheEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	cases := map[string]struct {
+		dir, bucket, keyID, retention string
+		refused                       bool
+		because                       error // why it is refused, when cmd/aluna says it
+	}{
+		"a directory":           {dir: dir},
+		"a bucket":              {bucket: "https://anchors.s3.us-east-1.amazonaws.com", keyID: "AKID"},
+		"neither":               {refused: true, because: errAnchorChoice},
+		"both":                  {dir: dir, bucket: "https://host/anchors", keyID: "AKID", refused: true, because: errAnchorChoice},
+		"no whole days":         {bucket: "https://host/anchors", keyID: "AKID", retention: "1.5", refused: true, because: errAnchorRetention},
+		"no days":               {bucket: "https://host/anchors", keyID: "AKID", retention: "0", refused: true, because: errAnchorRetention},
+		"over a century":        {bucket: "https://host/anchors", keyID: "AKID", retention: "213504", refused: true, because: errAnchorRetention},
+		"a bucket without keys": {bucket: "https://host/anchors", refused: true}, // refused by the bucket adapter's validation
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("ALUNA_AUDIT_ANCHOR_DIR", tc.dir)
+			t.Setenv("ALUNA_AUDIT_ANCHOR_S3_URL", tc.bucket)
+			t.Setenv("ALUNA_AUDIT_ANCHOR_RETENTION_DAYS", tc.retention)
+			t.Setenv("AWS_ACCESS_KEY_ID", tc.keyID)
+			t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+
+			_, err := auditFromEnv()
+
+			if (err != nil) != tc.refused {
+				t.Fatalf("error = %v, want it refused: %t", err, tc.refused)
+			}
+			if tc.because != nil && !errors.Is(err, tc.because) {
+				t.Fatalf("error = %v, want %v", err, tc.because)
+			}
+		})
+	}
+}
 
 // TestThePaymentsPolicyComesFromTheEnvironment (ADR-0016): without its variables the policy is the default; each
 // one changes its part, and a value that is not one of the allowed is an error naming the variable.

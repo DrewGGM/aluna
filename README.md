@@ -16,8 +16,10 @@ dinero real. Antes hay que reemplazar cuatro piezas de desarrollo:
   real y la liquidación de su cuenta clearing.
 - **Screening SARLAFT:** el proveedor de listas es un adaptador falso que despeja a casi todos; falta
   contratar e integrar uno real.
-- **Ancla de auditoría:** los hashes de los bloques sellados van a un directorio
-  (`ALUNA_AUDIT_ANCHOR_DIR`); en producción debe ser almacenamiento WORM que sobreviva a la base.
+- **Ancla de auditoría:** los hashes de los bloques sellados van a un directorio (`ALUNA_AUDIT_ANCHOR_DIR`)
+  en desarrollo, o en producción a un bucket S3 con Object Lock en modo compliance
+  (`ALUNA_AUDIT_ANCHOR_S3_URL`), que nadie puede reescribir ni borrar durante su retención. Falta crear ese
+  bucket en la cuenta de la entidad.
 - **IAM:** el realm de Keycloak de [`deploy/keycloak/`](deploy/keycloak/realm-aluna.json) es de
   desarrollo, con usuarios y secretos fijos; producción necesita un emisor OIDC real con los claims
   `legal_entity_id` y `roles`.

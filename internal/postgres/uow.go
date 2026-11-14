@@ -114,21 +114,34 @@ func (u *UnitOfWork) Do(ctx context.Context, fn func(Tx) error) error {
 // the batches did, also when one fails, since the earlier ones are already committed. A size below one is refused
 // before any transaction: no batch would ever come short.
 func (u *UnitOfWork) DoBatches(ctx context.Context, size int, fn func(Tx) (int, error)) (int, error) {
+	return DoCursorBatches(ctx, u, size, func(tx Tx, _ struct{}) (int, struct{}, error) {
+		n, err := fn(tx)
+		return n, struct{}{}, err
+	})
+}
+
+// DoCursorBatches is DoBatches for batches that go in key order: fn does up to size items whose key comes after
+// after (the zero C, which sorts before every key, for the first batch) and returns how many it did and the key of the
+// last one. That key becomes the next batch's after only once its batch commits, so when Do retries a batch, the
+// retry starts again from the same key.
+func DoCursorBatches[C any](ctx context.Context, u *UnitOfWork, size int, fn func(tx Tx, after C) (int, C, error)) (int, error) {
 	if size < 1 {
 		return 0, fmt.Errorf("batch size %d: must be positive", size)
 	}
 	total := 0
+	var after C
 	for {
 		var n int
+		var last C
 		err := u.Do(ctx, func(tx Tx) error {
 			var err error
-			n, err = fn(tx)
+			n, last, err = fn(tx, after)
 			return err
 		})
 		if err != nil {
 			return total, err
 		}
-		total += n
+		total, after = total+n, last
 		if n < size {
 			return total, nil
 		}

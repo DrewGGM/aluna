@@ -73,25 +73,10 @@ func (s *Service) accrueEntity(ctx context.Context, uow *postgres.UnitOfWork, en
 // until one comes out incomplete; each batch starts after the last account of the one before, so a day reads
 // each account once.
 func (s *Service) accrueDay(ctx context.Context, uow *postgres.UnitOfWork, entity ids.ID, day calendar.Date, batch int) (int, error) {
-	accrued := 0
-	var after ids.ID
-	for {
-		var n int
-		var last ids.ID
-		err := uow.Do(ctx, func(tx postgres.Tx) error { // a retried batch starts again from the same after
-			var err error
-			a := accruals{Store: pg.NewStore(tx), s: s, tx: tx}
-			n, last, err = app.AccrueBatch(ctx, a, a, entity, day, after, batch)
-			return err
-		})
-		if err != nil {
-			return accrued, err
-		}
-		accrued, after = accrued+n, last
-		if n < batch {
-			return accrued, nil
-		}
-	}
+	return postgres.DoCursorBatches(ctx, uow, batch, func(tx postgres.Tx, after ids.ID) (int, ids.ID, error) {
+		a := accruals{Store: pg.NewStore(tx), s: s, tx: tx}
+		return app.AccrueBatch(ctx, a, a, entity, day, after, batch)
+	})
 }
 
 // accruals is app.Accruals and app.Capitalizing over tx; the store gives Due and InsertAccruals.

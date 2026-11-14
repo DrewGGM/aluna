@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -320,5 +322,37 @@ func TestDoBatchesStopsAtAFailingBatch(t *testing.T) {
 	})
 	if !errors.Is(err, failing) || total != 1 || calls != 2 || !probeExists(t, 101) {
 		t.Fatalf("batches with a failure = %d (%v) after %d calls, want 1, the error after 2 calls, and the first committed", total, err, calls)
+	}
+}
+
+// TestDoCursorBatchesGoesOnFromTheLastKey: each batch starts after the last key of the batch before, which moves only
+// once that batch commits: the attempt of the second batch that fails with a retryable error, though it reached a key
+// further on, is retried from the same key. The batches go on while they come full.
+func TestDoCursorBatchesGoesOnFromTheLastKey(t *testing.T) {
+	cleanProbes(t)
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `INSERT INTO uow_probe (id) SELECT generate_series(1, 7)`); err != nil {
+		t.Fatal(err)
+	}
+	var starts []int
+
+	total, err := DoCursorBatches(ctx, NewUnitOfWork(testPool), 3, func(tx Tx, after int) (int, int, error) {
+		starts = append(starts, after)
+		rows, err := tx.Query(ctx, `SELECT id FROM uow_probe WHERE id > $1 ORDER BY id LIMIT 3`, after)
+		if err != nil {
+			return 0, after, err
+		}
+		keys, err := pgx.CollectRows(rows, pgx.RowTo[int])
+		if err != nil || len(keys) == 0 {
+			return 0, after, err
+		}
+		if after == 3 && len(starts) == 2 {
+			return len(keys), keys[len(keys)-1], fmt.Errorf("batch: %w", &pgconn.PgError{Code: "40001"})
+		}
+		return len(keys), keys[len(keys)-1], nil
+	})
+
+	if err != nil || total != 7 || !slices.Equal(starts, []int{0, 3, 3, 6}) {
+		t.Fatalf("batches = %d (%v) starting after %v, want 7 starting after 0, 3, 3 again and 6", total, err, starts)
 	}
 }

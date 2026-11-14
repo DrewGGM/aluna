@@ -53,25 +53,10 @@ func (s *Service) GenerateStatements(ctx context.Context, uow *postgres.UnitOfWo
 // generatePeriod generates the statements of a period in batches, in account id order, until one comes out
 // incomplete.
 func (s *Service) generatePeriod(ctx context.Context, uow *postgres.UnitOfWork, p pg.ClosedPeriod, batch int) (int, error) {
-	generated := 0
-	var after ids.ID
-	for {
-		var n int
-		var last ids.ID
-		err := uow.Do(ctx, func(tx postgres.Tx) error { // a retried batch starts again from the same after
-			var err error
-			st := statements{Store: pg.NewStore(tx), s: s, tx: tx, counters: map[ids.ID]app.CounterAccounts{}}
-			n, last, err = app.StatementBatch(ctx, st, p.Entity, p.Period, after, batch)
-			return err
-		})
-		if err != nil {
-			return generated, err
-		}
-		generated, after = generated+n, last
-		if n < batch {
-			return generated, nil
-		}
-	}
+	return postgres.DoCursorBatches(ctx, uow, batch, func(tx postgres.Tx, after ids.ID) (int, ids.ID, error) {
+		st := statements{Store: pg.NewStore(tx), s: s, tx: tx, counters: map[ids.ID]app.CounterAccounts{}}
+		return app.StatementBatch(ctx, st, p.Entity, p.Period, after, batch)
+	})
 }
 
 // Statement reads the statement of period (yyyy-mm) of account id of the entity: ErrAccountNotFound, or

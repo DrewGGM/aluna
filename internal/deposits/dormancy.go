@@ -83,24 +83,9 @@ func (s *Service) markVersionDormant(ctx context.Context, uow *postgres.UnitOfWo
 	}); err != nil {
 		return 0, err
 	}
-	marked := 0
-	var after ids.ID
-	for {
-		var n int
-		var last ids.ID
-		err := uow.Do(ctx, func(tx postgres.Tx) error { // a retried batch starts again from the same after
-			var err error
-			n, last, err = app.MarkDormantBatch(ctx, s.statusWriter(tx), entity, version, today, days, after, batch)
-			return err
-		})
-		if err != nil {
-			return marked, err
-		}
-		marked, after = marked+n, last
-		if n < batch {
-			return marked, nil
-		}
-	}
+	return postgres.DoCursorBatches(ctx, uow, batch, func(tx postgres.Tx, after ids.ID) (int, ids.ID, error) {
+		return app.MarkDormantBatch(ctx, s.statusWriter(tx), entity, version, today, days, after, batch)
+	})
 }
 
 // dormantPayload is the status change plus the last customer activity that made the account

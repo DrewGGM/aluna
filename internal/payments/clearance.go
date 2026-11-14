@@ -2,7 +2,6 @@ package payments
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/DrewGGM/aluna/internal/ids"
 	pg "github.com/DrewGGM/aluna/internal/payments/internal/adapters/postgres"
@@ -17,26 +16,12 @@ import (
 // (AM04), with its account no longer active (AC06) or over a limit of its product (AM02), the order is rejected
 // instead and nothing is held.
 func (s *Service) ResolveScreening(ctx context.Context, tx postgres.Tx, entity, orderID ids.ID, cleared bool) error {
-	const savepoint = "payment_clearance"
-	if _, err := tx.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
-		return fmt.Errorf("payment savepoint: %w", err)
-	}
 	c := clearance{initiation{s: s, tx: tx}}
-	err := app.ResolveScreening(ctx, c, entity, orderID, cleared)
-	reason := app.HoldRefusal(err)
-	if reason != "" {
-		if err := rollbackTo(ctx, tx, savepoint); err != nil {
-			return err
-		}
+	err := atomically(ctx, tx, "payment_clearance", func() error { return app.ResolveScreening(ctx, c, entity, orderID, cleared) })
+	if reason := app.HoldRefusal(err); reason != "" {
 		return app.RejectPending(ctx, c, entity, orderID, reason)
 	}
-	if err != nil {
-		return undo(ctx, tx, savepoint, err)
-	}
-	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
-		return fmt.Errorf("release the payment savepoint: %w", err)
-	}
-	return nil
+	return err
 }
 
 // clearance is app.Clearance within tx.

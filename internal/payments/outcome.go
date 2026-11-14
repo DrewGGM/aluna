@@ -168,6 +168,10 @@ func (r orders) LockActive(ctx context.Context, entity, id ids.ID) (deposits.Acc
 	return r.s.deposits.LockActive(ctx, r.tx, entity, id)
 }
 
+func (r orders) CountCredit(ctx context.Context, a deposits.Account, amount money.Amount) error {
+	return r.s.deposits.CountCredit(ctx, r.tx, a, amount)
+}
+
 func (r orders) RailAccounts(ctx context.Context, entity ids.ID, rail string, c money.Currency) (clearing, suspense ids.ID, err error) {
 	if clearing, err = r.s.railAccount(ctx, r.tx, entity, clearingAccount, rail, c); err != nil {
 		return ids.ID{}, ids.ID{}, err

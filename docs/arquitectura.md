@@ -59,11 +59,14 @@ el rail firma cada notificación (Standard Webhooks, HMAC-SHA256 con `ALUNA_SIMB
 firma, o firmada hace más de 5 min, responde 401. El worker envía los pagos por el rail simulado, que
 notifica a `ALUNA_SIMBREB_NOTIFY_URL`; decide por la parte entera del monto: si termina en 13 lo rechaza, en
 99 tarda más de 20 s en tomarlo, en 07 lo acepta y después lo devuelve, y cualquier otro lo acepta. Una
-transferencia recibida se acredita a la cuenta de depósito que nombra si está activa y en su moneda; si no, o
-si llega por llave (no hay directorio de llaves), va a la cuenta de suspense del rail y su orden queda
-`suspended`. Un pago liquidado que el banco del beneficiario devuelve (`status: returned`, con su razón) queda
-`returned`: su monto vuelve de la clearing a la cuenta si sigue activa, o a la suspense si no; sus cargos no
-se devuelven.
+transferencia recibida se acredita a la cuenta de depósito que nombra si está activa, en su moneda y dentro de
+los límites de su producto (cuenta como abono del día y del mes); si no, o si llega por llave (no hay
+directorio de llaves), va a la cuenta de suspense del rail y su orden queda `suspended`, con su razón
+(`LIMIT_EXCEEDED` si pasaría un límite, `LIMITS_UNAVAILABLE` si sus límites no se pueden calcular: falta el
+salario mínimo, o no sirve).
+Un pago liquidado que el banco del beneficiario devuelve (`status: returned`, con su razón) queda `returned`:
+su monto vuelve de la clearing a la cuenta si sigue activa, o a la suspense si no; sus cargos no se
+devuelven.
 
 ## Alta de una entidad
 

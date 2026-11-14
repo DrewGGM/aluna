@@ -3,10 +3,8 @@ package payments
 import (
 	"context"
 
-	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
-	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/payments/internal/app"
 	"github.com/DrewGGM/aluna/internal/payments/internal/domain/postingrules"
 	"github.com/DrewGGM/aluna/internal/postgres"
@@ -33,10 +31,6 @@ func (s *Service) CreditSuspended(ctx context.Context, tx postgres.Tx, entity, i
 
 // crediting is app.Crediting within tx: the orders, credited from suspense.
 type crediting struct{ orders }
-
-func (c crediting) CountCredit(ctx context.Context, a deposits.Account, amount money.Amount) error {
-	return c.s.deposits.CountCredit(ctx, c.tx, a, amount)
-}
 
 // Settle posts entries on the entity's business date, by actor through the API, with the order's credit as their
 // reference, and stores o with its account and publishes it.

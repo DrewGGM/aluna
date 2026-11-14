@@ -6,9 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
-	"strconv"
 	"testing"
-	"time"
 
 	"github.com/DrewGGM/aluna/internal/deposits"
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
@@ -20,10 +18,8 @@ import (
 // to the rail's suspense account, and returns its order's id.
 func suspendedTransfer(t *testing.T, w depositWorld, rails railSide) string {
 	t.Helper()
-	e2e := "BANKX" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	r := deliverTo(t, rails.ts, "transfers", signedTransfer(`{"creditor_agent":"`+w.entity.String()+`","end_to_end_id":"`+e2e+
-		`","instr_id":"INSTR1","tx_id":"TX1","rail_ref":"SIMIN1","debtor_agent":"BANKXCOBB","amount":30000000,"currency":"COP",`+
-		`"settlement_date":"2026-03-02","creditor":{"account_number":"no-such-account"}}`))
+	e2e := newE2E()
+	r := deliverTo(t, rails.ts, "transfers", signedTransfer(receivedBody(w.entity, e2e, 30000000, "no-such-account")))
 	if r.status != http.StatusNoContent {
 		t.Fatalf("the transfer = %d %s, want 204", r.status, r.body)
 	}

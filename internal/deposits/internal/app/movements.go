@@ -301,7 +301,8 @@ func CountDebit(ctx context.Context, s Movements, l Limiting, a domain.Account, 
 	return countOutside(ctx, s, l, leg{account: a, side: debit}, units)
 }
 
-// CountCredit is CountDebit for a credit of units to account a (a transfer credited from suspense).
+// CountCredit is CountDebit for a credit of units to account a (a transfer received, credited at once or from
+// suspense).
 func CountCredit(ctx context.Context, s Movements, l Limiting, a domain.Account, units int64) error {
 	return countOutside(ctx, s, l, leg{account: a, side: credit}, units)
 }

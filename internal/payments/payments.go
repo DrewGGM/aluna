@@ -116,18 +116,31 @@ func New(l *ledger.Service, d *deposits.Service, c *compliance.Service, p *prici
 // ledger.ErrInsufficientFunds. A rejection leaves nothing in
 // tx, not even the screening case or the quote's use.
 func (s *Service) Initiate(ctx context.Context, tx postgres.Tx, in InitiateInput) (Order, error) {
-	const savepoint = "payment_initiation"
-	if _, err := tx.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
-		return Order{}, fmt.Errorf("payment savepoint: %w", err)
-	}
-	o, err := app.Initiate(ctx, initiation{s: s, tx: tx}, in)
+	var o Order
+	err := atomically(ctx, tx, "payment_initiation", func() error {
+		var err error
+		o, err = app.Initiate(ctx, initiation{s: s, tx: tx}, in)
+		return err
+	})
 	if err != nil {
-		return Order{}, undo(ctx, tx, savepoint, err)
-	}
-	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
-		return Order{}, fmt.Errorf("release the payment savepoint: %w", err)
+		return Order{}, err
 	}
 	return o, nil
+}
+
+// atomically runs do under savepoint of tx and undoes what it did if it fails, returning its error: one whose undo
+// failed no longer matches errors.Is, so a caller that checks for a particular error never takes it for that one.
+func atomically(ctx context.Context, tx postgres.Tx, savepoint string, do func() error) error {
+	if _, err := tx.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
+		return fmt.Errorf("%s: %w", savepoint, err)
+	}
+	if err := do(); err != nil {
+		return undo(ctx, tx, savepoint, err)
+	}
+	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
+		return fmt.Errorf("release %s: %w", savepoint, err)
+	}
+	return nil
 }
 
 // Order reads outgoing payment order id of entity; another entity's order, or a transfer received, is

@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -305,6 +306,22 @@ func TestARailNotificationOverHTTP(t *testing.T) {
 	}
 }
 
+// e2eSeq tells apart the end-to-end ids made in the same clock tick (Windows' is coarse).
+var e2eSeq atomic.Int64
+
+// newE2E is an end-to-end id of another bank no other test uses.
+func newE2E() string {
+	return "BANKX" + strconv.FormatInt(time.Now().UnixNano(), 10) + strconv.FormatInt(e2eSeq.Add(1), 10)
+}
+
+// receivedBody is a transfer of units COP that bank BANKXCOBB sends with end-to-end id e2e to the account number of
+// entity, settled on 2026-03-02.
+func receivedBody(entity ids.ID, e2e string, units int64, number string) string {
+	return `{"creditor_agent":"` + entity.String() + `","end_to_end_id":"` + e2e + `","instr_id":"INSTR1","tx_id":"TX1",` +
+		`"rail_ref":"SIMIN1","debtor_agent":"BANKXCOBB","amount":` + strconv.FormatInt(units, 10) + `,"currency":"COP",` +
+		`"settlement_date":"2026-03-02","creditor":{"account_number":"` + number + `"}}`
+}
+
 // signedTransfer is body as the rail signs it (Standard Webhooks: HMAC-SHA256 of id.timestamp.body), now.
 func signedTransfer(body string) notification {
 	id, timestamp := "SIMIN"+strconv.FormatInt(time.Now().UnixNano(), 10), strconv.FormatInt(time.Now().Unix(), 10)
@@ -325,10 +342,7 @@ func TestATransferReceivedOverHTTP(t *testing.T) {
 	w, a := payingWorld(t)
 	withSuspense(t, w)
 	rails := newRailSide(t)
-	body := `{"creditor_agent":"` + w.entity.String() + `","end_to_end_id":"BANKX` + strconv.FormatInt(time.Now().UnixNano(), 10) +
-		`","instr_id":"INSTR1","tx_id":"TX1","rail_ref":"SIMIN1","debtor_agent":"BANKXCOBB","amount":30000000,"currency":"COP",` +
-		`"settlement_date":"2026-03-02","creditor":{"account_number":"` + a.Id.String() + `"}}`
-	n := signedTransfer(body)
+	n := signedTransfer(receivedBody(w.entity, newE2E(), 30000000, a.Id.String()))
 	forged := notification{header: n.header, body: bytes.Replace(n.body, []byte("30000000"), []byte("90000000"), 1)}
 
 	first, again := deliverTo(t, rails.ts, "transfers", n), deliverTo(t, rails.ts, "transfers", n)
@@ -405,10 +419,8 @@ func TestAPaymentOrderOfNowhereIsNotFound(t *testing.T) {
 	w, a := payingWorld(t)
 	withSuspense(t, w)
 	o := paid(t, postTo(t, w.ts, "/v1/payment-orders", ids.New().String(), paymentBody(a, 30000000, "simbreb", "@beneficiary")))
-	e2e := "BANKX" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	received := deliverTo(t, newRailSide(t).ts, "transfers", signedTransfer(`{"creditor_agent":"`+w.entity.String()+`","end_to_end_id":"`+e2e+
-		`","instr_id":"INSTR1","tx_id":"TX1","rail_ref":"SIMIN1","debtor_agent":"BANKXCOBB","amount":100,"currency":"COP",`+
-		`"settlement_date":"2026-03-02","creditor":{"account_number":"`+a.Id.String()+`"}}`))
+	e2e := newE2E()
+	received := deliverTo(t, newRailSide(t).ts, "transfers", signedTransfer(receivedBody(w.entity, e2e, 100, a.Id.String())))
 	if received.status != http.StatusNoContent {
 		t.Fatalf("the transfer = %d %s, want 204", received.status, received.body)
 	}

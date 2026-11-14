@@ -20,7 +20,13 @@ const (
 	ReasonUnknownAccount           = "UNKNOWN_ACCOUNT"
 	ReasonAccountNotActive         = "ACCOUNT_NOT_ACTIVE"
 	ReasonAccountInAnotherCurrency = "ACCOUNT_IN_ANOTHER_CURRENCY"
+	ReasonCreditOverLimit          = "LIMIT_EXCEEDED"     // it would take the account over a limit of its product (not AM02: nobody refused it)
+	ReasonLimitsUnavailable        = "LIMITS_UNAVAILABLE" // the account's limits cannot be worked out: the money stays on the books, not credited
 )
+
+// ErrAlreadyReceived means a transfer the entity already received: nothing more happens, and whatever the receipt
+// did before finding out (counting the credit) is undone by its caller.
+var ErrAlreadyReceived = errors.New("the transfer was already received")
 
 // railCrediting is what crediting money that came through a rail needs: the account it goes to and the rail's
 // accounts it comes from.
@@ -35,6 +41,9 @@ type railCrediting interface {
 // Receiving is what receiving a transfer needs, within its transaction.
 type Receiving interface {
 	railCrediting
+	// CountCredit keeps a credit of amount to a, already locked, within its product's limits and counts it; if it
+	// refuses it, it counted nothing.
+	CountCredit(ctx context.Context, a deposits.Account, amount money.Amount) error
 	// Record stores o and reports whether it is new: false if the entity already received its transfer.
 	Record(ctx context.Context, o Order) (bool, error)
 	// Book posts entries, o's movement, as a transaction of code valued on valueDate, and publishes o.
@@ -44,9 +53,10 @@ type Receiving interface {
 // Receive takes a transfer received through rail (FR-32). One for an active account of the entity, by its
 // number, in its currency, is credited to it from the rail's clearing account and the order settles; any other
 // goes to the rail's suspense account and the order is suspended, saying why: that order is the exception to
-// resolve. The same transfer again (the same bank's end-to-end id) changes nothing. One whose identifiers,
-// debtor agent, amount, settlement date, reference or creditor (one account or one key, of text) are invalid
-// is ErrInvalidNotification.
+// resolve. A credit counts against the account's limits, and one that would exceed one goes to suspense too. The
+// same transfer again (the same bank's end-to-end id) is ErrAlreadyReceived. One whose identifiers, debtor agent,
+// amount, settlement date, reference or creditor (one account or one key, of text) are invalid is
+// ErrInvalidNotification.
 func Receive(ctx context.Context, p Receiving, rail string, in InboundTransfer) error {
 	o, err := newIncoming(rail, in)
 	if err != nil {
@@ -60,13 +70,19 @@ func Receive(ctx context.Context, p Receiving, rail string, in InboundTransfer) 
 	if err != nil {
 		return err
 	}
+	if c, err = withinLimits(ctx, p, c, in.Amount); err != nil {
+		return err
+	}
 	code, entries, err := creditOrSuspend(&o, c, clearing, suspense)
 	if err != nil {
 		return err
 	}
 	fresh, err := p.Record(ctx, o)
-	if err != nil || !fresh {
+	if err != nil {
 		return err
+	}
+	if !fresh {
+		return ErrAlreadyReceived
 	}
 	return p.Book(ctx, o, code, in.SettlementDate, entries)
 }
@@ -99,8 +115,9 @@ func newIncoming(rail string, in InboundTransfer) (Order, error) {
 // creditor is what a transfer credits: the ledger account of deposit account, or, if there is a reason not to,
 // the rail's suspense account, with the deposit account if it exists.
 type creditor struct {
-	account, ledger ids.ID
-	reason          string
+	account ids.ID
+	deposit deposits.Account
+	reason  string
 }
 
 // creditable is the transfer's creditor: an active deposit account of the entity in the transfer's currency, or
@@ -125,7 +142,24 @@ func creditable(ctx context.Context, p Receiving, in InboundTransfer) (creditor,
 	case a.Currency != in.Amount.Currency():
 		return creditor{account: id, reason: ReasonAccountInAnotherCurrency}, nil
 	}
-	return creditor{account: id, ledger: a.LedgerAccountID}, nil
+	return creditor{account: id, deposit: a}, nil
+}
+
+// withinLimits counts a credit of amount to c's account, if c is one to credit, against its limits; one that would
+// exceed one goes to suspense instead (LIMIT_EXCEEDED), as does one whose limits cannot be worked out
+// (LIMITS_UNAVAILABLE): money the rail settled stays on the books either way.
+func withinLimits(ctx context.Context, p Receiving, c creditor, amount money.Amount) (creditor, error) {
+	if c.reason != "" {
+		return c, nil
+	}
+	err := p.CountCredit(ctx, c.deposit, amount)
+	switch {
+	case errors.Is(err, deposits.ErrLimitExceeded):
+		return creditor{account: c.account, reason: ReasonCreditOverLimit}, nil
+	case errors.Is(err, deposits.ErrMinimumWageMissing), errors.Is(err, deposits.ErrMinimumWageTooLow), errors.Is(err, deposits.ErrSMMLVOutsideCOP):
+		return creditor{account: c.account, reason: ReasonLimitsUnavailable}, nil
+	}
+	return c, err
 }
 
 // creditOrSuspend moves o to settled, crediting c, if there is no reason not to, and to suspended for c's reason
@@ -143,6 +177,6 @@ func creditOrSuspend(o *Order, c creditor, clearing, suspense ids.ID) (string, [
 	if err := o.Credit(); err != nil {
 		return "", nil, err
 	}
-	entries, err := postingrules.InboundCredit(o.Amount, clearing, c.ledger)
+	entries, err := postingrules.InboundCredit(o.Amount, clearing, c.deposit.LedgerAccountID)
 	return postingrules.CodeInboundCredit, entries, err
 }

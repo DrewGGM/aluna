@@ -22,6 +22,8 @@ const (
 	ReasonUnknownAccount           = app.ReasonUnknownAccount
 	ReasonAccountNotActive         = app.ReasonAccountNotActive
 	ReasonAccountInAnotherCurrency = app.ReasonAccountInAnotherCurrency
+	ReasonCreditOverLimit          = app.ReasonCreditOverLimit
+	ReasonLimitsUnavailable        = app.ReasonLimitsUnavailable
 )
 
 // ReadTransfer is the transfer received that the rail's notification n carries (TH-7), read without touching the
@@ -33,10 +35,17 @@ func (s *Service) ReadTransfer(n Notification) (InboundTransfer, error) { return
 // its entity, by its number (the account's id) and in its currency, is credited to it from the rail's clearing
 // account, and its order settles; any other is credited to the rail's suspense account and its order is
 // suspended, saying why, an exception to resolve. Both are valued on the transfer's settlement date. The same
-// bank's end-to-end id again changes nothing. A transfer with invalid data is ErrInvalidNotification; an entity
-// without the rail's clearing or suspense account, ErrRailNotConfigured.
+// bank's end-to-end id again changes nothing: what the receipt did before finding it out is undone. A credit counts
+// against the account's limits: one that would exceed one goes to suspense as LIMIT_EXCEEDED, and one whose limits
+// cannot be worked out (the minimum wage they are in is not loaded or is wrong) as LIMITS_UNAVAILABLE. A transfer with
+// invalid data is ErrInvalidNotification; an entity without the rail's clearing or suspense account,
+// ErrRailNotConfigured.
 func (s *Service) ReceiveTransfer(ctx context.Context, tx postgres.Tx, in InboundTransfer) error {
-	return app.Receive(ctx, receiving{orders{s: s, tx: tx}}, s.rail.Name(), in)
+	err := atomically(ctx, tx, "payment_receipt", func() error { return app.Receive(ctx, receiving{orders{s: s, tx: tx}}, s.rail.Name(), in) })
+	if errors.Is(err, app.ErrAlreadyReceived) {
+		return nil
+	}
+	return err
 }
 
 // receiving is app.Receiving within tx: the orders, recorded as transfers received.

@@ -89,7 +89,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	pricingSvc := pricing.New(productSvc, calendarSvc, pricing.SingleAccount)
 	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
 	idle := payments.NewSimulatedRail("http://127.0.0.1:1", railSecret, http.DefaultClient, log) // no test sends through it
-	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, testPool, idle)
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, testPool, idle, payments.DefaultPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

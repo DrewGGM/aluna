@@ -94,17 +94,35 @@ type Service struct {
 	events     Events
 	jobs       *river.Client[pgx.Tx] // only inserts jobs: the worker's client works them
 	rail       Rail
+	policy     Policy
 }
 
-// New creates the service of rail, the only one; it publishes its events to events and queues its jobs in
-// pool's River.
+// New creates the service of rail, the only one, with the entity's policy on the charges of a payment that does
+// not go through; it publishes its events to events and queues its jobs in pool's River.
 func New(l *ledger.Service, d *deposits.Service, c *compliance.Service, p *pricing.Service, events Events, pool *pgxpool.Pool, rail Rail,
+	policy Policy,
 ) (*Service, error) {
 	jobs, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Schema: outbox.RiverSchema})
 	if err != nil {
 		return nil, fmt.Errorf("payments jobs: %w", err)
 	}
-	return &Service{ledger: l, deposits: d, compliance: c, pricing: p, events: events, jobs: jobs, rail: rail}, nil
+	return &Service{ledger: l, deposits: d, compliance: c, pricing: p, events: events, jobs: jobs, rail: rail, policy: policy}, nil
+}
+
+// Policy is how the entity treats the charges of a payment that does not go through (ADR-0016).
+type Policy = app.Policy
+
+// DefaultPolicy refunds a returned payment's fees, and its GMF if the reason annuls it (the transfer could not be
+// completed: a wrong, closed or blocked account, a refused transaction, a regulatory reason), and gives back what
+// a payment rejected or annulled used of the GMF exemption (ADR-0016).
+func DefaultPolicy() Policy {
+	return Policy{
+		RefundFeesOnReturn: true,
+		AnnullingReasons: []string{
+			"AC01", "AC03", "AC04", "AC06", "AG01", "AG02", "AM05", "BE04", "MD07", "MS02", "MS03", "RC01", "RR01", "RR02", "RR03", "RR04",
+		},
+		RestoreExemption: true,
+	}
 }
 
 // Initiate starts, within tx, an outgoing payment (FR-31): its beneficiary is screened (FR-42), and if screening

@@ -43,6 +43,9 @@ type Order struct {
 	// DebitCountedOn is the business date its amount was counted as a debit of its account, once it is held: a
 	// rejection gives that debit back.
 	DebitCountedOn time.Time
+	// GMFExemption is what it used of its party's GMF exemption, once it is held: a rejection, or a return that
+	// annuls it, may restore it (ADR-0016).
+	GMFExemption pricing.ExemptionUse
 }
 
 // InitiateInput is an outgoing payment of Amount from deposit account AccountID of LegalEntityID to Creditor,
@@ -193,6 +196,6 @@ func hold(ctx context.Context, p funds, a deposits.Account, o *Order, quoteID id
 		return err
 	}
 	o.Held, o.Fees, o.GMF = total, charges.Fees, charges.GMF
-	o.DebitCountedOn = counted
+	o.DebitCountedOn, o.GMFExemption = counted, charges.Exemption
 	return o.Hold()
 }

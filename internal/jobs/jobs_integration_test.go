@@ -65,7 +65,7 @@ func newDeps(t *testing.T) jobs.Deps {
 	depositSvc := deposits.New(ledgerSvc, party.New(events, screenedClear{}), productSvc, calendarSvc, pricingSvc, events)
 	idle := payments.NewSimulatedRail("http://127.0.0.1:1", []byte("a secret of the simulated rail, for the tests"), http.DefaultClient,
 		slog.New(slog.DiscardHandler)) // these tests send no payment through it
-	paymentSvc, err := payments.New(ledgerSvc, depositSvc, compliance.New(events), pricingSvc, events, testPool, idle)
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, compliance.New(events), pricingSvc, events, testPool, idle, payments.DefaultPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}

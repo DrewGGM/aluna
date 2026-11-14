@@ -9,6 +9,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/payments/internal/domain"
 	"github.com/DrewGGM/aluna/internal/payments/internal/domain/postingrules"
+	"github.com/DrewGGM/aluna/internal/pricing"
 )
 
 // ReasonRailRefused is why an order the rail did not take is rejected: it is not an ISO 20022 code, because the
@@ -73,18 +74,19 @@ type Settling interface {
 	// Capture captures o's amount from its hold against its rail's clearing account, which releases the rest
 	// of the hold, and posts charges, the entries of o's charges, unless there are none.
 	Capture(ctx context.Context, o Order, charges []ledger.EntryInput) error
-	// Release releases o's hold and gives back the debit it counted, if it counted one: its money never left.
-	Release(ctx context.Context, o Order) error
+	// Release releases o's hold, gives back the debit it counted, if it counted one, and restores restore of the GMF
+	// exemption it used: its money never left.
+	Release(ctx context.Context, o Order, restore pricing.ExemptionUse) error
 	// Update stores where o stands and publishes it.
 	Update(ctx context.Context, o Order) error
 }
 
 // TakeOutcome applies the rail's outcome to its order (FR-31): accepted, the order settles and its hold is
-// captured with its charges; rejected, it is rejected for the rail's reason and its hold released. An order
-// no longer sent already took its outcome: the same one again changes nothing (TH-7), and another is
-// ErrOutcomeConflict. An outcome that is neither, or whose reference or reason is not text of up to 255
-// characters, is ErrInvalidNotification.
-func TakeOutcome(ctx context.Context, p Settling, out RailOutcome) error {
+// captured with its charges; rejected, it is rejected for the rail's reason, its hold released and, as policy says,
+// what it used of the GMF exemption restored (ADR-0016). An order no longer sent already took its outcome: the
+// same one again changes nothing (TH-7), and another is ErrOutcomeConflict. An outcome that is neither, or whose
+// reference or reason is not text of up to 255 characters, is ErrInvalidNotification.
+func TakeOutcome(ctx context.Context, p Settling, out RailOutcome, policy Policy) error {
 	if err := checkOutcome(out); err != nil {
 		return err
 	}
@@ -102,7 +104,7 @@ func TakeOutcome(ctx context.Context, p Settling, out RailOutcome) error {
 	if out.Status == RailAccepted {
 		err = settle(ctx, p, &o)
 	} else {
-		err = reject(ctx, p, &o, out.Reason)
+		err = reject(ctx, p, &o, out.Reason, policy)
 	}
 	if err != nil {
 		return err
@@ -155,10 +157,11 @@ func settle(ctx context.Context, p Settling, o *Order) error {
 	return p.Capture(ctx, *o, entries)
 }
 
-// reject moves o to rejected for reason and releases its hold.
-func reject(ctx context.Context, p Settling, o *Order, reason string) error {
+// reject moves o to rejected for reason, releases its hold and restores, as policy says, what it used of the GMF
+// exemption: it never debited its GMF.
+func reject(ctx context.Context, p Settling, o *Order, reason string, policy Policy) error {
 	if err := o.Reject(reason); err != nil {
 		return err
 	}
-	return p.Release(ctx, *o)
+	return p.Release(ctx, *o, policy.restored(*o, false))
 }

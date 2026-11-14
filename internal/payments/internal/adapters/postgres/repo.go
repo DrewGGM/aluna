@@ -41,13 +41,13 @@ func (s Store) InsertOrder(ctx context.Context, o app.Order) error {
 	}
 	tag, err := s.q.Exec(ctx, `INSERT INTO payments.orders (id, legal_entity_id, account_id, direction, rail, end_to_end_id, instr_id,
 		tx_id, currency, amount_units, creditor_number, creditor_key, status, reason, hold_id, held_units, fees, gmf_units, external_ref,
-		debtor_agent, rail_ref, debit_counted_on)
+		debtor_agent, rail_ref, debit_counted_on, gmf_exempt_units, gmf_exempt_month)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, ''), nullif($12, ''), $13, nullif($14, ''), $15, $16, $17, $18, $19,
-		nullif($20, ''), nullif($21, ''), $22)
+		nullif($20, ''), nullif($21, ''), $22, $23, $24)
 		ON CONFLICT ON CONSTRAINT orders_external_ref_unique DO NOTHING`,
 		o.ID, o.LegalEntityID, orNull(o.AccountID), o.Direction, o.Rail, o.EndToEndID, o.InstrID, o.TxID, o.Amount.Currency().Code(),
 		o.Amount.Units(), o.Creditor.Number, o.Creditor.Key, o.Status, o.Reason, orNull(o.HoldID), o.Held.Units(), feesJSON, o.GMF.Units(),
-		o.ExternalRef, o.DebtorAgent, o.RailRef, dateOrNull(o.DebitCountedOn))
+		o.ExternalRef, o.DebtorAgent, o.RailRef, dateOrNull(o.DebitCountedOn), o.GMFExemption.Amount.Units(), dateOrNull(o.GMFExemption.Month))
 	if err != nil {
 		return fmt.Errorf("insert payment order %s: %w", o.ID, err)
 	}
@@ -94,7 +94,7 @@ const (
 	outgoingSQL  = `SELECT ` + orderColumns + ` FROM payments.orders WHERE id = $1 AND legal_entity_id = $2 AND direction = 'outgoing'`
 	orderColumns = `id, legal_entity_id, account_id, direction, rail, end_to_end_id, instr_id, tx_id, currency, amount_units,
 		coalesce(creditor_number, ''), coalesce(creditor_key, ''), status, coalesce(reason, ''), coalesce(rail_ref, ''), external_ref,
-		hold_id, held_units, fees, gmf_units, coalesce(debtor_agent, ''), debit_counted_on`
+		hold_id, held_units, fees, gmf_units, coalesce(debtor_agent, ''), debit_counted_on, gmf_exempt_units, gmf_exempt_month`
 )
 
 // LockOrder locks (FOR UPDATE) and returns order id, or app.ErrOrderNotFound.
@@ -131,57 +131,71 @@ func (s Store) Outgoing(ctx context.Context, entity, id ids.ID) (app.Order, erro
 
 // read returns the order query finds by key and the rest of args, locked if query locks it.
 func (s Store) read(ctx context.Context, query string, key any, args ...any) (app.Order, error) {
-	var (
-		o                           app.Order
-		direction, status, currency string
-		amount, held, gmf           int64
-		feesJSON                    []byte
-		holdID, accountID           *ids.ID    // an order that holds nothing, or is for no account, has none
-		counted                     *time.Time // nor has one that counted no debit
-	)
-	err := s.q.QueryRow(ctx, query, append([]any{key}, args...)...).Scan(&o.ID, &o.LegalEntityID, &accountID, &direction, &o.Rail,
-		&o.EndToEndID, &o.InstrID, &o.TxID, &currency, &amount, &o.Creditor.Number, &o.Creditor.Key, &status, &o.Reason, &o.RailRef,
-		&o.ExternalRef, &holdID, &held, &feesJSON, &gmf, &o.DebtorAgent, &counted)
+	var r orderRow
+	err := s.q.QueryRow(ctx, query, append([]any{key}, args...)...).Scan(&r.o.ID, &r.o.LegalEntityID, &r.accountID, &r.direction,
+		&r.o.Rail, &r.o.EndToEndID, &r.o.InstrID, &r.o.TxID, &r.currency, &r.amount, &r.o.Creditor.Number, &r.o.Creditor.Key, &r.status,
+		&r.o.Reason, &r.o.RailRef, &r.o.ExternalRef, &r.holdID, &r.held, &r.feesJSON, &r.gmf, &r.o.DebtorAgent, &r.counted, &r.exempt,
+		&r.exemptMonth)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.Order{}, fmt.Errorf("%w: %v", app.ErrOrderNotFound, key)
 	}
 	if err != nil {
 		return app.Order{}, fmt.Errorf("read payment order %v: %w", key, err)
 	}
-	c, err := money.CurrencyOf(currency)
+	return r.order()
+}
+
+// orderRow is an order as payments.orders keeps it.
+type orderRow struct {
+	o                           app.Order
+	direction, status, currency string
+	amount, held, gmf, exempt   int64
+	feesJSON                    []byte
+	holdID, accountID           *ids.ID    // an order that holds nothing, or is for no account, has none
+	counted, exemptMonth        *time.Time // nor has one that counted no debit, or used no GMF exemption
+}
+
+// order is the order r keeps.
+func (r orderRow) order() (app.Order, error) {
+	o := r.o
+	c, err := money.CurrencyOf(r.currency)
 	if err != nil {
 		return app.Order{}, fmt.Errorf("payment order %s: %w", o.ID, err)
 	}
 	var fees []fee
-	if err := json.Unmarshal(feesJSON, &fees); err != nil {
+	if err := json.Unmarshal(r.feesJSON, &fees); err != nil {
 		return app.Order{}, fmt.Errorf("fees of order %s: %w", o.ID, err)
 	}
 	for _, f := range fees {
 		o.Fees = append(o.Fees, pricing.Fee{Code: f.Code, Amount: money.New(f.Units, c)})
 	}
-	if holdID != nil {
-		o.HoldID = *holdID
+	if r.holdID != nil {
+		o.HoldID = *r.holdID
 	}
-	if accountID != nil {
-		o.AccountID = *accountID
+	if r.accountID != nil {
+		o.AccountID = *r.accountID
 	}
-	if counted != nil {
-		o.DebitCountedOn = *counted
+	if r.counted != nil {
+		o.DebitCountedOn = *r.counted
 	}
-	o.Direction, o.Status = domain.Direction(direction), domain.Status(status)
-	o.Amount, o.Held, o.GMF = money.New(amount, c), money.New(held, c), money.New(gmf, c)
+	if r.exemptMonth != nil {
+		o.GMFExemption = pricing.ExemptionUse{Amount: money.New(r.exempt, c), Month: *r.exemptMonth}
+	}
+	o.Direction, o.Status = domain.Direction(r.direction), domain.Status(r.status)
+	o.Amount, o.Held, o.GMF = money.New(r.amount, c), money.New(r.held, c), money.New(r.gmf, c)
 	return o, nil
 }
 
-// HoldOrder stores that o, which waited for compliance, is held: its status, its hold, the charges it covers and
-// the day its debit was counted.
+// HoldOrder stores that o, which waited for compliance, is held: its status, its hold, the charges it covers, the
+// day its debit was counted and what it used of the GMF exemption.
 func (s Store) HoldOrder(ctx context.Context, o app.Order) error {
 	feesJSON, err := feesOf(o)
 	if err != nil {
 		return err
 	}
 	if _, err := s.q.Exec(ctx, `UPDATE payments.orders SET status = $2, hold_id = $3, held_units = $4, fees = $5, gmf_units = $6,
-		debit_counted_on = $7 WHERE id = $1`, o.ID, o.Status, o.HoldID, o.Held.Units(), feesJSON, o.GMF.Units(), dateOrNull(o.DebitCountedOn)); err != nil {
+		debit_counted_on = $7, gmf_exempt_units = $8, gmf_exempt_month = $9 WHERE id = $1`, o.ID, o.Status, o.HoldID, o.Held.Units(), feesJSON,
+		o.GMF.Units(), dateOrNull(o.DebitCountedOn), o.GMFExemption.Amount.Units(), dateOrNull(o.GMFExemption.Month)); err != nil {
 		return fmt.Errorf("hold payment order %s: %w", o.ID, err)
 	}
 	return nil

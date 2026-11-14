@@ -144,10 +144,19 @@ func gmfOf(ctx context.Context, g GMFs, in QuoteInput) (domain.GMF, error) {
 	return domain.GMFOf(in.Amount, remaining)
 }
 
-// Charges are what an operation priced by a quote is charged: its fees and its GMF (FR-28, FR-29).
+// Charges are what an operation priced by a quote is charged: its fees and its GMF (FR-28, FR-29), and what it
+// used of its party's GMF exemption.
 type Charges struct {
-	Fees []domain.Fee
-	GMF  money.Amount
+	Fees      []domain.Fee
+	GMF       money.Amount
+	Exemption ExemptionUse
+}
+
+// ExemptionUse is what an operation used of its party's GMF exemption of Month, the month's first day at midnight
+// UTC: none is the zero ExemptionUse.
+type ExemptionUse struct {
+	Amount money.Amount
+	Month  time.Time
 }
 
 // Charging is what charging a quote needs, within the transaction it runs in.
@@ -169,6 +178,7 @@ func Charge(ctx context.Context, s Charging, entity ids.ID, u QuoteUse) (Charges
 	if err != nil {
 		return Charges{}, err
 	}
+	charged := Charges{Fees: q.Fees, GMF: q.GMF.Tax}
 	if q.GMF.Exempt.Sign() > 0 {
 		month, limit, err := exemptionOf(ctx, s, entity)
 		if err != nil {
@@ -177,6 +187,33 @@ func Charge(ctx context.Context, s Charging, entity ids.ID, u QuoteUse) (Charges
 		if err := s.UseExemption(ctx, entity, u.PartyID, month, q.GMF.Exempt.Units(), limit.Units()); err != nil {
 			return Charges{}, err
 		}
+		charged.Exemption = ExemptionUse{Amount: q.GMF.Exempt, Month: month.Time()}
 	}
-	return Charges{Fees: q.Fees, GMF: q.GMF.Tax}, nil
+	return charged, nil
+}
+
+// Restoring is what restoring part of a GMF exemption needs, within its transaction.
+type Restoring interface {
+	// BusinessDate is the entity's business date.
+	BusinessDate(ctx context.Context, entity ids.ID) (calendar.Date, error)
+	// RestoreExemption restores units of what party used of the exemption of month.
+	RestoreExemption(ctx context.Context, entity, party ids.ID, month calendar.Date, units int64) error
+}
+
+// RestoreExemption restores to party use, what an operation used of its GMF exemption and did not debit after all
+// (ADR-0016), only while it is still that month by the entity's business date: an exemption of a month gone exempts
+// nothing more. Nothing used is nothing to restore.
+func RestoreExemption(ctx context.Context, r Restoring, entity, party ids.ID, use ExemptionUse) error {
+	if use.Amount.Sign() <= 0 {
+		return nil
+	}
+	today, err := r.BusinessDate(ctx, entity)
+	if err != nil {
+		return err
+	}
+	month := calendar.DateOf(use.Month)
+	if today.Year != month.Year || today.Month != month.Month {
+		return nil
+	}
+	return r.RestoreExemption(ctx, entity, party, month, use.Amount.Units())
 }

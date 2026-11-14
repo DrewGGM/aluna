@@ -19,6 +19,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/payments/internal/app"
 	"github.com/DrewGGM/aluna/internal/payments/internal/domain/postingrules"
 	"github.com/DrewGGM/aluna/internal/postgres"
+	"github.com/DrewGGM/aluna/internal/pricing"
 )
 
 // Types of a rail.
@@ -95,7 +96,7 @@ func (s *Service) Send(ctx context.Context, uow *postgres.UnitOfWork, id ids.ID)
 	switch {
 	case errors.Is(err, app.ErrRailRefused):
 		refused := app.RailOutcome{EndToEndID: o.EndToEndID, TxID: o.TxID, Status: app.RailRejected, Reason: app.ReasonRailRefused}
-		return uow.Do(ctx, func(tx postgres.Tx) error { return app.TakeOutcome(ctx, orders{s: s, tx: tx}, refused) })
+		return uow.Do(ctx, func(tx postgres.Tx) error { return app.TakeOutcome(ctx, orders{s: s, tx: tx}, refused, s.policy) })
 	case err != nil:
 		return fmt.Errorf("%w: order %s: %w", ErrNoAnswer, o.ID, err)
 	}
@@ -109,25 +110,39 @@ func (s *Service) ReadNotification(n Notification) (RailOutcome, error) { return
 
 // TakeOutcome applies, within tx, the rail's outcome to its order, which it finds by its end-to-end id (FR-31):
 // accepted, the order settles and its hold is captured against the rail's clearing account, with its charges
-// posted to their accounts; rejected, the order is rejected for the rail's reason and its hold released;
-// returned, a settled order is returned for the rail's reason and its amount, not its charges, comes back from the
-// clearing account to its account, or to the rail's suspense account if the account is no longer active. An
-// order that already took that outcome does not change; another outcome is ErrOutcomeConflict, an unknown
-// order ErrOrderNotFound, and an outcome that is none of them, or whose reference or reason is not text of up to
-// 255 characters, ErrInvalidNotification.
+// posted to their accounts; rejected, the order is rejected for the rail's reason and its hold released, with what
+// it used of the GMF exemption; returned, a settled order is returned for the rail's reason and its amount comes
+// back from the clearing account to its account, or to the rail's suspense account if the account is no longer
+// active, with the charges the entity's policy refunds (ADR-0016). An order that already took that outcome does
+// not change; another outcome is ErrOutcomeConflict, an unknown order ErrOrderNotFound, and an outcome that is none
+// of them, or whose reference or reason is not text of up to 255 characters, ErrInvalidNotification.
 func (s *Service) TakeOutcome(ctx context.Context, tx postgres.Tx, out RailOutcome) error {
 	if out.Status == RailReturned {
-		return app.TakeReturn(ctx, returns{orders{s: s, tx: tx}}, out)
+		return app.TakeReturn(ctx, returns{orders{s: s, tx: tx}}, out, s.policy)
 	}
-	return app.TakeOutcome(ctx, orders{s: s, tx: tx}, out)
+	return app.TakeOutcome(ctx, orders{s: s, tx: tx}, out, s.policy)
 }
 
 // returns is app.Returning within tx: the outgoing orders.
 type returns struct{ orders }
 
-// Refund posts entries on the entity's business date, by the rail, with the order's return as their reference.
-func (r returns) Refund(ctx context.Context, o app.Order, code string, entries []ledger.EntryInput) error {
-	return r.postToday(ctx, o, code, "return", o.Rail, channelRail, entries)
+// Book posts entries on the entity's business date, by the rail, with the order's return as their reference,
+// restores restore of the GMF exemption o used, under its account's lock taken before the ledger's (the lock of an
+// active account is already held), and stores and publishes o.
+func (r returns) Book(ctx context.Context, o app.Order, code string, entries []ledger.EntryInput, restore pricing.ExemptionUse) error {
+	if restore.Amount.Sign() > 0 {
+		a, err := r.s.deposits.LockAccount(ctx, r.tx, o.LegalEntityID, o.AccountID)
+		if err != nil {
+			return err
+		}
+		if err := r.s.pricing.RestoreExemption(ctx, r.tx, o.LegalEntityID, a.PartyID, restore); err != nil {
+			return err
+		}
+	}
+	if err := r.postToday(ctx, o, code, "return", o.Rail, channelRail, entries); err != nil {
+		return err
+	}
+	return r.Update(ctx, o)
 }
 
 // AddWorkers registers in w the workers of payments.send and payments.return, which work within uow. A send without
@@ -258,18 +273,30 @@ func (r orders) Capture(ctx context.Context, o app.Order, charges []ledger.Entry
 	return err
 }
 
-// Release gives back the debit o counted, under its account's lock taken before the ledger's as every movement
-// does, and releases its hold. An order held before migration 0036 has no counted date and gives nothing back.
-func (r orders) Release(ctx context.Context, o app.Order) error {
-	if !o.DebitCountedOn.IsZero() {
+// Release gives back the debit o counted and restores restore of the GMF exemption it used, under its account's
+// lock taken before the ledger's as every movement does, and releases its hold. An order held before migration
+// 0036 has no counted date, and one before 0038 no exemption used: there is nothing of them to give back.
+func (r orders) Release(ctx context.Context, o app.Order, restore pricing.ExemptionUse) error {
+	if !o.DebitCountedOn.IsZero() || restore.Amount.Sign() > 0 {
 		a, err := r.s.deposits.LockAccount(ctx, r.tx, o.LegalEntityID, o.AccountID)
 		if err != nil {
 			return err
 		}
-		if err := r.s.deposits.ReleaseDebit(ctx, r.tx, a, o.Amount, o.DebitCountedOn); err != nil {
+		if err := r.giveBack(ctx, a, o, restore); err != nil {
 			return err
 		}
 	}
 	_, err := r.s.ledger.ReleaseHold(ctx, r.tx, ledger.ReleaseInput{LegalEntityID: o.LegalEntityID, HoldID: o.HoldID})
 	return err
+}
+
+// giveBack gives back to a, locked, the debit o counted, if it counted one, and restores restore of its party's
+// GMF exemption.
+func (r orders) giveBack(ctx context.Context, a deposits.Account, o app.Order, restore pricing.ExemptionUse) error {
+	if !o.DebitCountedOn.IsZero() {
+		if err := r.s.deposits.ReleaseDebit(ctx, r.tx, a, o.Amount, o.DebitCountedOn); err != nil {
+			return err
+		}
+	}
+	return r.s.pricing.RestoreExemption(ctx, r.tx, o.LegalEntityID, a.PartyID, restore)
 }

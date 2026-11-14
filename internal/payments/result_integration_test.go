@@ -229,11 +229,9 @@ func expectSettled(t *testing.T, o payments.Order) {
 	}
 }
 
-// TestAPaymentWithoutChargesPostsOnlyItsCapture: a payment from an account exempt from GMF (the UVT of 2026 is
-// 52,374 pesos), of a product without fees, captures its whole hold to the clearing account and posts no
-// charges.
-func TestAPaymentWithoutChargesPostsOnlyItsCapture(t *testing.T) {
-	w := newWorld(t, true)
+// exemptAccount exempts the world's account from GMF, with the UVT of 2026 (52,374 pesos) loaded.
+func exemptAccount(t *testing.T, w world) {
+	t.Helper()
 	events, err := outbox.New(testPool)
 	if err != nil {
 		t.Fatal(err)
@@ -242,17 +240,27 @@ func TestAPaymentWithoutChargesPostsOnlyItsCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustDo(t, func(tx postgres.Tx) error {
-		err := products.New(events).LoadMarketParameter(t.Context(), tx, products.MarketParameter{
+	err = do(t, func(tx postgres.Tx) error {
+		return products.New(events).LoadMarketParameter(t.Context(), tx, products.MarketParameter{
 			Kind: products.UVT, ValidFrom: calendar.Date{Year: 2026, Month: time.January, Day: 1},
 			ValidTo: calendar.Date{Year: 2027, Month: time.January, Day: 1}, Value: uvt,
 		})
-		if err != nil {
-			return err
-		}
-		_, err = w.deposits.MarkGMFExempt(t.Context(), tx, w.entity, w.account.ID)
+	})
+	if err != nil && !errors.Is(err, products.ErrMarketParameterOverlap) { // another test of the package loaded it
+		t.Fatal(err)
+	}
+	mustDo(t, func(tx postgres.Tx) error {
+		_, err := w.deposits.MarkGMFExempt(t.Context(), tx, w.entity, w.account.ID)
 		return err
 	})
+}
+
+// TestAPaymentWithoutChargesPostsOnlyItsCapture: a payment from an account exempt from GMF (the UVT of 2026 is
+// 52,374 pesos), of a product without fees, captures its whole hold to the clearing account and posts no
+// charges.
+func TestAPaymentWithoutChargesPostsOnlyItsCapture(t *testing.T) {
+	w := newWorld(t, true)
+	exemptAccount(t, w)
 	o := w.sentOrder(t, 30000000)
 
 	if err := w.take(t, w.rail.notification(t)); err != nil {

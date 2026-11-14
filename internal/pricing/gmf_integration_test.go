@@ -431,3 +431,59 @@ func TestTheCapIsOfTheYearsUVT(t *testing.T) {
 		t.Fatalf("GMF in August = %v (%v), want none: the cap is of January's UVT", c.GMF, err)
 	}
 }
+
+// restore restores to party units of its exemption of month.
+func (w world) restore(t *testing.T, party ids.ID, month time.Time, units int64) error {
+	t.Helper()
+	return try(t, func(tx postgres.Tx) error {
+		return w.pricing.RestoreExemption(t.Context(), tx, w.entity, party, pricing.ExemptionUse{Amount: cop(t, units), Month: month})
+	})
+}
+
+// chargeTheCap charges a withdrawal of the whole exemption on exempt, of party, and is the month it used it of.
+func (w world) chargeTheCap(t *testing.T, party, exempt ids.ID) time.Time {
+	t.Helper()
+	whole, err := w.charge(t, party, exempt, pricing.Withdrawal, cop(t, exemptionCap))
+	march := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC)
+	if want := (pricing.ExemptionUse{Amount: cop(t, exemptionCap), Month: march}); err != nil || whole.Exemption != want {
+		t.Fatalf("charging the whole cap = %+v (%v), want all of it exempt in March 2026", whole, err)
+	}
+	return march
+}
+
+// restored is what party was restored of its exemptions, in all months.
+func (w world) restored(t *testing.T, party ids.ID) int64 {
+	t.Helper()
+	var restored int64
+	if err := testPool.QueryRow(t.Context(), `SELECT coalesce(sum(restored_units), 0) FROM pricing.gmf_monthly
+		WHERE legal_entity_id = $1 AND party_id = $2`, w.entity, party).Scan(&restored); err != nil {
+		t.Fatal(err)
+	}
+	return restored
+}
+
+// TestAnExemptionRestoredExemptsAgain (ADR-0016): what an operation used of the exemption and restored, because
+// it was not debited after all, exempts the next one of the month; one of another month restores nothing, and
+// restoring more than was used is refused.
+func TestAnExemptionRestoredExemptsAgain(t *testing.T) {
+	w := gmfWorld(t, pricing.SingleAccount)
+	party, exempt := ids.New(), ids.New()
+	if err := w.mark(t, party, exempt); err != nil {
+		t.Fatal(err)
+	}
+	march := w.chargeTheCap(t, party, exempt)
+
+	february, march2 := w.restore(t, party, time.Date(2026, time.February, 1, 0, 0, 0, 0, time.UTC), 100000000), w.restore(t, party, march, 100000000)
+	tooMuch := w.restore(t, party, march, exemptionCap)
+	again, err := w.charge(t, party, exempt, pricing.Withdrawal, cop(t, 100000000))
+
+	if february != nil || march2 != nil || tooMuch == nil {
+		t.Fatalf("restoring February = %v, March = %v and more than used = %v; want the first two taken and the last refused", february, march2, tooMuch)
+	}
+	if restored := w.restored(t, party); restored != 100000000 {
+		t.Fatalf("restored %d, want the 1,000,000 COP of March", restored)
+	}
+	if err != nil || again.GMF != cop(t, 0) || again.Exemption.Amount != cop(t, 100000000) {
+		t.Fatalf("after restoring it, a withdrawal = %+v (%v), want it exempt", again, err)
+	}
+}

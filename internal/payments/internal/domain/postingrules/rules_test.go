@@ -163,3 +163,27 @@ func TestWhatComesThroughTheRailComesFromTheClearingAccount(t *testing.T) {
 		}
 	}
 }
+
+// TestARefundGoesBackFromEachCounter (ADR-0016): refunds debit each charge's counter and credit the account, in
+// the order given and summing zero; none are no entries, and a charge that is not positive is refused.
+func TestARefundGoesBackFromEachCounter(t *testing.T) {
+	account, income, payable := ids.New(), ids.New(), ids.New()
+
+	entries, err := Refunds(account, []Charge{{Amount: cop(t, 300000), Counter: income}, {Amount: cop(t, 40000), Counter: payable}})
+
+	want := []ledger.EntryInput{
+		{AccountID: income, Amount: cop(t, 300000)},
+		{AccountID: account, Amount: cop(t, -300000)},
+		{AccountID: payable, Amount: cop(t, 40000)},
+		{AccountID: account, Amount: cop(t, -40000)},
+	}
+	if err != nil || !slices.Equal(entries, want) {
+		t.Fatalf("refunds = %+v (%v), want %+v", entries, err, want)
+	}
+	if none, err := Refunds(account, nil); err != nil || len(none) != 0 {
+		t.Fatalf("no refunds = %+v (%v), want no entries", none, err)
+	}
+	if _, err := Refunds(account, []Charge{{Amount: cop(t, 0), Counter: income}}); !errors.Is(err, ErrInvalidMovement) {
+		t.Fatalf("a refund of nothing = %v, want ErrInvalidMovement", err)
+	}
+}

@@ -94,7 +94,7 @@ func worldOf(t *testing.T, file string, clearing bool) world {
 	w.pricing = pricing.New(catalog, cal, pricing.SingleAccount)
 	w.deposits = deposits.New(w.ledger, parties, catalog, cal, w.pricing, events)
 	w.rail = newTestRail(t)
-	if w.payments, err = payments.New(w.ledger, w.deposits, screening, w.pricing, events, testPool, w.rail); err != nil {
+	if w.payments, err = payments.New(w.ledger, w.deposits, screening, w.pricing, events, testPool, w.rail, payments.DefaultPolicy()); err != nil {
 		t.Fatal(err)
 	}
 	w.accounts(t, clearing)

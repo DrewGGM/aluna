@@ -14,8 +14,9 @@ import (
 	"github.com/DrewGGM/aluna/internal/money"
 )
 
-// RuleVersion is the version of these rules, recorded as the transaction's rule_version.
-const RuleVersion = "payments/v1"
+// RuleVersion is the version of these rules, recorded as the transaction's rule_version: v2 refunds a returned
+// payment's charges (ADR-0016).
+const RuleVersion = "payments/v2"
 
 // Transaction codes of a transfer received and of a payment returned, one per rule.
 const (
@@ -52,6 +53,20 @@ func Charges(account ids.ID, charges []Charge) ([]ledger.EntryInput, error) {
 	return entries, nil
 }
 
+// Refunds are the entries of charges given back to account, a returned payment's (ADR-0016): each one debits its
+// counter and credits account, in the order given. No charges are no entries.
+func Refunds(account ids.ID, charges []Charge) ([]ledger.EntryInput, error) {
+	entries := make([]ledger.EntryInput, 0, 2*len(charges))
+	for _, c := range charges {
+		moved, err := move(c.Amount, c.Counter, account)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, moved...)
+	}
+	return entries, nil
+}
+
 // InboundCredit is a transfer received for an active account of the entity (FR-32), posted as
 // CodeInboundCredit: it debits the rail's clearing account and credits customer, the account's ledger account.
 func InboundCredit(amount money.Amount, clearing, customer ids.ID) ([]ledger.EntryInput, error) {
@@ -66,8 +81,8 @@ func InboundSuspense(amount money.Amount, clearing, suspense ids.ID) ([]ledger.E
 }
 
 // ReturnCredit is a settled payment the beneficiary's bank returned, for an account still active (FR-31), posted
-// as CodeReturnCredit: it debits the rail's clearing account and credits customer with the payment's amount; its
-// charges are not returned.
+// as CodeReturnCredit: it debits the rail's clearing account and credits customer with the payment's amount. What
+// it refunds of its charges goes in the same transaction (Refunds).
 func ReturnCredit(amount money.Amount, clearing, customer ids.ID) ([]ledger.EntryInput, error) {
 	return move(amount, clearing, customer)
 }

@@ -32,9 +32,10 @@ func delivered(t *testing.T, rails railSide, what string, n notification) {
 	}
 }
 
-// TestAReturnedPaymentCreditsTheAccount (FR-31, TH-7): a settled payment the beneficiary's bank returns credits its
-// amount back to the account from the rail's clearing account (its charges stay), the order is returned with the
-// rail's reason, and the return or the acceptance delivered again change nothing.
+// TestAReturnedPaymentCreditsTheAccount (FR-31, TH-7, ADR-0016): a settled payment the beneficiary's bank returns
+// for a closed account (AC04) was annulled: its amount comes back to the account from the rail's clearing account
+// and, by the default policy, its GMF too. The order is returned with the rail's reason, and the return or the
+// acceptance delivered again change nothing.
 func TestAReturnedPaymentCreditsTheAccount(t *testing.T) {
 	w, a := payingWorld(t)
 	withSuspense(t, w)
@@ -49,17 +50,17 @@ func TestAReturnedPaymentCreditsTheAccount(t *testing.T) {
 	if now := readOrder(t, w.ts, o.Id.String()); now.Status != gen.PaymentOrderStatusReturned || now.Reason == nil || *now.Reason != "AC04" {
 		t.Fatalf("the order = %+v, want it returned as AC04", now)
 	}
-	gmf := o.Held.Amount - o.Amount.Amount
-	if balance := w.natural(t, a); balance != 100000000-gmf {
-		t.Fatalf("balance = %d, want 1,000,000 COP less the payment's GMF (%d): the amount comes back once", balance, gmf)
+	if balance := w.natural(t, a); balance != 100000000 {
+		t.Fatalf("balance = %d, want 1,000,000 COP: the amount and the GMF come back, once", balance)
 	}
 	if types := eventTypes(t, "payment-orders/"+o.Id.String()); !slices.Contains(types, "aluna.payments.order.returned.v1") {
 		t.Fatalf("events = %v, want the return", types)
 	}
 }
 
-// TestAReturnForAnInactiveAccountGoesToSuspense (FR-31, FR-32): if the account is no longer active, the returned
-// amount goes to the rail's suspense account and the order is still returned.
+// TestAReturnForAnInactiveAccountGoesToSuspense (FR-31, FR-32, ADR-0016): if the account is no longer active,
+// what the return gives back, the amount and its GMF, goes to the rail's suspense account and the order is still
+// returned.
 func TestAReturnForAnInactiveAccountGoesToSuspense(t *testing.T) {
 	w, a := payingWorld(t)
 	suspense := withSuspense(t, w)
@@ -73,8 +74,8 @@ func TestAReturnForAnInactiveAccountGoesToSuspense(t *testing.T) {
 	if now := readOrder(t, w.ts, o.Id.String()); now.Status != gen.PaymentOrderStatusReturned {
 		t.Fatalf("the order = %+v, want it returned", now)
 	}
-	if balance, held := w.natural(t, a), balanceAt(t, w.ts, suspense, "").Natural.Amount; balance != 100000000-o.Held.Amount || held != o.Amount.Amount {
-		t.Fatalf("balance = %d and suspense %d, want the account as the payment left it and the amount in suspense", balance, held)
+	if balance, held := w.natural(t, a), balanceAt(t, w.ts, suspense, "").Natural.Amount; balance != 100000000-o.Held.Amount || held != o.Held.Amount {
+		t.Fatalf("balance = %d and suspense %d, want the account as the payment left it and the amount and GMF in suspense", balance, held)
 	}
 }
 

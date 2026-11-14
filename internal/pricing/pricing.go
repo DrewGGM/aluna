@@ -28,8 +28,11 @@ type (
 	Fee = domain.Fee
 	// GMF is the GMF of a debit: the part its exemption covers and the tax on the rest.
 	GMF = domain.GMF
-	// Charges are what an operation priced by a quote is charged: its fees and its GMF.
+	// Charges are what an operation priced by a quote is charged: its fees and its GMF, and what it used of the
+	// GMF exemption.
 	Charges = app.Charges
+	// ExemptionUse is what an operation used of its party's GMF exemption of a month.
+	ExemptionUse = app.ExemptionUse
 	// Operation is an operation the products charge for.
 	Operation = domain.Operation
 	// Modality is how a party's GMF exemption applies to its accounts.
@@ -121,6 +124,13 @@ func (s *Service) Charge(ctx context.Context, tx postgres.Tx, in QuoteInput) (Ch
 	return s.ChargesFor(ctx, tx, in.LegalEntityID, QuoteUse{
 		QuoteID: q.ID, AccountID: q.AccountID, PartyID: q.PartyID, Operation: q.Operation, Amount: q.Amount,
 	})
+}
+
+// RestoreExemption restores to party, within tx, use, what an operation used of its GMF exemption and did not debit
+// after all (ADR-0016): a payment the rail rejected or that came back annulled. It does so only while it is still
+// that month by the entity's business date.
+func (s *Service) RestoreExemption(ctx context.Context, tx postgres.Tx, entity, party ids.ID, use ExemptionUse) error {
+	return app.RestoreExemption(ctx, s.ports(tx), entity, party, use)
 }
 
 // MarkExempt exempts, within tx, a deposit account from GMF (FR-29): its product must allow it and it must be

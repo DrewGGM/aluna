@@ -57,16 +57,16 @@ func (s Store) IsExempt(ctx context.Context, entity, accountID ids.ID) (bool, er
 	return exempt, nil
 }
 
-// ExemptUsed is what party's exempt debits used of the exemption of month, locked (FOR UPDATE) until the
-// transaction ends; the month's row is created if missing, so that there is one to lock.
+// ExemptUsed is what party's exempt debits used of the exemption of month, less what was restored, locked
+// (FOR UPDATE) until the transaction ends; the month's row is created if missing, so that there is one to lock.
 func (s Store) ExemptUsed(ctx context.Context, entity, party ids.ID, month calendar.Date) (int64, error) {
 	if _, err := s.q.Exec(ctx, `INSERT INTO pricing.gmf_monthly (legal_entity_id, party_id, month, exempt_used_units)
 		VALUES ($1, $2, $3, 0) ON CONFLICT DO NOTHING`, entity, party, month.Time()); err != nil {
 		return 0, fmt.Errorf("GMF exemption of party %s: %w", party, err)
 	}
 	var used int64
-	err := s.q.QueryRow(ctx, `SELECT exempt_used_units FROM pricing.gmf_monthly WHERE legal_entity_id = $1 AND party_id = $2 AND month = $3
-		FOR UPDATE`, entity, party, month.Time()).Scan(&used)
+	err := s.q.QueryRow(ctx, `SELECT exempt_used_units - restored_units FROM pricing.gmf_monthly
+		WHERE legal_entity_id = $1 AND party_id = $2 AND month = $3 FOR UPDATE`, entity, party, month.Time()).Scan(&used)
 	if err != nil {
 		return 0, fmt.Errorf("GMF exemption of party %s: %w", party, err)
 	}
@@ -74,18 +74,32 @@ func (s Store) ExemptUsed(ctx context.Context, entity, party ids.ID, month calen
 }
 
 // UseExemption adds units to what party used of the exemption of month, in one statement that locks its row,
-// unless that would pass limit: then it is app.ErrQuoteUnavailable.
+// unless that would pass limit, counting what was restored: then it is app.ErrQuoteUnavailable.
 func (s Store) UseExemption(ctx context.Context, entity, party ids.ID, month calendar.Date, units, limit int64) error {
 	tag, err := s.q.Exec(ctx, `INSERT INTO pricing.gmf_monthly AS m (legal_entity_id, party_id, month, exempt_used_units)
 		SELECT $1, $2, $3, $4::bigint WHERE $4::bigint <= $5::bigint
 		ON CONFLICT (legal_entity_id, party_id, month) DO UPDATE SET exempt_used_units = m.exempt_used_units + EXCLUDED.exempt_used_units
-			WHERE m.exempt_used_units + EXCLUDED.exempt_used_units <= $5::bigint`,
+			WHERE m.exempt_used_units - m.restored_units + EXCLUDED.exempt_used_units <= $5::bigint`,
 		entity, party, month.Time(), units, limit)
 	if err != nil {
 		return fmt.Errorf("use the GMF exemption of party %s: %w", party, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: party %s has less than %d units of its GMF exemption left", app.ErrQuoteUnavailable, party, units)
+	}
+	return nil
+}
+
+// RestoreExemption restores units of what party used of the exemption of month. A party that used none that
+// month, or restoring more than it used, is an error: an operation restores what it used, once.
+func (s Store) RestoreExemption(ctx context.Context, entity, party ids.ID, month calendar.Date, units int64) error {
+	tag, err := s.q.Exec(ctx, `UPDATE pricing.gmf_monthly SET restored_units = restored_units + $4
+		WHERE legal_entity_id = $1 AND party_id = $2 AND month = $3`, entity, party, month.Time(), units)
+	if err != nil {
+		return fmt.Errorf("restore the GMF exemption of party %s: %w", party, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("restore the GMF exemption of party %s: it used none in %s", party, month)
 	}
 	return nil
 }

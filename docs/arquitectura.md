@@ -49,6 +49,9 @@ Todo sale del entorno:
 | `ALUNA_RAIL_ADDR` | `api` | `:8081` | Dirección de las notificaciones de los rails; no se expone a los canales |
 | `ALUNA_SIMBREB_NOTIFY_URL` | `worker` | `http://localhost:8081` | A dónde notifica el rail simulado: el puerto de rails de la `api` |
 | `ALUNA_GMF_MODALITY` | `api`, `worker` | `single_account` | Exención del GMF: `single_account`, una sola cuenta exenta por titular, o `split_accounts`, los 350 UVT del mes repartidos entre varias |
+| `ALUNA_RETURN_REFUND_FEES` | `api`, `worker` | `true` | Si un pago que devuelve el banco del beneficiario reintegra su comisión (`true` o `false`) |
+| `ALUNA_RETURN_REFUND_GMF_REASONS` | `api`, `worker` | `AC01,AC03,AC04,AC06,AG01,AG02,AM05,BE04,MD07,MS02,MS03,RC01,RR01,RR02,RR03,RR04` | Causales ISO 20022 de devolución que anulan el pago (la transferencia no se pudo completar) y reintegran su GMF; separadas por coma, y vacía para ninguna. Una causal voluntaria (`CUST`, `MD06`, `FOCR`, `DUPL`) es una operación nueva y no lo reintegra |
+| `ALUNA_GMF_RESTORE_EXEMPTION` | `api`, `worker` | `same_month` | Si un pago rechazado por el rail, o devuelto con una causal que lo anula, devuelve a la exención de GMF del mes lo que usó de ella (`same_month`, mientras sea ese mes) o no (`never`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `api`, `worker` | sin valor: nada sale del proceso | Exporta trazas y métricas por OTLP/HTTP, con el resto de variables `OTEL_*` |
 
 ### Notificaciones de los rails
@@ -65,8 +68,12 @@ directorio de llaves), va a la cuenta de suspense del rail y su orden queda `sus
 (`LIMIT_EXCEEDED` si pasaría un límite, `LIMITS_UNAVAILABLE` si sus límites no se pueden calcular: falta el
 salario mínimo, o no sirve).
 Un pago liquidado que el banco del beneficiario devuelve (`status: returned`, con su razón) queda `returned`:
-su monto vuelve de la clearing a la cuenta si sigue activa, o a la suspense si no; sus cargos no se
-devuelven.
+su monto vuelve de la clearing a la cuenta si sigue activa, o a la suspense si no. En el mismo asiento vuelven
+sus cargos según la política de la entidad (ADR-0016): la comisión si `ALUNA_RETURN_REFUND_FEES` es `true`, y
+el GMF si la razón está en `ALUNA_RETURN_REFUND_GMF_REASONS` (una causal que anula el pago). Un pago que el
+rail rechaza nunca debitó sus cargos: se libera su retención. Tanto el rechazo como la devolución que anula
+el pago restauran lo que el pago usó de la exención de GMF del mes, si `ALUNA_GMF_RESTORE_EXEMPTION` es
+`same_month` y sigue siendo ese mes.
 
 ## Alta de una entidad
 
@@ -89,7 +96,10 @@ devuelven.
 
 3. **Cuentas de los productos.** Cada versión de producto nombra en `accounts` los códigos de su caja
    (`cash`), gasto de intereses (`interest_expense`), ingreso por comisiones (`fee_income`) y GMF por pagar
-   (`gmf_payable`); deben existir en el ledger, en la moneda de las cuentas que se abran.
+   (`gmf_payable`); deben existir en el ledger, en la moneda de las cuentas que se abran. `fee_income` y
+   `gmf_payable` deben ser `async`: el reintegro de los cargos de un pago devuelto las debita, y una `sync`
+   sin saldo (por ejemplo, el GMF ya pagado a la DIAN) haría fallar la devolución entera, con el monto del
+   cliente retenido en la clearing.
 4. **Parámetros de mercado.** Un producto con límites en SMMLV necesita el salario mínimo vigente, y una
    cuenta exenta del GMF, la UVT del año (`POST /v1/market-parameters`, maker-checker).
 
@@ -407,6 +417,7 @@ lecturas incluidas, mientras se valida, y una llave foránea nueva bloquea sus e
 | `0031_events.sql` | dos índices sobre `infra.outbox` | todo comando que emite eventos |
 | `0034_payments_pending_index.sql` | índice parcial sobre `payments.orders` | los pagos |
 | `0036_released_debits.sql` | columna con `CHECK` en `deposits.counters` | los movimientos de depósitos y los pagos |
+| `0038_gmf_restored.sql` | columnas con `CHECK` en `pricing.gmf_monthly` y `payments.orders` | las cotizaciones y los pagos |
 
 Aplícalas en una ventana de mantenimiento, con la API fuera de rotación: tardan lo que tarde recorrer la
 tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y migrándolo (ver

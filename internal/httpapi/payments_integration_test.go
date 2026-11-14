@@ -216,7 +216,7 @@ func newRailSide(t *testing.T) railSide {
 	ledgerSvc, pricingSvc := ledger.New(calendarSvc, events), pricing.New(productSvc, calendarSvc, pricing.SingleAccount)
 	depositSvc := deposits.New(ledgerSvc, party.New(events, complianceSvc.PartyScreener()), productSvc, calendarSvc, pricingSvc, events)
 	r.rail = payments.NewSimulatedRail(inbox.URL, railSecret, inbox.Client(), log)
-	if r.payments, err = payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, testPool, r.rail); err != nil {
+	if r.payments, err = payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, testPool, r.rail, payments.DefaultPolicy()); err != nil {
 		t.Fatal(err)
 	}
 	policy, err := access.ParsePolicy(config.Roles)

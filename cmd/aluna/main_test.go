@@ -7,11 +7,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/httpapi"
+	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/pricing"
 )
 
@@ -215,6 +218,59 @@ func TestEntityCreateChecksItsFlags(t *testing.T) {
 // railSecret is a secret of the simulated rail as long as the shortest it takes.
 const railSecret = "a secret of the simulated rail.."
 
+// TestThePaymentsPolicyComesFromTheEnvironment (ADR-0016): without its variables the policy is the default; each
+// one changes its part, and a value that is not one of the allowed is an error naming the variable.
+func TestThePaymentsPolicyComesFromTheEnvironment(t *testing.T) {
+	keep := payments.DefaultPolicy()
+	keep.RefundFeesOnReturn, keep.AnnullingReasons, keep.RestoreExemption = false, []string{"AC01", "AC04"}, false
+	none := payments.DefaultPolicy()
+	none.AnnullingReasons = nil
+	cases := map[string]struct {
+		fees, reasons, restore string
+		unsetReasons           bool
+		want                   payments.Policy
+		wantErr                string
+	}{
+		"the default":           {unsetReasons: true, want: payments.DefaultPolicy()},
+		"each one changed":      {fees: "false", reasons: "AC01, AC04", restore: "never", want: keep},
+		"no reason refunds GMF": {reasons: "", want: none},
+		"fees neither":          {fees: "maybe", unsetReasons: true, wantErr: "ALUNA_RETURN_REFUND_FEES"},
+		"fees as a number":      {fees: "1", unsetReasons: true, wantErr: "ALUNA_RETURN_REFUND_FEES"},
+		"a reason of no code":   {reasons: "AC01,account closed", wantErr: "ALUNA_RETURN_REFUND_GMF_REASONS"},
+		"restore neither":       {unsetReasons: true, restore: "always", wantErr: "ALUNA_GMF_RESTORE_EXEMPTION"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("ALUNA_RETURN_REFUND_FEES", tc.fees)
+			t.Setenv("ALUNA_GMF_RESTORE_EXEMPTION", tc.restore)
+			t.Setenv("ALUNA_RETURN_REFUND_GMF_REASONS", tc.reasons)
+			if tc.unsetReasons {
+				unsetenv(t, "ALUNA_RETURN_REFUND_GMF_REASONS")
+			}
+
+			got, err := paymentsPolicyFromEnv()
+
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want one about %s", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("policy = %+v (%v), want %+v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// unsetenv unsets key for the test, after t.Setenv registered its restoration.
+func unsetenv(t *testing.T, key string) {
+	t.Helper()
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAPIConfigFromEnv(t *testing.T) {
 	const issuer, audience = "https://iam.example/realms/aluna", "aluna-api"
 	cases := map[string]struct {
@@ -240,14 +296,19 @@ func TestAPIConfigFromEnv(t *testing.T) {
 			t.Setenv("ALUNA_OIDC_AUDIENCE", tc.audience)
 			t.Setenv("ALUNA_GMF_MODALITY", tc.gmf)
 			t.Setenv("ALUNA_SIMBREB_SECRET", tc.secret)
+			t.Setenv("ALUNA_RETURN_REFUND_FEES", "") // the default policy, whatever the environment says
+			t.Setenv("ALUNA_GMF_RESTORE_EXEMPTION", "")
+			t.Setenv("ALUNA_RETURN_REFUND_GMF_REASONS", "")
+			unsetenv(t, "ALUNA_RETURN_REFUND_GMF_REASONS")
 
 			cfg, err := apiConfigFromEnv()
 
 			want := apiConfig{
-				addr: ":8080", railAddr: ":8081", dsn: tc.dsn, issuer: issuer, audience: audience, gmf: tc.wantGMF, railSecret: railSecret,
+				addr: ":8080", railAddr: ":8081", dsn: tc.dsn, issuer: issuer, audience: audience,
+				charging: charging{gmf: tc.wantGMF, payments: payments.DefaultPolicy()}, railSecret: railSecret,
 			}
-			if tc.wantErr == "" && (err != nil || cfg != want) {
-				t.Fatalf("cfg = %+v, err = %v", cfg, err)
+			if tc.wantErr == "" && (err != nil || !reflect.DeepEqual(cfg, want)) {
+				t.Fatalf("cfg = %+v, err = %v, want %+v", cfg, err, want)
 			}
 			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 				t.Fatalf("error = %v, want one about %s", err, tc.wantErr)

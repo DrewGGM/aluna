@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -62,13 +64,19 @@ commands:
                              ALUNA_SIMBREB_SECRET (at least 32 bytes, the simulated rail signs its
                              notifications with it); with OTEL_EXPORTER_OTLP_ENDPOINT it exports
                              traces and metrics over OTLP; ALUNA_GMF_MODALITY is the GMF
-                             exemption's modality, single_account (the default) or split_accounts
+                             exemption's modality, single_account (the default) or split_accounts;
+                             what a payment that does not go through gives back (ADR-0016):
+                             ALUNA_RETURN_REFUND_FEES (true, the default, or false), the return
+                             reasons that refund its GMF, ALUNA_RETURN_REFUND_GMF_REASONS (ISO 20022
+                             codes separated by commas; empty refunds none), and
+                             ALUNA_GMF_RESTORE_EXEMPTION (same_month, the default, or never)
   worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls, GL,
                              payments) on ALUNA_DATABASE_URL, anchoring blocks in
                              ALUNA_AUDIT_ANCHOR_DIR; multiple workers elect a leader for the
-                             periodic jobs; it reads ALUNA_GMF_MODALITY and ALUNA_SIMBREB_SECRET as
-                             api does, and the simulated rail notifies ALUNA_SIMBREB_NOTIFY_URL
-                             (default http://localhost:8081)
+                             periodic jobs; it reads ALUNA_GMF_MODALITY, the variables of what a
+                             payment gives back and ALUNA_SIMBREB_SECRET as api does, and the
+                             simulated rail notifies ALUNA_SIMBREB_NOTIFY_URL (default
+                             http://localhost:8081)
   audit verify --from N --to M
                              recomputes the audit chain of blocks N to M and checks it against
                              their anchors in ALUNA_AUDIT_ANCHOR_DIR
@@ -233,7 +241,7 @@ func flushTelemetry(ctx context.Context, shutdown telemetry.Shutdown, log *slog.
 type apiConfig struct {
 	addr, railAddr, dsn string
 	issuer, audience    string
-	gmf                 pricing.Modality
+	charging            charging
 	railSecret          string
 }
 
@@ -243,7 +251,7 @@ func apiConfigFromEnv() (apiConfig, error) {
 		return apiConfig{}, errNoDatabaseURL
 	}
 	var err error
-	if cfg.gmf, err = gmfModalityFromEnv(); err != nil {
+	if cfg.charging, err = chargingFromEnv(); err != nil {
 		return apiConfig{}, err
 	}
 	if cfg.railSecret, err = railSecretFromEnv(); err != nil {
@@ -259,10 +267,75 @@ func apiConfigFromEnv() (apiConfig, error) {
 	return cfg, nil
 }
 
-// gmfModalityFromEnv is the entity's modality of the GMF exemption, ALUNA_GMF_MODALITY: single_account
-// unless it says otherwise.
-func gmfModalityFromEnv() (pricing.Modality, error) {
-	return pricing.ModalityOf(envOr("ALUNA_GMF_MODALITY", string(pricing.SingleAccount)))
+// charging is how the entity charges: the modality of its GMF exemption, and what a payment that does not go
+// through gives back.
+type charging struct {
+	gmf      pricing.Modality
+	payments payments.Policy
+}
+
+// chargingFromEnv is how the entity charges, from ALUNA_GMF_MODALITY (single_account unless it says otherwise)
+// and paymentsPolicyFromEnv.
+func chargingFromEnv() (charging, error) {
+	gmf, err := pricing.ModalityOf(envOr("ALUNA_GMF_MODALITY", string(pricing.SingleAccount)))
+	if err != nil {
+		return charging{}, err
+	}
+	policy, err := paymentsPolicyFromEnv()
+	if err != nil {
+		return charging{}, err
+	}
+	return charging{gmf: gmf, payments: policy}, nil
+}
+
+// paymentsPolicyFromEnv is payments.DefaultPolicy as ALUNA_RETURN_REFUND_FEES (true or false),
+// ALUNA_RETURN_REFUND_GMF_REASONS (ISO 20022 reason codes separated by commas; set and empty, none) and
+// ALUNA_GMF_RESTORE_EXEMPTION (same_month or never) change it (ADR-0016).
+func paymentsPolicyFromEnv() (payments.Policy, error) {
+	p := payments.DefaultPolicy()
+	var err error
+	if v := os.Getenv("ALUNA_RETURN_REFUND_FEES"); v != "" {
+		if p.RefundFeesOnReturn, err = either(v, "ALUNA_RETURN_REFUND_FEES", "true", "false"); err != nil {
+			return payments.Policy{}, err
+		}
+	}
+	if v, set := os.LookupEnv("ALUNA_RETURN_REFUND_GMF_REASONS"); set {
+		if p.AnnullingReasons, err = reasonCodes(v); err != nil {
+			return payments.Policy{}, err
+		}
+	}
+	if v := os.Getenv("ALUNA_GMF_RESTORE_EXEMPTION"); v != "" {
+		if p.RestoreExemption, err = either(v, "ALUNA_GMF_RESTORE_EXEMPTION", "same_month", "never"); err != nil {
+			return payments.Policy{}, err
+		}
+	}
+	return p, nil
+}
+
+// either reports whether v, the value of variable key, is yes and not no; any other value is an error.
+func either(v, key, yes, no string) (bool, error) {
+	if v != yes && v != no {
+		return false, fmt.Errorf("%w: %s=%q is neither %s nor %s", errChargesPolicy, key, v, yes, no)
+	}
+	return v == yes, nil
+}
+
+// isoReason is an ISO 20022 reason code: four capital letters or digits.
+var isoReason = regexp.MustCompile(`^[A-Z0-9]{4}$`)
+
+// reasonCodes are the ISO 20022 reason codes of list, separated by commas; an empty list is none.
+func reasonCodes(list string) ([]string, error) {
+	if strings.TrimSpace(list) == "" {
+		return nil, nil
+	}
+	codes := strings.Split(list, ",")
+	for i, c := range codes {
+		codes[i] = strings.TrimSpace(c)
+		if !isoReason.MatchString(codes[i]) {
+			return nil, fmt.Errorf("%w: ALUNA_RETURN_REFUND_GMF_REASONS has %q, not an ISO 20022 reason code", errChargesPolicy, c)
+		}
+	}
+	return codes, nil
 }
 
 // minRailSecret is the shortest rail secret: an HMAC-SHA256 key shorter than its hash weakens it.
@@ -282,6 +355,7 @@ var (
 	errNoDatabaseURL = errors.New("missing ALUNA_DATABASE_URL")
 	errNoOIDC        = errors.New("incomplete OIDC configuration")
 	errRailSecret    = fmt.Errorf("ALUNA_SIMBREB_SECRET must have at least %d bytes", minRailSecret)
+	errChargesPolicy = errors.New("invalid policy on the charges of payments")
 )
 
 // connectTimeout bounds the initial connection: if the database does not respond, the process fails
@@ -318,7 +392,7 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	defer unregister() // before the pool closes
 	uow := postgres.NewUnitOfWork(pool)
 	rail := payments.NewSimulatedRail("", []byte(cfg.railSecret), http.DefaultClient, log) // api only reads its notifications
-	api, err := newAPI(pool, uow, cfg.gmf, authz.policy, rail)
+	api, err := newAPI(pool, uow, cfg.charging, authz.policy, rail)
 	if err != nil {
 		log.Error("wire the modules", "error", err)
 		return 1
@@ -356,9 +430,9 @@ func closeAll(lns []net.Listener) error {
 	return errors.Join(errs...)
 }
 
-// newAPI wires the modules by hand over pool, with the entity's GMF modality, the policy that says who
-// approves each maker-checker request and the payments rail.
-func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, policy *access.Policy, rail payments.Rail) (httpapi.API, error) {
+// newAPI wires the modules by hand over pool, with how the entity charges, the policy that says who approves each
+// maker-checker request and the payments rail.
+func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, c charging, policy *access.Policy, rail payments.Rail) (httpapi.API, error) {
 	events, err := outbox.New(pool)
 	if err != nil {
 		return httpapi.API{}, fmt.Errorf("configure the outbox: %w", err)
@@ -370,9 +444,9 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, gmf pricing.Modality, 
 	partySvc := party.New(events, complianceSvc.PartyScreener())
 	complianceSvc.OnResolved(compliance.CaseParty, compliance.ResolvingParties(partySvc))
 	productSvc := products.New(events)
-	pricingSvc := pricing.New(productSvc, calendarSvc, gmf)
+	pricingSvc := pricing.New(productSvc, calendarSvc, c.gmf)
 	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
-	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, rail)
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, rail, c.payments)
 	if err != nil {
 		return httpapi.API{}, err
 	}
@@ -458,7 +532,7 @@ func workerCommand(ctx context.Context, stdout io.Writer) int {
 		log.Error("worker configuration", "error", err)
 		return 1
 	}
-	gmf, err := gmfModalityFromEnv()
+	c, err := chargingFromEnv()
 	if err != nil {
 		log.Error("worker configuration", "error", err)
 		return 1
@@ -469,7 +543,7 @@ func workerCommand(ctx context.Context, stdout io.Writer) int {
 		return 1
 	}
 	rail := payments.NewSimulatedRail(envOr("ALUNA_SIMBREB_NOTIFY_URL", "http://localhost:8081"), []byte(secret), &http.Client{}, log)
-	return runWorker(ctx, dsn, records, gmf, rail, log)
+	return runWorker(ctx, dsn, records, c, rail, log)
 }
 
 var errNoAnchorDir = errors.New("missing ALUNA_AUDIT_ANCHOR_DIR")
@@ -487,7 +561,7 @@ func auditFromEnv() (*audit.Service, error) {
 // runWorker connects to the database, wires the jobs by hand and runs River until ctx is canceled; payments go
 // through rail. It then stops taking jobs and waits up to shutdownTimeout for the running ones before
 // canceling them.
-func runWorker(ctx context.Context, dsn string, records *audit.Service, gmf pricing.Modality, rail payments.Rail, log *slog.Logger) int {
+func runWorker(ctx context.Context, dsn string, records *audit.Service, c charging, rail payments.Rail, log *slog.Logger) int {
 	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	pool, err := postgres.Open(openCtx, dsn)
@@ -498,7 +572,7 @@ func runWorker(ctx context.Context, dsn string, records *audit.Service, gmf pric
 	defer pool.Close()
 	unregister := withMetrics(pool, log)
 	defer unregister() // before the pool closes
-	client, err := newWorker(pool, records, gmf, rail, log)
+	client, err := newWorker(pool, records, c, rail, log)
 	if err != nil {
 		log.Error("configure the worker", "error", err)
 		return 1
@@ -513,9 +587,9 @@ func runWorker(ctx context.Context, dsn string, records *audit.Service, gmf pric
 	return 0
 }
 
-// newWorker builds the worker's River client from the jobs configuration, wired by hand; gmf is the entity's
-// modality of the GMF exemption, and rail the payments rail.
-func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality, rail payments.Rail, log *slog.Logger) (*river.Client[pgx.Tx], error) {
+// newWorker builds the worker's River client from the jobs configuration, wired by hand; c is how the entity
+// charges, and rail the payments rail.
+func newWorker(pool *pgxpool.Pool, records *audit.Service, c charging, rail payments.Rail, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	events, err := outbox.New(pool)
 	if err != nil {
 		return nil, err
@@ -525,9 +599,9 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, gmf pricing.Modality,
 	productSvc := products.New(events)
 	complianceSvc := compliance.New(events)
 	parties := party.New(events, complianceSvc.PartyScreener()) // the jobs read parties, never register them
-	pricingSvc := pricing.New(productSvc, calendarSvc, gmf)
+	pricingSvc := pricing.New(productSvc, calendarSvc, c.gmf)
 	depositSvc := deposits.New(ledgerSvc, parties, productSvc, calendarSvc, pricingSvc, events)
-	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, rail) // the jobs send payments, never initiate them
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, rail, c.payments) // the jobs send payments, never initiate them
 	if err != nil {
 		return nil, err
 	}

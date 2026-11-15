@@ -132,6 +132,17 @@ func TestTheMakerCannotApproveOverHTTP(t *testing.T) {
 	}
 }
 
+// TestARejectionReasonIsText: a reason with a NUL, which PostgreSQL cannot store, is 422, not a 500.
+func TestARejectionReasonIsText(t *testing.T) {
+	w := newApprovalWorld(t)
+	b := w.as(t, "operator-b", "operator")
+	withNUL, err := send(t.Context(), b, "/v1/approvals/"+w.request(t).String()+"/rejection", nil, `{"reason": "wrong\u0000amount"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectProblem(t, "a reason with a NUL", withNUL, http.StatusUnprocessableEntity, "invalid_rejection_reason")
+}
+
 // TestRejectionOverHTTP: a rejection without a reason is 422; with a reason it leaves the request rejected
 // without running the command, and it shows up when listing the rejected ones.
 func TestRejectionOverHTTP(t *testing.T) {

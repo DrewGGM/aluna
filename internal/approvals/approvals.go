@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DrewGGM/aluna/internal/access"
 	pg "github.com/DrewGGM/aluna/internal/approvals/internal/adapters/postgres"
@@ -46,6 +47,8 @@ var (
 	ErrSelfApproval = errors.New("the maker cannot decide their own request")
 	// ErrNoReason is a rejection without a reason.
 	ErrNoReason = errors.New("a rejection needs a reason")
+	// ErrInvalidReason is a rejection reason that is not text PostgreSQL stores: invalid UTF-8, or a NUL.
+	ErrInvalidReason = errors.New("a rejection reason is UTF-8 text without NUL")
 	// ErrCommandRejected is the command of an approved request that its module rejected on a business rule:
 	// the Executor wraps it and the request ends up failed.
 	ErrCommandRejected = errors.New("the approved command was rejected")
@@ -168,8 +171,11 @@ func failureText(err error) string {
 // Reject rejects request id in tx with reason, and emits aluna.approvals.request.rejected.v1; the command does
 // not run.
 func (s *Service) Reject(ctx context.Context, tx postgres.Tx, id ids.ID, checker access.Principal, reason string) (Request, error) {
-	if strings.TrimSpace(reason) == "" {
+	switch {
+	case strings.TrimSpace(reason) == "":
 		return Request{}, ErrNoReason
+	case !utf8.ValidString(reason) || strings.ContainsRune(reason, 0):
+		return Request{}, ErrInvalidReason
 	}
 	if _, _, err := s.lockForDecision(ctx, tx, id, checker); err != nil {
 		return Request{}, err

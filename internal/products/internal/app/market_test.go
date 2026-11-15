@@ -1,7 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -46,6 +49,7 @@ func TestAParameterIsChecked(t *testing.T) {
 		"modality in capitals":   p(IBR, "Overnight", "0.09"),
 		"backwards period":       {Kind: UVT, ValidFrom: feb1, ValidTo: jan1, Value: marketValue(t, "49799")},
 		"zero":                   p(SMMLV, "", "0"),
+		"SMMLV with cents":       p(SMMLV, "", "1423.5"),
 		"negative":               p(SMMLV, "", "-1"),
 		"rate above 1":           p(UsuryRate, "consumer", "1.0001"),
 		"9 decimals":             p(IBR, "overnight", "0.092500001"),
@@ -57,6 +61,7 @@ func TestAParameterIsChecked(t *testing.T) {
 	}
 	for name, mp := range map[string]MarketParameter{
 		"rate of 1": p(UsuryRate, "consumer", "1.000"), "UVT": p(UVT, "", "49799"), "IBR": p(IBR, "overnight", "0.0925"),
+		"SMMLV with zero cents": p(SMMLV, "", "1423500.00"),
 	} {
 		if err := validMarketParameter(mp); err != nil {
 			t.Errorf("%s = %v, want it valid", name, err)
@@ -80,5 +85,74 @@ func TestDatesAreOrdered(t *testing.T) {
 		if got := before(c.a, c.b); got != c.want {
 			t.Errorf("before(%v, %v) = %v, want %v", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+// wageSeries is an SMMLV series by the day a value holds on; it records the series and days it was asked for, and
+// fails with err if set.
+type wageSeries struct {
+	values map[calendar.Date]string
+	err    error
+	asked  []string
+}
+
+func (w *wageSeries) InsertParameter(context.Context, MarketParameter) error  { return nil }
+func (w *wageSeries) Overlaps(context.Context, MarketParameter) (bool, error) { return false, nil }
+
+func (w *wageSeries) ValueOn(_ context.Context, kind MarketKind, modality string, on calendar.Date) (money.Precise, error) {
+	w.asked = append(w.asked, fmt.Sprintf("%s %q %s", kind, modality, on))
+	if w.err != nil {
+		return money.Precise{}, w.err
+	}
+	v, ok := w.values[on]
+	if !ok {
+		return money.Precise{}, ErrNoMarketParameter
+	}
+	return money.ParsePrecise(v)
+}
+
+// TestAnSMMLVFarFromItsNeighboursIsRefused (Q-111 i): an SMMLV for 2026 is more than half and less than double the
+// one in force on 2025-12-31 and the one on 2027-01-01, if there are, when checked and when loaded; a store error is
+// not taken for a missing neighbour, and other kinds are not checked so.
+func TestAnSMMLVFarFromItsNeighboursIsRefused(t *testing.T) {
+	dec31, jan1, jan1Next := calendar.Date{Year: 2025, Month: 12, Day: 31}, calendar.Date{Year: 2026, Month: 1, Day: 1}, calendar.Date{Year: 2027, Month: 1, Day: 1}
+	p := func(kind MarketKind, value string) MarketParameter {
+		return MarketParameter{Kind: kind, ValidFrom: jan1, ValidTo: jan1Next, Value: marketValue(t, value)}
+	}
+	before := &wageSeries{values: map[calendar.Date]string{dec31: "1423500"}}
+	after := &wageSeries{values: map[calendar.Date]string{jan1Next: "1750905"}}
+	cases := []struct {
+		series *wageSeries
+		value  string
+		want   error
+	}{
+		{&wageSeries{}, "142350", nil},
+		{before, "1423500", nil},
+		{before, "1000000", nil},
+		{before, "711750", ErrInvalidMarketParameter},
+		{before, "711751", nil},
+		{before, "2847000", ErrInvalidMarketParameter},
+		{before, "2846999", nil},
+		{before, "14235000", ErrInvalidMarketParameter},
+		{after, "14235000", ErrInvalidMarketParameter},
+		{after, "1423500", nil},
+	}
+	for _, c := range cases {
+		if err := CheckMarketParameter(t.Context(), c.series, p(SMMLV, c.value)); !errors.Is(err, c.want) {
+			t.Errorf("checking an SMMLV of %s near %v = %v, want %v", c.value, c.series.values, err, c.want)
+		}
+		if err := LoadMarketParameter(t.Context(), c.series, p(SMMLV, c.value)); !errors.Is(err, c.want) {
+			t.Errorf("loading an SMMLV of %s near %v = %v, want %v", c.value, c.series.values, err, c.want)
+		}
+	}
+	if want := []string{`smmlv "" 2025-12-31`, `smmlv "" 2027-01-01`}; !slices.Equal(after.asked[:2], want) {
+		t.Errorf("the neighbours read = %q, want %q", after.asked[:2], want)
+	}
+	boom := errors.New("boom")
+	if err := CheckMarketParameter(t.Context(), &wageSeries{err: boom}, p(SMMLV, "1423500")); !errors.Is(err, boom) {
+		t.Errorf("with the store failing = %v, want its error", err)
+	}
+	if err := CheckMarketParameter(t.Context(), before, p(UVT, "49799")); err != nil {
+		t.Errorf("a UVT of 49799 near an SMMLV of 1423500 = %v, want it valid", err)
 	}
 }

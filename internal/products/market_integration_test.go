@@ -105,6 +105,31 @@ func TestPeriodsDoNotOverlap(t *testing.T) {
 	}
 }
 
+// TestAnSMMLVWithAZeroTooManyIsRefused (Q-111 i): next to a year's SMMLV, one ten times it for the next year or the
+// one before is refused when checking and when loading, and one up by a fifth is loaded.
+func TestAnSMMLVWithAZeroTooManyIsRefused(t *testing.T) {
+	y := years(2)
+	svc := products.New(&recorder{})
+	if err := load(t, svc, yearOf(t, products.SMMLV, "", y, "1423500")); err != nil {
+		t.Fatal(err)
+	}
+	mistyped := yearOf(t, products.SMMLV, "", y+1, "14235000")
+
+	checked := svc.CheckMarketParameter(t.Context(), testPool, mistyped)
+	loaded := load(t, svc, mistyped)
+	backfilled := load(t, svc, yearOf(t, products.SMMLV, "", y-1, "14235000"))
+	raised := load(t, svc, yearOf(t, products.SMMLV, "", y+1, "1708200"))
+
+	for name, err := range map[string]error{"check": checked, "load": loaded, "the year before": backfilled} {
+		if !errors.Is(err, products.ErrInvalidMarketParameter) {
+			t.Errorf("14235000 next to 1423500, %s = %v; want ErrInvalidMarketParameter", name, err)
+		}
+	}
+	if raised != nil {
+		t.Fatalf("1708200 after 1423500 = %v, want it loaded", raised)
+	}
+}
+
 // TestConcurrentOverlappingLoadsCannotBothHold: while a load is uncommitted, an overlapping one, loaded
 // without checking first, waits for it on the exclusion constraint and then is rejected.
 func TestConcurrentOverlappingLoadsCannotBothHold(t *testing.T) {

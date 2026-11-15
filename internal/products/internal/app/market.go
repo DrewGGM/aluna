@@ -80,9 +80,9 @@ type MarketParameters interface {
 	ValueOn(ctx context.Context, kind MarketKind, modality string, on calendar.Date) (money.Precise, error)
 }
 
-// CheckMarketParameter reports whether p can be loaded: valid on its own and without overlapping another
-// value, or ErrInvalidMarketParameter or ErrMarketParameterOverlap. A load request is checked before it waits
-// for approval.
+// CheckMarketParameter reports whether p can be loaded: valid on its own, without overlapping another value and,
+// an SMMLV, near its neighbours (plausibleMinimumWage); or ErrInvalidMarketParameter or ErrMarketParameterOverlap.
+// A load request is checked before it waits for approval.
 func CheckMarketParameter(ctx context.Context, s MarketParameters, p MarketParameter) error {
 	if err := validMarketParameter(p); err != nil {
 		return err
@@ -94,7 +94,7 @@ func CheckMarketParameter(ctx context.Context, s MarketParameters, p MarketParam
 	if overlaps {
 		return fmt.Errorf("%w: %s %s", ErrMarketParameterOverlap, p.Kind, p.Modality)
 	}
-	return nil
+	return plausibleMinimumWage(ctx, s, p)
 }
 
 // LoadMarketParameter stores p, or ErrInvalidMarketParameter or ErrMarketParameterOverlap (the database
@@ -103,7 +103,53 @@ func LoadMarketParameter(ctx context.Context, s MarketParameters, p MarketParame
 	if err := validMarketParameter(p); err != nil {
 		return err
 	}
+	if err := plausibleMinimumWage(ctx, s, p); err != nil {
+		return err
+	}
 	return s.InsertParameter(ctx, p)
+}
+
+// plausibleMinimumWage refuses an SMMLV loaded with a zero too many or too few (Q-111 i): in decades it has not
+// doubled from one year to the next, so it must be more than half and less than double the SMMLV in force the day
+// before it starts and the one in force the day it ends, if there are; ErrInvalidMarketParameter otherwise. After a
+// value loaded wrong within the band, the true next one fits unless it is double the wrong one or more; then it
+// needs a step period in between, as values are never changed.
+func plausibleMinimumWage(ctx context.Context, s MarketParameters, p MarketParameter) error {
+	if p.Kind != SMMLV {
+		return nil
+	}
+	for _, day := range []calendar.Date{p.ValidFrom.AddDays(-1), p.ValidTo} {
+		neighbour, err := s.ValueOn(ctx, SMMLV, "", day)
+		if errors.Is(err, ErrNoMarketParameter) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		near, err := withinHalfAndDouble(p.Value, neighbour)
+		if err != nil {
+			return err
+		}
+		if !near {
+			return fmt.Errorf("%w: an SMMLV of %s is not more than half and less than double the %s in force on %s",
+				ErrInvalidMarketParameter, p.Value, neighbour, day)
+		}
+	}
+	return nil
+}
+
+// withinHalfAndDouble reports whether v is more than half and less than double of other.
+func withinHalfAndDouble(v, other money.Precise) (bool, error) {
+	two := money.PreciseOf(2)
+	doubleOther, err := other.Mul(two)
+	if err != nil {
+		return false, err
+	}
+	doubleV, err := v.Mul(two)
+	if err != nil {
+		return false, err
+	}
+	return v.Cmp(doubleOther) < 0 && doubleV.Cmp(other) > 0, nil
 }
 
 // MarketValue is the value of parameter kind with its modality on day on, or ErrNoMarketParameter. An
@@ -139,8 +185,8 @@ func validKey(kind MarketKind, modality string) error {
 	return nil
 }
 
-// validValue checks that the value is positive, has at most maxMarketDecimals and, for a rate, is a
-// fraction up to 1.
+// validValue checks that the value is positive, has at most maxMarketDecimals, for a rate, is a fraction up to 1
+// and, for the SMMLV, is whole pesos, as it is decreed (Q-111 i: 1423.5 for 1423500 is a mistake).
 func validValue(p MarketParameter) error {
 	var zero money.Precise
 	if p.Value.Cmp(zero) <= 0 {
@@ -152,6 +198,9 @@ func validValue(p MarketParameter) error {
 	}
 	if slices.Contains(rates, p.Kind) && !atMostOne(whole, decimals) {
 		return fmt.Errorf("%w: %s is a fraction up to 1", ErrInvalidMarketParameter, p.Kind)
+	}
+	if p.Kind == SMMLV && strings.Trim(decimals, "0") != "" {
+		return fmt.Errorf("%w: the SMMLV is in whole pesos, not %s", ErrInvalidMarketParameter, p.Value)
 	}
 	return nil
 }

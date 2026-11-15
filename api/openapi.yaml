@@ -570,10 +570,13 @@ paths:
         and the UVT, the SMMLV and the UVB in pesos (without modality). The parameters are the tenant's,
         not a legal entity's. Creates a `products.market_parameter_load` maker-checker request and answers
         202 with it; the value is stored when someone else with `products.market_parameters.load` approves
-        it. An invalid value is 422 `invalid_market_parameter`; a period that overlaps another value of the
-        same kind and modality is 409 `market_parameter_overlap` when requesting, and leaves the request
-        `failed` if it overlaps when approving. A value is never changed: a correction is another period.
-        Idempotent by `Idempotency-Key`.
+        it. An invalid value is 422 `invalid_market_parameter`. An SMMLV must be whole pesos and more than
+        half and less than double the one in force the day before it starts and the one in force the day it
+        ends, if there are: this is checked again when approving, and leaves the request `failed` with
+        `invalid_market_parameter` if a neighbour loaded meanwhile makes it fail. A period that overlaps
+        another value of the same kind and modality is 409 `market_parameter_overlap` when requesting, and
+        leaves the request `failed` if it overlaps when approving. A value is never changed: a correction is
+        another period. Idempotent by `Idempotency-Key`.
       x-aluna-permission: products.market_parameters.load
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"

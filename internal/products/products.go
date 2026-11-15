@@ -162,13 +162,15 @@ func (s *Service) Version(ctx context.Context, q postgres.Querier, versionID ids
 // exponent), or ErrInvalidMarketParameter.
 func ParseMarketValue(text string) (money.Precise, error) { return app.ParseMarketValue(text) }
 
-// CheckMarketParameter reports whether p can be loaded (valid and without overlapping another value), or
-// ErrInvalidMarketParameter or ErrMarketParameterOverlap. q can be the pool or a Tx.
+// CheckMarketParameter reports whether p can be loaded (valid, without overlapping another value and, an SMMLV, more
+// than half and less than double the ones before and after it), or ErrInvalidMarketParameter or
+// ErrMarketParameterOverlap. q can be the pool or a Tx.
 func (s *Service) CheckMarketParameter(ctx context.Context, q postgres.Querier, p MarketParameter) error {
 	return app.CheckMarketParameter(ctx, pg.NewStore(q), p)
 }
 
-// LoadMarketParameter stores p within tx, or ErrInvalidMarketParameter or ErrMarketParameterOverlap.
+// LoadMarketParameter stores p within tx, or ErrInvalidMarketParameter or ErrMarketParameterOverlap; an SMMLV is
+// checked again against the ones before and after it.
 func (s *Service) LoadMarketParameter(ctx context.Context, tx postgres.Tx, p MarketParameter) error {
 	return app.LoadMarketParameter(ctx, pg.NewStore(tx), p)
 }

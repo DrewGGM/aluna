@@ -116,7 +116,10 @@ el pago restauran lo que el pago usó de la exención de GMF del mes, si `ALUNA_
    `gmf_payable` deben ser `async`, porque el reintegro de los cargos de un pago devuelto las debita: con una
    `sync`, los retiros, transferencias y pagos con cargos de esa versión responden 500 sin mover dinero.
 4. **Parámetros de mercado.** Un producto con límites en SMMLV necesita el salario mínimo vigente, y una
-   cuenta exenta del GMF, la UVT del año (`POST /v1/market-parameters`, maker-checker).
+   cuenta exenta del GMF, la UVT del año (`POST /v1/market-parameters`, maker-checker). El SMMLV va en pesos
+   enteros y debe ser más de la mitad y menos del doble de los vigentes el día antes de empezar y el día en que
+   termina, si los hay: un 1423.5 por 1423500, o uno con un cero de más o de menos, es 422
+   `invalid_market_parameter`.
 
 Sin las cuentas del paso 3 o los parámetros del paso 4, los movimientos que los usan responden 500, que no
 queda guardado con la `Idempotency-Key`: se corrige la configuración y se reintenta.

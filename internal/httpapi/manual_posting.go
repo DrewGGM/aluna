@@ -51,28 +51,28 @@ func postManual(ctx context.Context, l *ledger.Service, d *deposits.Service, tx 
 	return l.Post(ctx, tx, in)
 }
 
-// checkManual posts in under a savepoint and undoes it: a posting the ledger would refuse is refused when it is
-// requested, not when it is approved, which checks it again. The undo runs even if the request was canceled; if it
-// fails, its error comes back and not the check's, since the posting may still be in tx.
-func checkManual(ctx context.Context, l *ledger.Service, d *deposits.Service, tx postgres.Tx, in ledger.PostInput) error {
-	if _, err := tx.Exec(ctx, "SAVEPOINT manual_posting_check"); err != nil {
-		return fmt.Errorf("manual posting check: %w", err)
+// dryRun runs effect within tx under a savepoint and undoes it: a command the ledger or a deposit account would refuse
+// is refused when it is requested, not when it is approved, which runs it again. The undo runs even if the request
+// was canceled; if it fails, its error comes back and not effect's, since effect may still be in tx.
+func dryRun[T any](ctx context.Context, tx postgres.Tx, effect func() (T, error)) error {
+	if _, err := tx.Exec(ctx, "SAVEPOINT dry_run"); err != nil {
+		return fmt.Errorf("dry run: %w", err)
 	}
-	_, postErr := postManual(ctx, l, d, tx, in)
-	undoCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), checkUndoTimeout)
+	_, effectErr := effect()
+	undoCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dryRunUndoTimeout)
 	defer cancel()
-	if _, err := tx.Exec(undoCtx, "ROLLBACK TO SAVEPOINT manual_posting_check; RELEASE SAVEPOINT manual_posting_check"); err != nil {
-		return fmt.Errorf("undo the manual posting check that answered %v: %w", postErr, err) //nolint:errorlint // postErr must not match: the posting may not be undone
+	if _, err := tx.Exec(undoCtx, "ROLLBACK TO SAVEPOINT dry_run; RELEASE SAVEPOINT dry_run"); err != nil {
+		return fmt.Errorf("undo the dry run that answered %v: %w", effectErr, err) //nolint:errorlint // effectErr must not match: its effect may not be undone
 	}
-	return postErr
+	return effectErr
 }
 
-// checkUndoTimeout bounds undoing checkManual's posting, which runs even if the request was canceled.
-const checkUndoTimeout = 5 * time.Second
+// dryRunUndoTimeout bounds undoing a dry run, which runs even if the request was canceled.
+const dryRunUndoTimeout = 5 * time.Second
 
-// ManualPostingThresholds is, by currency code, the total of a manual posting's debits, in minor units, from which
-// it goes through maker-checker (ADR-0019); a currency it does not name never does. It is the process's, the same
-// for every entity it serves.
+// ManualPostingThresholds is, by currency code, the total of a manual posting's debits, or the amount of a hold
+// capture, in minor units, from which it goes through maker-checker (ADR-0019); a currency it does not name never does.
+// It is the process's, the same for every entity it serves.
 type ManualPostingThresholds map[string]int64
 
 // reached reports whether entries debit, in some currency, at least its threshold.
@@ -85,11 +85,17 @@ func (t ManualPostingThresholds) reached(entries []ledger.EntryInput) bool {
 		}
 	}
 	for code, total := range debits {
-		if threshold, named := t[code]; named && total >= threshold {
+		if t.reachedBy(code, total) {
 			return true
 		}
 	}
 	return false
+}
+
+// reachedBy reports whether units of the currency code reach its threshold.
+func (t ManualPostingThresholds) reachedBy(code string, units int64) bool {
+	threshold, named := t[code]
+	return named && units >= threshold
 }
 
 // postOnApproval is the Executor of manualPostingKind: it posts the requested body in the entity of the approver,

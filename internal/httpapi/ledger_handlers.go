@@ -25,13 +25,15 @@ import (
 // ledger.transactions: their entries came built by the caller and not from a versioned posting rule.
 const manualRuleVersion = "manual.v1"
 
-// Maker-checker request kinds of a reversal (FR-3, FR-39) and of a manual posting over its threshold (ADR-0019), and
-// the permissions required to approve them.
+// Maker-checker request kinds of a reversal (FR-3, FR-39) and of a manual posting or a hold capture over its
+// threshold (ADR-0019), and the permissions required to approve them.
 const (
 	reversalKind            = "ledger.reversal"
 	reversalPermission      = "ledger.transactions.reverse"
 	manualPostingKind       = "ledger.manual_posting"
 	manualPostingPermission = "ledger.transactions.post"
+	holdCaptureKind         = "ledger.hold_capture"
+	holdCapturePermission   = "ledger.holds.capture"
 )
 
 // LedgerHandlers implements the contract's ledger operations (api/openapi.yaml).
@@ -45,15 +47,16 @@ type LedgerHandlers struct {
 }
 
 // NewLedgerHandlers creates the ledger handlers and registers in a the request kinds of a reversal and of a manual
-// posting that reaches its threshold in thresholds (none if it is empty), which go through maker-checker. A posting on
-// the ledger account of a deposit account first locks it through d and is refused if it is not active. keys stores
-// the responses of the commands with Idempotency-Key; reader serves the reads outside a transaction. The legal
-// entity of each request is that of its token (FR-41).
+// posting or a hold capture that reaches its threshold in thresholds, which go through maker-checker; with thresholds
+// empty, none does. A posting on the ledger account of a deposit account first locks it through d and is refused if it
+// is not active. keys stores the responses of the commands with Idempotency-Key; reader serves the reads outside a
+// transaction. The legal entity of each request is that of its token (FR-41).
 func NewLedgerHandlers(l *ledger.Service, d *deposits.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store,
 	reader postgres.Querier, thresholds ManualPostingThresholds,
 ) *LedgerHandlers {
 	a.RegisterKind(reversalKind, reversalPermission, reverseOnApproval(l, d))
 	a.RegisterKind(manualPostingKind, manualPostingPermission, postOnApproval(l, d))
+	a.RegisterKind(holdCaptureKind, holdCapturePermission, captureOnApproval(l, d))
 	return &LedgerHandlers{ledger: l, deposits: d, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader, manualThresholds: thresholds}
 }
 
@@ -176,14 +179,15 @@ func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransa
 		return nil, err
 	}
 	resp, err := h.commands.idempotent(ctx, p, postTransaction, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
+		post := func() (ledger.Transaction, error) { return postManual(ctx, h.ledger, h.deposits, tx, in) }
 		if !h.manualThresholds.reached(in.Entries) {
-			posted, err := postManual(ctx, h.ledger, h.deposits, tx, in)
+			posted, err := post()
 			if err != nil {
 				return nil, err
 			}
 			return toTransactionJSON(posted), nil
 		}
-		if err := checkManual(ctx, h.ledger, h.deposits, tx, in); err != nil {
+		if err := dryRun(ctx, tx, post); err != nil {
 			return nil, err
 		}
 		requested, err := requestApproval(ctx, h.approvals, tx, manualPostingKind, *req.Body, p)
@@ -372,7 +376,9 @@ func (h *LedgerHandlers) PlaceHold(ctx context.Context, req gen.PlaceHoldRequest
 	return resp, nil
 }
 
-// CaptureHold posts part or all of a hold of the token's entity, once per Idempotency-Key.
+// CaptureHold posts part or all of a hold of the token's entity, once per Idempotency-Key, or, if the amount reaches
+// the threshold of manual postings (ADR-0019, Q-150 b), checks it and leaves it as a ledger.hold_capture request (202)
+// until another person approves it.
 func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldRequestObject) (gen.CaptureHoldResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -380,35 +386,84 @@ func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldReq
 	}
 	op := resourceOperation("holds", ids.ID(req.Id), "capture", http.StatusOK)
 	noteTargets(ctx, op.targets) // before validating the body: its rejection also names the hold
-	if err := requireBusinessDate(req.Body.BusinessDate); err != nil {
+	in, err := captureInput(ids.ID(req.Id), *req.Body, p)
+	if err != nil {
 		return nil, err
 	}
-	amount, err := amountOf(req.Body.Amount)
-	if err != nil {
-		return nil, fmt.Errorf("capture: %w", err)
-	}
-	in := ledger.CaptureInput{
-		LegalEntityID: p.LegalEntityID, HoldID: ids.ID(req.Id), Amount: amount,
-		BusinessDate: req.Body.BusinessDate.Time, Actor: p.Subject, Channel: apiChannel,
-	}
 	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
-		hold, err := h.ledger.Hold(ctx, tx, p.LegalEntityID, in.HoldID)
+		capture := func() (gen.HoldCapture, error) { return captureLocked(ctx, h.ledger, h.deposits, tx, in) }
+		if !h.manualThresholds.reachedBy(in.Amount.Currency().Code(), in.Amount.Units()) {
+			captured, err := capture()
+			if err != nil {
+				return nil, err
+			}
+			return captured, nil
+		}
+		if err := dryRun(ctx, tx, capture); err != nil {
+			return nil, err
+		}
+		requested, err := requestApproval(ctx, h.approvals, tx, holdCaptureKind, holdCaptureRequest{HoldID: in.HoldID, Capture: *req.Body}, p)
 		if err != nil {
 			return nil, err
 		}
-		if err := h.deposits.LockActiveHeldIn(ctx, tx, p.LegalEntityID, []ids.ID{hold.AccountID(), hold.CounterAccountID()}); err != nil {
-			return nil, err
-		}
-		captured, posted, err := h.ledger.CaptureHold(ctx, tx, in)
-		if err != nil {
-			return nil, err
-		}
-		return gen.HoldCapture{Hold: toHoldJSON(captured), Transaction: toTransactionJSON(posted)}, nil
+		return withStatus{status: http.StatusAccepted, body: requested}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	return resp, nil
+}
+
+// holdCaptureRequest is the payload of a ledger.hold_capture request: the hold and the body of its capture.
+type holdCaptureRequest struct {
+	HoldID  ids.ID          `json:"hold_id"`
+	Capture gen.CaptureHold `json:"capture"`
+}
+
+// captureInput is the capture of hold that body asks for on behalf of p, with the business date it must bring.
+func captureInput(hold ids.ID, body gen.CaptureHold, p access.Principal) (ledger.CaptureInput, error) {
+	if err := requireBusinessDate(body.BusinessDate); err != nil {
+		return ledger.CaptureInput{}, err
+	}
+	amount, err := amountOf(body.Amount)
+	if err != nil {
+		return ledger.CaptureInput{}, fmt.Errorf("capture: %w", err)
+	}
+	return ledger.CaptureInput{
+		LegalEntityID: p.LegalEntityID, HoldID: hold, Amount: amount,
+		BusinessDate: body.BusinessDate.Time, Actor: p.Subject, Channel: apiChannel,
+	}, nil
+}
+
+// captureLocked captures in within tx after locking the deposit accounts its hold touches, which must be active, and
+// returns the capture as the API shows it, which is also what an approval of it keeps as its result.
+func captureLocked(ctx context.Context, l *ledger.Service, d *deposits.Service, tx postgres.Tx, in ledger.CaptureInput) (gen.HoldCapture, error) {
+	hold, err := l.Hold(ctx, tx, in.LegalEntityID, in.HoldID)
+	if err != nil {
+		return gen.HoldCapture{}, err
+	}
+	if err := d.LockActiveHeldIn(ctx, tx, in.LegalEntityID, []ids.ID{hold.AccountID(), hold.CounterAccountID()}); err != nil {
+		return gen.HoldCapture{}, err
+	}
+	captured, posted, err := l.CaptureHold(ctx, tx, in)
+	if err != nil {
+		return gen.HoldCapture{}, err
+	}
+	return gen.HoldCapture{Hold: toHoldJSON(captured), Transaction: toTransactionJSON(posted)}, nil
+}
+
+// captureOnApproval is the Executor of holdCaptureKind: it captures the hold in the entity of the approver, who
+// becomes the actor of its posting, as CaptureHold would have; a rejection of the ledger or of a deposit account (the
+// hold expired, was released or captured meanwhile, its business date fell in a closed period, or its account is no
+// longer active) leaves the request failed.
+func captureOnApproval(l *ledger.Service, d *deposits.Service) approvals.Executor {
+	return onApproval("hold capture", func(ctx context.Context, tx postgres.Tx, r holdCaptureRequest, checker access.Principal) (gen.HoldCapture, error) {
+		in, err := captureInput(r.HoldID, r.Capture, checker)
+		if err != nil {
+			return gen.HoldCapture{}, err
+		}
+		return captureLocked(ctx, l, d, tx, in)
+	})
 }
 
 // ReleaseHold releases a hold of the token's entity, once per Idempotency-Key.

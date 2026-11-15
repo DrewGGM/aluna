@@ -5435,6 +5435,20 @@ func (response CaptureHold200JSONResponse) VisitCaptureHoldResponse(w http.Respo
 	return err
 }
 
+type CaptureHold202JSONResponse Approval
+
+func (response CaptureHold202JSONResponse) VisitCaptureHoldResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CaptureHold400ApplicationProblemPlusJSONResponse struct {
 	ProblemApplicationProblemPlusJSONResponse
 }

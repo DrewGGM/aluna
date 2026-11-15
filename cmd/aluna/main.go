@@ -80,8 +80,9 @@ commands:
                              subject is; ALUNA_SCREENING_THRESHOLD (0.92 by default) and
                              ALUNA_SCREENING_MAX_LIST_AGE_HOURS (48 by default, up to 168);
                              ALUNA_MANUAL_POSTING_APPROVAL sends through maker-checker the manual
-                             postings whose debits reach, in a currency, its threshold in minor
-                             units (ADR-0019): COP:100000000,USD:500000; empty, none;
+                             postings whose debits, and the hold captures whose amount, reach, in a
+                             currency, its threshold in minor units (ADR-0019):
+                             COP:100000000,USD:500000; empty, none;
                              ALUNA_PERIOD_CLOSE_ORDER is any (the default) or sequential, which
                              closes accounting periods month by month after the first (ADR-0020)
   worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls, GL,

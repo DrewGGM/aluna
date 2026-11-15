@@ -110,3 +110,102 @@ func TestARetriedManualPostingRequestIsTheSame(t *testing.T) {
 	expectProblem(t, "a request whose reference is posted", postTo(t, w.a, "/v1/transactions", ids.New().String(), body),
 		http.StatusConflict, "duplicate_external_ref")
 }
+
+// heldWorld is a manualApprovalWorld whose deposit has 198 COP, funded in two postings under the threshold, and a
+// hold of 150 of them against cash.
+func heldWorld(t *testing.T) (manualApprovalWorld, gen.Hold) {
+	t.Helper()
+	w := newManualApprovalWorld(t)
+	for range 2 {
+		if r := postTo(t, w.a, "/v1/transactions", ids.New().String(), postingBody(t, w.cash, w.deposit, 99, 99, "")); r.status != http.StatusCreated {
+			t.Fatalf("funding = %d %s", r.status, r.body)
+		}
+	}
+	return w, placeHoldOver(t, w.a, w.deposit, w.cash, 150)
+}
+
+// TestACaptureAtTheThresholdNeedsAnotherOperator (Q-150 b, ADR-0019): a capture of exactly the threshold is a pending
+// ledger.hold_capture request that posts nothing; A cannot approve it, and B's approval captures it with B as the
+// actor of its posting.
+func TestACaptureAtTheThresholdNeedsAnotherOperator(t *testing.T) {
+	w, hold := heldWorld(t)
+
+	requested := postTo(t, w.a, "/v1/holds/"+hold.Id.String()+"/capture", ids.New().String(), captureBody(100))
+
+	approval := decodeApproval(t, requested)
+	if requested.status != http.StatusAccepted || approval.Status != "pending" || approval.Kind != holdCaptureKind {
+		t.Fatalf("a capture of 100 = %d %s, want 202 pending", requested.status, requested.body)
+	}
+	if deposit := balanceOf(t, w.a, w.deposit); deposit != -198 {
+		t.Fatalf("deposit = %d before the approval, want -198", deposit)
+	}
+	path := "/v1/approvals/" + approval.ID + "/approval"
+	expectProblem(t, "A approves its own capture", postTo(t, w.a, path, ids.New().String(), ""), http.StatusForbidden, "self_approval_forbidden")
+	approved := decodeApproval(t, postTo(t, w.b, path, ids.New().String(), ""))
+	var captured gen.HoldCapture
+	if err := json.Unmarshal(approved.Result, &captured); err != nil || approved.Status != "approved" || captured.Hold.Captured.Amount != 100 {
+		t.Fatalf("B approves = %+v (%v), want the hold captured for 100", approved, err)
+	}
+	if deposit := balanceOf(t, w.a, w.deposit); deposit != -98 {
+		t.Fatalf("deposit = %d after the approval, want -98", deposit)
+	}
+	expectPostedThroughAPI(t, ids.ID(captured.Transaction.Id), "operator-b")
+}
+
+// TestACaptureUnderTheThresholdIsAtOnce: one of 99 is captured (200), as without a threshold.
+func TestACaptureUnderTheThresholdIsAtOnce(t *testing.T) {
+	w, hold := heldWorld(t)
+
+	r := postTo(t, w.a, "/v1/holds/"+hold.Id.String()+"/capture", ids.New().String(), captureBody(99))
+
+	if r.status != http.StatusOK || balanceOf(t, w.a, w.deposit) != -99 {
+		t.Fatalf("a capture of 99 = %d %s, want 200 and posted", r.status, r.body)
+	}
+}
+
+// TestACaptureTheLedgerRefusesIsRefusedWhenRequested: one over the threshold and over the hold is refused when it is
+// requested, and leaves no request.
+func TestACaptureTheLedgerRefusesIsRefusedWhenRequested(t *testing.T) {
+	w, hold := heldWorld(t)
+
+	r := postTo(t, w.a, "/v1/holds/"+hold.Id.String()+"/capture", ids.New().String(), captureBody(200))
+
+	expectProblem(t, "a capture of 200 of a hold of 150", r, http.StatusUnprocessableEntity, "amount_exceeds_hold")
+	var list struct{ Items []testApproval }
+	if status := getJSON(t, w.a, "/v1/approvals?status=pending", &list); status != http.StatusOK || len(list.Items) != 0 {
+		t.Fatalf("pending requests = %d %+v, want none", status, list.Items)
+	}
+}
+
+// TestARetriedCaptureRequestIsTheSame: the same capture request with the same Idempotency-Key answers the same 202
+// and leaves one request.
+func TestARetriedCaptureRequestIsTheSame(t *testing.T) {
+	w, hold := heldWorld(t)
+	path, key := "/v1/holds/"+hold.Id.String()+"/capture", ids.New().String()
+
+	first, again := postTo(t, w.a, path, key, captureBody(120)), postTo(t, w.a, path, key, captureBody(120))
+
+	if first.status != http.StatusAccepted || again.status != http.StatusAccepted || string(first.body) != string(again.body) {
+		t.Fatalf("request and retry = %d %s and %d %s, want the same 202", first.status, first.body, again.status, again.body)
+	}
+	var list struct{ Items []testApproval }
+	if status := getJSON(t, w.a, "/v1/approvals?status=pending", &list); status != http.StatusOK || len(list.Items) != 1 {
+		t.Fatalf("pending requests = %d %+v, want one", status, list.Items)
+	}
+}
+
+// TestACaptureOfAHoldReleasedMeanwhileFails: the hold is released while its capture waits, so the approval leaves the
+// request failed with hold_not_pending and posts nothing.
+func TestACaptureOfAHoldReleasedMeanwhileFails(t *testing.T) {
+	w, hold := heldWorld(t)
+	approval := decodeApproval(t, postTo(t, w.a, "/v1/holds/"+hold.Id.String()+"/capture", ids.New().String(), captureBody(150)))
+	if r := postTo(t, w.a, "/v1/holds/"+hold.Id.String()+"/release", ids.New().String(), ""); r.status != http.StatusOK {
+		t.Fatalf("release = %d %s", r.status, r.body)
+	}
+
+	approved := decodeApproval(t, postTo(t, w.b, "/v1/approvals/"+approval.ID+"/approval", ids.New().String(), ""))
+
+	if approved.Status != "failed" || approved.Failure != "hold_not_pending" || balanceOf(t, w.a, w.deposit) != -198 {
+		t.Fatalf("B approves = %s %s, want failed hold_not_pending and nothing posted", approved.Status, approved.Failure)
+	}
+}

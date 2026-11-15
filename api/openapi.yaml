@@ -205,7 +205,13 @@ paths:
         Posts the requested amount from the hold's account to its counterpart and releases the rest. A hold
         that is no longer pending answers 409 `hold_not_pending`; an expired one, 409 `hold_expired`; one on
         the ledger account of a deposit account that is no longer active, 409 `account_not_active`; an
-        amount larger than the held one, 422 `amount_exceeds_hold`.
+        amount larger than the held one, 422 `amount_exceeds_hold`. If the deployment sets thresholds for
+        manual postings (ADR-0019) and the amount reaches the one of its currency, it is checked as if
+        captured, then answered 202 with a `ledger.hold_capture` maker-checker request: the hold stays
+        pending, and it is captured when someone else with `approvals.decide` and `ledger.holds.capture`
+        approves it, as its actor. A hold that by then expired or was released or
+        captured, or a business date that by then falls in a closed period (`period_closed`), leaves the
+        request `failed` with the code of the problem.
       x-aluna-permission: ledger.holds.capture
       parameters:
         - $ref: "#/components/parameters/ID"
@@ -221,6 +227,11 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/HoldCapture"}
+        "202":
+          description: Capture pending approval (ADR-0019)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
         "400": {$ref: "#/components/responses/Problem"}
         "404": {$ref: "#/components/responses/Problem"}
         "409": {$ref: "#/components/responses/Problem"}

@@ -118,6 +118,9 @@ func toApprovalJSON(r approvals.Request) gen.Approval {
 	if r.Reason != "" {
 		a.Reason = &r.Reason
 	}
+	if r.Failure != "" {
+		a.Failure = &r.Failure
+	}
 	return a
 }
 
@@ -143,12 +146,12 @@ func onApproval[In, Out any](name string, command func(ctx context.Context, tx p
 	}
 }
 
-// asCommandRejection wraps in approvals.ErrCommandRejected an error of an approved command that is a
-// business rule (a 4xx in the problems table): the request is left failed. Any other error goes up as is,
-// so the request stays pending and can be approved later.
+// asCommandRejection makes an error of an approved command that is a business rule (a 4xx in the problems
+// table) its rejection with its problem code: the request is left failed, saying why. Any other error goes up as
+// is, so the request stays pending and can be approved later.
 func asCommandRejection(err error) error {
 	if p, known := problemFor(err); known && p.Status < http.StatusInternalServerError {
-		return fmt.Errorf("%w: %w", approvals.ErrCommandRejected, err)
+		return approvals.Rejected(p.Code, err)
 	}
 	return err
 }

@@ -202,8 +202,9 @@ Diez tipos de comando no corren al pedirlos: crean una solicitud pendiente y res
 Otra persona, con `approvals.decide` y el permiso del tipo de solicitud, la aprueba
 (`POST /v1/approvals/{id}/approval`) o la rechaza (`POST /v1/approvals/{id}/rejection`, con un `reason` que
 la solicitud muestra después). Al aprobarla, el comando corre con su cuerpo original en la misma transacción;
-si falla, la solicitud queda `failed`. La API no dice por qué: la causa queda en `approvals.requests.error`
-y solo se lee en la base. Quien pidió no puede decidir su propia solicitud (403 `self_approval_forbidden`), y
+si un rechazo de negocio lo detiene, la solicitud queda `failed` y muestra en `failure` el código del problem
+que respondió su comando (por ejemplo `already_reversed`). El texto del error, que puede nombrar internos,
+queda solo en `approvals.requests.error`, y las que fallaron antes de la migración 0047 no tienen `failure`. Quien pidió no puede decidir su propia solicitud (403 `self_approval_forbidden`), y
 una solicitud vence a los 7 días. Los asientos manuales (`POST /v1/transactions`) no pasan por maker-checker.
 
 Un asiento manual, un hold, su captura o una reversa que toque la cuenta del ledger de una cuenta de depósito

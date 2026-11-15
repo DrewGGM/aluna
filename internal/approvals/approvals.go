@@ -54,6 +54,19 @@ var (
 	ErrCommandRejected = errors.New("the approved command was rejected")
 )
 
+// Rejected is err, a business rule that rejected an approved command, as ErrCommandRejected, with code, the short
+// name of the rule (a problem code such as already_reversed: lowercase, digits and underscores) that the failed
+// request shows; its error is never shown, since it may name internals.
+func Rejected(code string, err error) error { return rejection{code: code, err: err} }
+
+type rejection struct {
+	code string
+	err  error
+}
+
+func (r rejection) Error() string   { return fmt.Sprintf("%v: %v", ErrCommandRejected, r.err) }
+func (r rejection) Unwrap() []error { return []error{ErrCommandRejected, r.err} }
+
 // maxFailureText is the most that is stored of a rejected command's error.
 const maxFailureText = 2048
 
@@ -73,6 +86,7 @@ type Request struct {
 	Maker, Checker       string
 	Status               Status
 	Reason               string
+	Failure              string // why its approved command was rejected (Rejected), if it failed
 	Result               json.RawMessage
 	CreatedAt, ExpiresAt time.Time
 	DecidedAt            *time.Time
@@ -145,7 +159,7 @@ func (s *Service) Approve(ctx context.Context, tx postgres.Tx, id ids.ID, checke
 		if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT approval_execution"); err != nil {
 			return Request{}, fmt.Errorf("undo execution of request %s: %w", id, err)
 		}
-		decision = pg.Decision{Status: string(StatusFailed), Checker: checker.Subject, Error: failureText(execErr)}
+		decision = pg.Decision{Status: string(StatusFailed), Checker: checker.Subject, Error: failureText(execErr), Failure: failureCode(execErr)}
 	case len(result) == 0:
 		decision = pg.Decision{Status: string(StatusApproved), Checker: checker.Subject, Result: json.RawMessage("null")}
 	default:
@@ -156,6 +170,15 @@ func (s *Service) Approve(ctx context.Context, tx postgres.Tx, id ids.ID, checke
 		return Request{}, err
 	}
 	return s.emit(ctx, tx, decided)
+}
+
+// failureCode is the code err was rejected with (Rejected), or "" if it was not.
+func failureCode(err error) string {
+	var r rejection
+	if errors.As(err, &r) {
+		return r.code
+	}
+	return ""
 }
 
 // failureText is a rejected command's error as it is stored: UTF-8 text with no NUL (PostgreSQL does not
@@ -291,6 +314,9 @@ func requestOf(row pg.Row) Request {
 	}
 	if row.Reason != nil {
 		r.Reason = *row.Reason
+	}
+	if row.Failure != nil {
+		r.Failure = *row.Failure
 	}
 	return r
 }

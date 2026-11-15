@@ -91,8 +91,8 @@ func TestAReversalNeedsAnotherOperator(t *testing.T) {
 	expectPostedThroughAPI(t, ids.ID(reversal.Id), "operator-b")
 }
 
-// TestAReversalTheLedgerRejectsFails: if on approval the ledger rejects the reversal (the transaction already
-// has one), the request ends up failed and nothing else is posted.
+// TestAReversalTheLedgerRejectsFails (Q-97 a): if on approval the ledger rejects the reversal (the transaction
+// already has one), the request ends up failed, saying why with the problem code, and nothing else is posted.
 func TestAReversalTheLedgerRejectsFails(t *testing.T) {
 	w := newReversalWorld(t)
 	first, second := w.requested(t), w.requested(t)
@@ -102,8 +102,8 @@ func TestAReversalTheLedgerRejectsFails(t *testing.T) {
 
 	again := postTo(t, w.b, "/v1/approvals/"+second.ID+"/approval", ids.New().String(), "")
 
-	if got := decodeApproval(t, again); again.status != http.StatusOK || got.Status != "failed" {
-		t.Fatalf("approve the second = %d %s, want 200 failed", again.status, again.body)
+	if got := decodeApproval(t, again); again.status != http.StatusOK || got.Status != "failed" || got.Failure != "already_reversed" {
+		t.Fatalf("approve the second = %d %s, want 200 failed for already_reversed", again.status, again.body)
 	}
 	if cash := balanceOf(t, w.a, w.cash); cash != 0 {
 		t.Fatalf("cash balance = %d, want 0: the second reversal must not be posted", cash)

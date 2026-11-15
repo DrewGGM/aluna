@@ -21,6 +21,7 @@ type Row struct {
 	Payload              json.RawMessage
 	Maker, Status        string
 	Checker, Reason      *string
+	Failure              *string
 	Result               json.RawMessage
 	CreatedAt, ExpiresAt time.Time
 	DecidedAt            *time.Time
@@ -28,14 +29,14 @@ type Row struct {
 }
 
 // Decision is how a request was decided: its final state, who decided it and, depending on the state, the
-// rejection reason, the execution error or its result.
+// rejection reason, the execution error and its failure code, or its result.
 type Decision struct {
-	Status, Checker, Reason, Error string
-	Result                         json.RawMessage
+	Status, Checker, Reason, Error, Failure string
+	Result                                  json.RawMessage
 }
 
-const columns = `id, legal_entity_id, kind, payload, maker, status, checker, reason, result, created_at, expires_at,
-	decided_at, status = 'pending' AND expires_at <= now()`
+const columns = `id, legal_entity_id, kind, payload, maker, status, checker, reason, failure, result, created_at,
+	expires_at, decided_at, status = 'pending' AND expires_at <= now()`
 
 // Insert stores a pending request; the database sets its creation and expiry.
 func Insert(ctx context.Context, tx postgres.Tx, id, entity ids.ID, kind string, payload json.RawMessage, maker string) (Row, error) {
@@ -63,8 +64,9 @@ func Lock(ctx context.Context, tx postgres.Tx, entity, id ids.ID) (row Row, foun
 // Decide stores the decision on request id, already locked.
 func Decide(ctx context.Context, tx postgres.Tx, id ids.ID, d Decision) (Row, error) {
 	row, err := scan(tx.QueryRow(ctx, `UPDATE approvals.requests
-		SET status = $2, checker = $3, reason = NULLIF($4, ''), error = NULLIF($5, ''), result = $6, decided_at = now()
-		WHERE id = $1 RETURNING `+columns, id, d.Status, d.Checker, d.Reason, d.Error, d.Result))
+		SET status = $2, checker = $3, reason = NULLIF($4, ''), error = NULLIF($5, ''), failure = NULLIF($7, ''), result = $6,
+			decided_at = now()
+		WHERE id = $1 RETURNING `+columns, id, d.Status, d.Checker, d.Reason, d.Error, d.Result, d.Failure))
 	if err != nil {
 		return Row{}, fmt.Errorf("decide request %s: %w", id, err)
 	}
@@ -91,6 +93,6 @@ func List(ctx context.Context, q postgres.Querier, entity ids.ID, status string,
 func scan(r pgx.Row) (Row, error) {
 	var row Row
 	err := r.Scan(&row.ID, &row.LegalEntityID, &row.Kind, &row.Payload, &row.Maker, &row.Status, &row.Checker,
-		&row.Reason, &row.Result, &row.CreatedAt, &row.ExpiresAt, &row.DecidedAt, &row.Expired)
+		&row.Reason, &row.Failure, &row.Result, &row.CreatedAt, &row.ExpiresAt, &row.DecidedAt, &row.Expired)
 	return row, err
 }

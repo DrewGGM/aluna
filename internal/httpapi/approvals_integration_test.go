@@ -98,8 +98,8 @@ func decodeApproval(t *testing.T, r response) testApproval {
 
 // testApproval is what the test reads from a request in the API.
 type testApproval struct {
-	ID, Kind, Status, Maker, Checker, Reason string
-	Payload, Result                          json.RawMessage
+	ID, Kind, Status, Maker, Checker, Reason, Failure string
+	Payload, Result                                   json.RawMessage
 }
 
 // TestTheMakerCannotApproveOverHTTP (AB-5, US-11): operator A requests; A cannot approve (403

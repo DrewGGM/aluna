@@ -1654,6 +1654,11 @@ components:
         maker: {type: string, description: sub of the requester}
         checker: {type: string, description: sub of the decider}
         reason: {type: string, description: Rejection reason}
+        failure:
+          type: string
+          description: >-
+            Why the approved command was rejected, as the problem code it answered (for example
+            `already_reversed`). Only a failed request has it, and one that failed before it was recorded does not.
         result:
           description: What the approved command returned.
           x-go-type: json.RawMessage

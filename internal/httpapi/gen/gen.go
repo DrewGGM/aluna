@@ -509,11 +509,14 @@ type AccountKind string
 // Approval defines model for Approval.
 type Approval struct {
 	// Checker sub of the decider
-	Checker   *string            `json:"checker,omitempty"`
-	CreatedAt time.Time          `json:"created_at"`
-	DecidedAt *time.Time         `json:"decided_at,omitempty"`
-	ExpiresAt time.Time          `json:"expires_at"`
-	Id        openapi_types.UUID `json:"id"`
+	Checker   *string    `json:"checker,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	DecidedAt *time.Time `json:"decided_at,omitempty"`
+	ExpiresAt time.Time  `json:"expires_at"`
+
+	// Failure Why the approved command was rejected, as the problem code it answered (for example `already_reversed`). Only a failed request has it, and one that failed before it was recorded does not.
+	Failure *string            `json:"failure,omitempty"`
+	Id      openapi_types.UUID `json:"id"`
 
 	// Kind Request kind; each module registers its own
 	Kind string `json:"kind"`

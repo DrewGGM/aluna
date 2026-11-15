@@ -415,10 +415,10 @@ lo que confirmó antes de la transacción más vieja), el agregador de saldos as
 
 ### Migraciones
 
-`aluna migrate up` corre cada migración en su propia transacción. En una base vacía todas son
-instantáneas. En una base con historia, estas recorren una tabla que ya tenía filas: un índice sin
-`CONCURRENTLY` bloquea sus escrituras mientras se construye, un `CHECK` nuevo la bloquea entera,
-lecturas incluidas, mientras se valida, y una llave foránea nueva bloquea sus escrituras:
+`aluna migrate up` corre cada migración en su propia transacción, salvo `0041_volume_indexes.sql` (ver
+abajo). En una base vacía todas son instantáneas. En una base con historia, estas recorren una tabla que ya
+tenía filas: un índice sin `CONCURRENTLY` bloquea sus escrituras mientras se construye, un `CHECK` nuevo la
+bloquea entera, lecturas incluidas, mientras se valida, y una llave foránea nueva bloquea sus escrituras:
 
 | Migración | Qué hace sobre una tabla existente | Qué bloquea |
 |---|---|---|
@@ -438,3 +438,9 @@ lecturas incluidas, mientras se valida, y una llave foránea nueva bloquea sus e
 Aplícalas en una ventana de mantenimiento, con la API fuera de rotación: tardan lo que tarde recorrer la
 tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y migrándolo (ver
 [Restauración PITR](runbook.md#restauración-pitr)).
+
+`0041_volume_indexes.sql` no necesita ventana: crea sus índices `CONCURRENTLY`, fuera de una transacción, y
+las escrituras siguen. Si se interrumpe, por ejemplo porque una transacción larga lo hace esperar más que el
+`lock_timeout` de la migración, puede dejar un índice inválido que la siguiente corrida daría por hecho.
+Búscalo con `SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid`, bórralo con
+`DROP INDEX CONCURRENTLY` y vuelve a migrar.

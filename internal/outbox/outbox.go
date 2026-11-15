@@ -88,10 +88,9 @@ func (o *Outbox) Subscribe(consumer string, types []string, h Handler) {
 func (o *Outbox) AddWorkers(w *river.Workers) { river.AddWorker(w, &publishWorker{o: o}) }
 
 // Purge deletes the events published before before (ADR-0007: the Events API retains them for 30 days),
-// with their inbox rows, and reports how many it deleted. It goes in batches in id order (UUIDv7, grows
-// over time): old published events sit at the start of the primary key and full batches stop early; the
-// last one scans the table (Q-81). It skips events locked by an ongoing publication: the next purge will
-// delete them.
+// with their inbox rows, and reports how many it deleted. It goes in batches, the published events found by their
+// publication and their inbox rows by their event (0041). It skips events locked by an ongoing publication: the
+// next purge will delete them.
 func (o *Outbox) Purge(ctx context.Context, before time.Time) (int64, error) {
 	var total int64
 	for {

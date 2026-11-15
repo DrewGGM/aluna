@@ -117,11 +117,11 @@ func TestPostedInterestEarnsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	residue := sum(t, state.AccruedPrecise, wholeT(t, -state.PostedUnits))
+	residue := sum(t, state.AccruedPrecise, money.PreciseOf(-state.PostedUnits))
 
 	_, next := accrue(t, state, 100000000000+posted, tiers, day(2026, time.March, 2))
 
-	want := product(t, sum(t, wholeT(t, 100000000000+posted), residue), rateOfADay(t, "0.30"))
+	want := product(t, sum(t, money.PreciseOf(100000000000+posted), residue), rateOfADay(t, "0.30"))
 	if !near(t, next, want.String(), accrualTolerance) {
 		t.Fatalf("day after posting %d = %s, want (capitalized balance + residue %s) × rate = %s", posted, next, residue, want)
 	}
@@ -149,28 +149,11 @@ func TestPostingRoundsAndKeepsTheResidue(t *testing.T) {
 
 // roundedUnits is the accrual rounded to whole minor units with mode, as posting rounds it.
 func roundedUnits(rt *rapid.T, accrued money.Precise, mode money.RoundingMode) money.Precise {
-	r, err := accrued.Quo(whole(rt, 1), 0, mode)
+	r, err := accrued.Quo(money.PreciseOf(1), 0, mode)
 	if err != nil {
 		rt.Fatal(err)
 	}
 	return r
-}
-
-func whole(rt *rapid.T, n int64) money.Precise {
-	p, err := precise64(n)
-	if err != nil {
-		rt.Fatal(err)
-	}
-	return p
-}
-
-func wholeT(t *testing.T, n int64) money.Precise {
-	t.Helper()
-	p, err := precise64(n)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
 }
 
 // drawEA draws an effective annual rate from 0 to 30 % with up to 4 decimals.
@@ -219,7 +202,7 @@ func TestPostingNeverOutrunsTheAccrual(t *testing.T) {
 			if rapid.Bool().Draw(rt, "post") {
 				dues += post(rt, &state, c, mode)
 			}
-			if dues != state.PostedUnits || whole(rt, state.PostedUnits).Cmp(roundedUnits(rt, state.AccruedPrecise, mode)) > 0 {
+			if dues != state.PostedUnits || money.PreciseOf(state.PostedUnits).Cmp(roundedUnits(rt, state.AccruedPrecise, mode)) > 0 {
 				rt.Fatalf("posted %d in total, state %d, accrual %s", dues, state.PostedUnits, state.AccruedPrecise)
 			}
 			d = d.AddDays(1)
@@ -234,11 +217,11 @@ func post(rt *rapid.T, state *AccrualState, c money.Currency, mode money.Roundin
 	if err != nil {
 		rt.Fatal(err)
 	}
-	residue, err := minus(next.AccruedPrecise, whole(rt, next.PostedUnits))
+	residue, err := minus(next.AccruedPrecise, money.PreciseOf(next.PostedUnits))
 	if err != nil {
 		rt.Fatal(err)
 	}
-	if due < 0 || residue.Cmp(whole(rt, 1)) >= 0 || residue.Cmp(whole(rt, -1)) <= 0 {
+	if due < 0 || residue.Cmp(money.PreciseOf(1)) >= 0 || residue.Cmp(money.PreciseOf(-1)) <= 0 {
 		rt.Fatalf("posting returned %d with residue %s, want it not negative and the residue below a minor unit", due, residue)
 	}
 	*state = next
@@ -261,11 +244,11 @@ func TestAYearOfAccrualIsTheEA(t *testing.T) {
 		}
 		year := rapid.SampledFrom(years).Draw(rt, "year")
 		posted := yearOfAccrual(rt, c, balance, ea, dc, year)
-		exact, err := whole(rt, balance).Mul(ea)
+		exact, err := money.PreciseOf(balance).Mul(ea)
 		if err != nil {
 			rt.Fatal(err)
 		}
-		if gap := distance(rt, exact, whole(rt, posted)); gap.Cmp(half) > 0 {
+		if gap := distance(rt, exact, money.PreciseOf(posted)); gap.Cmp(half) > 0 {
 			rt.Fatalf("a year of %d at %s EA under %s posted %d, want %s to the cent", balance, ea, dc, posted, exact)
 		}
 	})

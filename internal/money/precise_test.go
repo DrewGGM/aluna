@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -87,6 +88,23 @@ func TestToAmountErrors(t *testing.T) {
 	}
 	if _, _, err := mustPrecise(t, "1").ToAmount(Currency{}, HalfEven); !errors.Is(err, ErrUnknownCurrency) {
 		t.Errorf("no currency = %v, want ErrUnknownCurrency", err)
+	}
+}
+
+// TestPreciseOfIsTheWholeNumber (Q-111 j): a whole number is that Precise without a string to parse, the largest and
+// the smallest int64 included, and its zero is the zero value.
+func TestPreciseOfIsTheWholeNumber(t *testing.T) {
+	for _, n := range []int64{0, 1, -1, 1423500, math.MaxInt64, math.MinInt64} {
+		want, err := ParsePrecise(strconv.FormatInt(n, 10))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := PreciseOf(n); got.Cmp(want) != 0 || got.String() != want.String() {
+			t.Errorf("PreciseOf(%d) = %s, want %s", n, got, want)
+		}
+	}
+	if PreciseOf(0).Cmp(Precise{}) != 0 {
+		t.Error("PreciseOf(0) is not the zero value")
 	}
 }
 

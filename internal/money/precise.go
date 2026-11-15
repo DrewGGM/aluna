@@ -79,6 +79,9 @@ func ParsePrecise(s string) (Precise, error) {
 	return Precise{d: d}, nil
 }
 
+// PreciseOf is the whole number n: a count of days, an SMMLV multiple or minor units, which needs no parsing.
+func PreciseOf(n int64) Precise { return Precise{d: apd.New(n, 0)} }
+
 // Precise is the amount in its currency's major units, without loss.
 func (a Amount) Precise() Precise {
 	return Precise{d: apd.New(a.units, -int32(a.cur.exponent))} //nolint:gosec // ISO 4217 exponents are one digit

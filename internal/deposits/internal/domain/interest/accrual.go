@@ -38,19 +38,11 @@ func AccrueDay(state AccrualState, balanceUnits int64, tiers []products.RateTier
 	if err != nil {
 		return AccrualState{}, money.Precise{}, err
 	}
-	balance, err := precise64(balanceUnits)
+	withAccrued, err := money.PreciseOf(balanceUnits).Add(state.AccruedPrecise)
 	if err != nil {
 		return AccrualState{}, money.Precise{}, err
 	}
-	posted, err := precise64(state.PostedUnits)
-	if err != nil {
-		return AccrualState{}, money.Precise{}, err
-	}
-	withAccrued, err := balance.Add(state.AccruedPrecise)
-	if err != nil {
-		return AccrualState{}, money.Precise{}, err
-	}
-	base, err := minus(withAccrued, posted)
+	base, err := minus(withAccrued, money.PreciseOf(state.PostedUnits))
 	if err != nil {
 		return AccrualState{}, money.Precise{}, err
 	}
@@ -70,10 +62,7 @@ func slabInterest(base money.Precise, tiers []products.RateTier, f money.Precise
 	var interest money.Precise
 	top := base
 	for _, t := range slices.Backward(tiers) {
-		from, err := precise64(t.FromUnits)
-		if err != nil {
-			return money.Precise{}, err
-		}
+		from := money.PreciseOf(t.FromUnits)
 		if top.Cmp(from) <= 0 {
 			continue
 		}
@@ -103,11 +92,7 @@ func slabPart(top, from, ea, f money.Precise) (money.Precise, error) {
 	if err != nil {
 		return money.Precise{}, err
 	}
-	one, err := precise64(1)
-	if err != nil {
-		return money.Precise{}, err
-	}
-	return part.Quo(one, accrualScale, money.HalfEven)
+	return part.Quo(money.PreciseOf(1), accrualScale, money.HalfEven)
 }
 
 // DueForPosting rounds the accrual to minor units of cur with mode and returns what is due to post (that
@@ -131,11 +116,7 @@ func DueForPosting(state AccrualState, cur money.Currency, mode money.RoundingMo
 }
 
 func minus(a, b money.Precise) (money.Precise, error) {
-	minusOne, err := precise64(-1)
-	if err != nil {
-		return money.Precise{}, err
-	}
-	negative, err := b.Mul(minusOne)
+	negative, err := b.Mul(money.PreciseOf(-1))
 	if err != nil {
 		return money.Precise{}, err
 	}

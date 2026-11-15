@@ -3,7 +3,6 @@ package interest
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/calendar"
@@ -75,17 +74,5 @@ func newYear(year int) int { return ordinal(calendar.Date{Year: year, Month: tim
 
 // fraction is days/basis with fractionScale decimals, rounded half even.
 func fraction(days, basis int) (money.Precise, error) {
-	d, err := integer(days)
-	if err != nil {
-		return money.Precise{}, err
-	}
-	b, err := integer(basis)
-	if err != nil {
-		return money.Precise{}, err
-	}
-	return d.Quo(b, fractionScale, money.HalfEven)
+	return money.PreciseOf(int64(days)).Quo(money.PreciseOf(int64(basis)), fractionScale, money.HalfEven)
 }
-
-func integer(n int) (money.Precise, error) { return precise64(int64(n)) }
-
-func precise64(n int64) (money.Precise, error) { return money.ParsePrecise(strconv.FormatInt(n, 10)) }

@@ -13,11 +13,7 @@ var ErrInvalidRate = errors.New("EA is -100 % or less")
 // rateForFraction is the rate equivalent to ea over fraction f of a year: (1 + ea)^f − 1, compounded and
 // never f × ea. With f the YearFraction of a day it is the rate of that day under any convention.
 func rateForFraction(ea, f money.Precise) (money.Precise, error) {
-	one, err := integer(1)
-	if err != nil {
-		return money.Precise{}, err
-	}
-	base, err := ea.Add(one)
+	base, err := ea.Add(money.PreciseOf(1))
 	if err != nil {
 		return money.Precise{}, err
 	}
@@ -28,9 +24,5 @@ func rateForFraction(ea, f money.Precise) (money.Precise, error) {
 	if err != nil {
 		return money.Precise{}, err
 	}
-	minusOne, err := integer(-1)
-	if err != nil {
-		return money.Precise{}, err
-	}
-	return factor.Add(minusOne)
+	return factor.Add(money.PreciseOf(-1))
 }

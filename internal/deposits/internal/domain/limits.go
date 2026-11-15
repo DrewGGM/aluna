@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"strconv"
 
 	"github.com/DrewGGM/aluna/internal/money"
 )
@@ -85,11 +84,7 @@ func (l Limit) inUnits(c money.Currency, smmlv money.Precise) (int64, error) {
 	case c.Code() != "COP":
 		return 0, fmt.Errorf("%w: %d SMMLV in %s", ErrSMMLVOutsideCOP, l.SMMLV, c.Code())
 	}
-	times, err := money.ParsePrecise(strconv.FormatInt(l.SMMLV, 10))
-	if err != nil {
-		return 0, err
-	}
-	pesos, err := smmlv.Mul(times)
+	pesos, err := smmlv.Mul(money.PreciseOf(l.SMMLV))
 	if err != nil {
 		return 0, err
 	}

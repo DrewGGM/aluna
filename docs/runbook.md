@@ -24,6 +24,7 @@ Dos reglas valen para todo el runbook:
 | `ReconciliationBreakOpen` | page | [Breaks de reconciliación](#breaks-de-reconciliación) |
 | `AuditSealLate` | page | [Cola River atascada](#cola-river-atascada) |
 | `AsyncBalancesLagging` | page | [Cola River atascada](#cola-river-atascada) o una transacción larga del clúster |
+| `ScreeningListStale` | page | [El screening contra las listas](#el-screening-contra-las-listas) |
 | `OperationsMetricsMissing` | page | ningún proceso lee el estado de la base: base caída o procesos sin exportar |
 | `AuthorizationFailuresBurst` | page | [Falla del IAM](#falla-del-iam) o un cliente con tokens vencidos |
 | `MakerCheckerApproved` | info | registro de aprobaciones, no requiere acción |
@@ -345,7 +346,10 @@ listas mismas, como permite la SFC.
 faltan o pasaron de su antigüedad máxima, o el servicio de identidad no responde. Muchos casos con la
 referencia `identity:unknown` señalan sujetos que el servicio de identidad no conoce.
 
-**Diagnóstico.** La antigüedad de las listas, como dueño de las tablas:
+**Diagnóstico.** `aluna_compliance_list_age_seconds{list}` da la antigüedad de cada lista según la base, y
+`ScreeningListStale` pagina a las 36 h, antes de las 48 h en que, por defecto, el screening la rechaza: si se
+baja `ALUNA_SCREENING_MAX_LIST_AGE_HOURS`, hay que bajar ese umbral. Una lista que nunca se cargó no tiene serie,
+y la `api` juzga la antigüedad con lo que leyó en su última relectura. Como dueño de las tablas:
 
 ```sql
 SELECT list, version, entries, refreshed_at, now() - refreshed_at AS age FROM compliance.lists;

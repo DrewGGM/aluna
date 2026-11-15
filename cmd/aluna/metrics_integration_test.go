@@ -72,6 +72,19 @@ func TestTheOperationsStateIsReadAsTheApplication(t *testing.T) {
 	}
 }
 
+// TestTheListsAgeIsReadAsTheApplication (Q-145): when each restrictive list was refreshed shows up, as the
+// application's role reads it.
+func TestTheListsAgeIsReadAsTheApplication(t *testing.T) {
+	pool := appPool(t)
+	asOwner(t, pool, `INSERT INTO compliance.lists (list, version, entries, refreshed_at)
+		VALUES ('un_consolidated', 'v1', 1, '2026-03-02 10:00:00+00') ON CONFLICT (list) DO UPDATE SET refreshed_at = EXCLUDED.refreshed_at`)
+
+	s, err := databaseState{pool: pool}.Read(t.Context())
+	if err != nil || !s.ListsRefreshed["un_consolidated"].Equal(time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("lists refreshed = %v (%v), want the UN list's refresh", s.ListsRefreshed, err)
+	}
+}
+
 // TestAnAsyncEntryWaitingIsReadAsTheApplication (Q-61): an entry of an async account past the aggregator's cursor,
 // the only one waiting in this package's database, shows up, as the application's role reads it, as the oldest async
 // entry waiting, with its transaction's time.

@@ -78,23 +78,53 @@ func (d databaseState) Read(ctx context.Context) (telemetry.State, error) {
 	if oldestUnaggregated != nil {
 		s.OldestUnaggregated = *oldestUnaggregated
 	}
-	// the queues River serves, empty or not, and those with jobs waiting that nobody serves
+	if s.QueueDepth, err = d.queueDepth(ctx); err != nil {
+		return telemetry.State{}, err
+	}
+	if s.ListsRefreshed, err = d.listsRefreshed(ctx); err != nil {
+		return telemetry.State{}, err
+	}
+	return s, nil
+}
+
+// queueDepth is how many jobs wait in each queue: the queues River serves, empty or not, and those with jobs
+// waiting that nobody serves.
+func (d databaseState) queueDepth(ctx context.Context) (map[string]int64, error) {
 	rows, err := d.pool.Query(ctx, `SELECT name, sum(n)::bigint FROM (
 			SELECT name, 0 AS n FROM infra.river_queue
 			UNION ALL
 			SELECT queue, count(*) FROM infra.river_job WHERE state IN ('available', 'scheduled', 'retryable') GROUP BY queue
 		) depth GROUP BY name`)
 	if err != nil {
-		return telemetry.State{}, fmt.Errorf("read the queue depth: %w", err)
+		return nil, fmt.Errorf("read the queue depth: %w", err)
 	}
-	s.QueueDepth = map[string]int64{}
+	depths := map[string]int64{}
 	var queue string
 	var depth int64
 	if _, err := pgx.ForEachRow(rows, []any{&queue, &depth}, func() error {
-		s.QueueDepth[queue] = depth
+		depths[queue] = depth
 		return nil
 	}); err != nil {
-		return telemetry.State{}, fmt.Errorf("read the queue depth: %w", err)
+		return nil, fmt.Errorf("read the queue depth: %w", err)
 	}
-	return s, nil
+	return depths, nil
+}
+
+// listsRefreshed is when each restrictive list screening reads was last refreshed (ADR-0018): none with the fake
+// vendor, which reads none.
+func (d databaseState) listsRefreshed(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := d.pool.Query(ctx, `SELECT list, refreshed_at FROM compliance.lists`)
+	if err != nil {
+		return nil, fmt.Errorf("read the restrictive lists: %w", err)
+	}
+	refreshed := map[string]time.Time{}
+	var list string
+	var at time.Time
+	if _, err := pgx.ForEachRow(rows, []any{&list, &at}, func() error {
+		refreshed[list] = at
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("read the restrictive lists: %w", err)
+	}
+	return refreshed, nil
 }

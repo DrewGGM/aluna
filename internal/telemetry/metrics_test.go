@@ -120,8 +120,8 @@ func TestTheOperationsMetricsReportTheState(t *testing.T) {
 	now := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
 	metrics := collect(t, fixed{s: telemetry.State{
 		Postings: 1200, PendingHolds: 7, OpenBreaks: 2, ApprovedRequests: 31, OldestUnsealed: now.Add(-90 * time.Second),
-		OldestUnaggregated: now.Add(-25 * time.Second),
-		QueueDepth:         map[string]int64{"default": 0, "webhooks": 9},
+		OldestUnaggregated: now.Add(-25 * time.Second), ListsRefreshed: map[string]time.Time{"ofac_sdn": now.Add(-2 * time.Hour)},
+		QueueDepth: map[string]int64{"default": 0, "webhooks": 9},
 	}}, now)
 
 	expect(t, metrics, []expected{
@@ -131,6 +131,7 @@ func TestTheOperationsMetricsReportTheState(t *testing.T) {
 		{"aluna.approvals.approved", "", "", 31},
 		{"aluna.audit.unsealed.age", "", "", 90},
 		{"aluna.ledger.async.lag", "", "", 25},
+		{"aluna.compliance.list.age", "list", "ofac_sdn", 7200},
 		{"aluna.jobs.queue.depth", "queue", "webhooks", 9},
 		{"aluna.jobs.queue.depth", "queue", "default", 0},
 		{"aluna.db.pool.connections", "state", "acquired", 5},
@@ -175,7 +176,9 @@ func prometheusName(m metricdata.Metrics) string {
 // TestTheAlertsUseTheMetrics: every aluna_ metric the alerts and the SLOs query is one the process exports, and both
 // files are valid YAML.
 func TestTheAlertsUseTheMetrics(t *testing.T) {
-	metrics := collect(t, fixed{s: telemetry.State{QueueDepth: map[string]int64{"default": 1}}}, time.Now())
+	metrics := collect(t, fixed{s: telemetry.State{
+		QueueDepth: map[string]int64{"default": 1}, ListsRefreshed: map[string]time.Time{"ofac_sdn": time.Now()},
+	}}, time.Now())
 	exported := []string{}
 	for _, m := range metrics {
 		exported = append(exported, prometheusName(m))

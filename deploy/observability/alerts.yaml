@@ -76,6 +76,13 @@ groups:
         annotations:
           summary: An entry of an async account has waited more than 5 minutes for the balance aggregator
           description: The oldest entry not yet in its async account's balance was posted {{ $value | humanizeDuration }} ago (ADR-0004).
+      - alert: ScreeningListStale
+        expr: max(aluna_compliance_list_age_seconds) > 129600
+        labels:
+          severity: page
+        annotations:
+          summary: A restrictive list has not been refreshed for 36 hours
+          description: The stalest list was refreshed {{ $value | humanizeDuration }} ago; at ALUNA_SCREENING_MAX_LIST_AGE_HOURS (48 by default) screening refuses it and every party and payment waits for compliance (ADR-0018). Lower this threshold if that variable is lowered.
       - alert: OperationsMetricsMissing
         expr: absent(aluna_ledger_holds_pending)
         for: 10m
@@ -83,7 +90,7 @@ groups:
           severity: page
         annotations:
           summary: No process reports the database's state
-          description: Without these metrics the integrity alerts (breaks, audit seal, async lag) cannot fire; the reads of the database fail or no process runs.
+          description: Without these metrics the integrity alerts (breaks, audit seal, async lag, stale lists) cannot fire; the reads of the database fail or no process runs.
 
   - name: aluna-security
     rules:

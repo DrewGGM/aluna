@@ -138,8 +138,8 @@ paths:
         approves it in `POST /v1/approvals/{id}/approval`; if the ledger rejects it then (already
         reversed, period closed, insufficient funds) or it touches a deposit account that is no longer
         active, the request ends up `failed`. The reversal of a
-        reversal is rejected when requested (409 `reversal_of_reversal`). Idempotent by
-        `Idempotency-Key`.
+        reversal is rejected when requested (409 `reversal_of_reversal`), and so is that of a transaction already
+        reversed (409 `already_reversed`). Idempotent by `Idempotency-Key`.
       x-aluna-permission: ledger.transactions.reverse
       parameters:
         - $ref: "#/components/parameters/ID"

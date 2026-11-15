@@ -110,6 +110,18 @@ func TestAReversalTheLedgerRejectsFails(t *testing.T) {
 	}
 }
 
+// TestAReversedTransactionIsNotRequestedAgain (Q-97 a): once its reversal is approved, requesting another of the
+// transaction is 409 already_reversed, not a request that would only fail when approved.
+func TestAReversedTransactionIsNotRequestedAgain(t *testing.T) {
+	w := newReversalWorld(t)
+	first := w.requested(t)
+	if r := postTo(t, w.b, "/v1/approvals/"+first.ID+"/approval", ids.New().String(), ""); r.status != http.StatusOK {
+		t.Fatalf("approve the reversal = %d %s", r.status, r.body)
+	}
+
+	expectProblem(t, "a second reversal", w.requestReversal(t, reversalBody), http.StatusConflict, "already_reversed")
+}
+
 // TestAReversalIsNotReversed: the reversal of a reversal is rejected when requested (409
 // reversal_of_reversal): approving it would apply the original again without the checker seeing it.
 func TestAReversalIsNotReversed(t *testing.T) {

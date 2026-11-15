@@ -222,8 +222,8 @@ type reversalRequest struct {
 
 // RequestReversal requests the reversal of a transaction of the token's entity: it stays as a
 // ledger.reversal request until another person approves it (FR-39), once per Idempotency-Key. That of a
-// reversal is rejected when requested, not left to fail once approved (ledger.Reverse refuses it too): to apply
-// the original again, it is posted anew.
+// reversal, or of a transaction already reversed, is rejected when requested, not left to fail once approved
+// (ledger.Reverse refuses both too): to apply the original again, it is posted anew.
 func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestReversalRequestObject) (gen.RequestReversalResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -243,6 +243,13 @@ func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestRev
 		}
 		if original.ReversesID != (ids.ID{}) {
 			return nil, fmt.Errorf("%w: %s reverses %s", ledger.ErrReversalOfReversal, id, original.ReversesID)
+		}
+		reversal, reversed, err := h.ledger.ReversalOf(ctx, tx, p.LegalEntityID, id)
+		switch {
+		case err != nil:
+			return nil, err
+		case reversed:
+			return nil, fmt.Errorf("%w: %s is reversed by %s", ledger.ErrAlreadyReversed, id, reversal.ID)
 		}
 		return requestApproval(ctx, h.approvals, tx, reversalKind, payload, p)
 	})

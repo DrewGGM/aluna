@@ -1990,7 +1990,7 @@
                 }
               ]
             },
-            "description": "Creates a maker-checker `ledger.reversal` request and answers 202 with it. The reversal is posted (its entries with the opposite sign) when another person with `ledger.transactions.reverse` approves it in `POST /v1/approvals/{id}/approval`; if the ledger rejects it then (already reversed, period closed, insufficient funds) or it touches a deposit account that is no longer active, the request ends up `failed`. The reversal of a reversal is rejected when requested (409 `reversal_of_reversal`). Idempotent by `Idempotency-Key`.\n\nPermission: `ledger.transactions.reverse`"
+            "description": "Creates a maker-checker `ledger.reversal` request and answers 202 with it. The reversal is posted (its entries with the opposite sign) when another person with `ledger.transactions.reverse` approves it in `POST /v1/approvals/{id}/approval`; if the ledger rejects it then (already reversed, period closed, insufficient funds) or it touches a deposit account that is no longer active, the request ends up `failed`. The reversal of a reversal is rejected when requested (409 `reversal_of_reversal`), and so is that of a transaction already reversed (409 `already_reversed`). Idempotent by `Idempotency-Key`.\n\nPermission: `ledger.transactions.reverse`"
           }
         }
       ]

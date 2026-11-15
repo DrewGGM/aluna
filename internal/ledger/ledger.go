@@ -254,6 +254,11 @@ func (s *Service) Transaction(ctx context.Context, q postgres.Querier, entity, i
 	return pg.NewStore(q).TransactionOf(ctx, entity, id)
 }
 
+// ReversalOf is the reversal of the entity's transaction id, and whether it has one. q can be the pool or a Tx.
+func (s *Service) ReversalOf(ctx context.Context, q postgres.Querier, entity, id ids.ID) (Transaction, bool, error) {
+	return app.ReversalOf(ctx, pg.NewStore(q), entity, id)
+}
+
 // PostedAsOf sums the entries of one of the entity's accounts with a value date up to at.ValueDate and
 // posted up to at.KnownAt (FR-8): the signed balance as it was known at that moment. Another entity's
 // account is ErrAccountNotFound, like a missing one. q can be the pool or a Tx.

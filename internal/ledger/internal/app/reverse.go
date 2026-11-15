@@ -40,6 +40,19 @@ type ReversalStore interface {
 	TransactionOf(ctx context.Context, entity, id ids.ID) (Transaction, error)
 }
 
+// ReversalOf is the reversal of the entity's transaction id, and whether it has one: a reversal takes the
+// transaction it reverses as its reference (Reverse).
+func ReversalOf(ctx context.Context, store PostingStore, entity, id ids.ID) (Transaction, bool, error) {
+	reversal, found, err := store.TransactionByRef(ctx, entity, reversalSource, id.String())
+	switch {
+	case err != nil || !found:
+		return Transaction{}, false, err
+	case reversal.ReversesID != id: // the database does not stop direct SQL from taking the reference: fail closed
+		return Transaction{}, false, fmt.Errorf("the reversal reference of %s is held by %s, which does not reverse it", id, reversal.ID)
+	}
+	return reversal, true, nil
+}
+
 // Reverse posts the reversal of a transaction (FR-3): its entries with the opposite sign, with the
 // original's value date and in's business date. It goes through Post, so it honors the limits: reversing
 // an already spent deposit is ErrInsufficientFunds. A reversal is not reversed (ErrReversalOfReversal). If the

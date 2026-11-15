@@ -155,7 +155,7 @@ func (p Precise) ToAmount(c Currency, m RoundingMode) (Amount, Precise, error) {
 		return Amount{}, Precise{}, fmt.Errorf("%w: no currency", ErrUnknownCurrency)
 	}
 	// Dividing by 1 at the currency's scale is rounding to its minor units.
-	units, err := p.scaledQuo(Precise{d: apd.New(1, 0)}, c.exponent, m)
+	units, err := p.scaledQuo(PreciseOf(1), c.exponent, m)
 	if err != nil {
 		return Amount{}, Precise{}, err
 	}

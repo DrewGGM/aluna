@@ -81,7 +81,7 @@ func exponential(t *testing.T, balance int64, ea string, days int) int64 {
 	}
 	cop := copOf(t)
 	fraction := must(money.PreciseOf(int64(days)).Quo(money.PreciseOf(365), 34, money.HalfEven))
-	growth := must(must(money.ParsePrecise("1")).Add(must(money.ParsePrecise(ea))))
+	growth := must(money.PreciseOf(1).Add(must(money.ParsePrecise(ea))))
 	grown := must(money.New(balance, cop).Precise().Mul(must(growth.Pow(fraction))))
 	earned := must(grown.Add(money.New(-balance, cop).Precise()))
 	amount, _, err := earned.ToAmount(cop, money.HalfEven)

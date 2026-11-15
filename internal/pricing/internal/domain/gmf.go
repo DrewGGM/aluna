@@ -67,15 +67,11 @@ func taxOf(taxed money.Amount) (money.Amount, error) {
 	if err != nil {
 		return money.Amount{}, err
 	}
-	peso, err := money.ParsePrecise("1")
-	if err != nil {
-		return money.Amount{}, err
-	}
 	tax, err := taxed.Precise().Mul(rate)
 	if err != nil {
 		return money.Amount{}, err
 	}
-	if tax, err = tax.Quo(peso, 0, money.HalfUp); err != nil {
+	if tax, err = tax.Quo(money.PreciseOf(1), 0, money.HalfUp); err != nil {
 		return money.Amount{}, err
 	}
 	amount, _, err := tax.ToAmount(taxed.Currency(), money.HalfUp)

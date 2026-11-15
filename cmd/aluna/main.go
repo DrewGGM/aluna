@@ -38,6 +38,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/idempotency"
 	"github.com/DrewGGM/aluna/internal/jobs"
 	"github.com/DrewGGM/aluna/internal/ledger"
+	"github.com/DrewGGM/aluna/internal/money"
 	"github.com/DrewGGM/aluna/internal/outbox"
 	"github.com/DrewGGM/aluna/internal/party"
 	"github.com/DrewGGM/aluna/internal/payments"
@@ -77,7 +78,10 @@ commands:
                              which screens against the restrictive lists (ADR-0018) and asks
                              ALUNA_SCREENING_IDENTITY_URL, with ALUNA_SCREENING_IDENTITY_TOKEN, who a
                              subject is; ALUNA_SCREENING_THRESHOLD (0.92 by default) and
-                             ALUNA_SCREENING_MAX_LIST_AGE_HOURS (48 by default, up to 168)
+                             ALUNA_SCREENING_MAX_LIST_AGE_HOURS (48 by default, up to 168);
+                             ALUNA_MANUAL_POSTING_APPROVAL sends through maker-checker the manual
+                             postings whose debits reach, in a currency, its threshold in minor
+                             units (ADR-0019): COP:100000000,USD:500000; empty, none
   worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls, GL,
                              payments) on ALUNA_DATABASE_URL, anchoring blocks in
                              ALUNA_AUDIT_ANCHOR_DIR or, with Object Lock, in the S3 bucket at
@@ -259,6 +263,7 @@ type apiConfig struct {
 	charging            charging
 	screening           *compliance.ListScreeningConfig // nil with the fake vendor
 	railSecret          string
+	manualThresholds    httpapi.ManualPostingThresholds
 }
 
 func apiConfigFromEnv() (apiConfig, error) {
@@ -276,6 +281,9 @@ func apiConfigFromEnv() (apiConfig, error) {
 	if cfg.railSecret, err = railSecretFromEnv(); err != nil {
 		return apiConfig{}, err
 	}
+	if cfg.manualThresholds, err = manualThresholdsFromEnv(); err != nil {
+		return apiConfig{}, err
+	}
 	cfg.issuer, cfg.audience = os.Getenv("ALUNA_OIDC_ISSUER"), os.Getenv("ALUNA_OIDC_AUDIENCE")
 	if cfg.issuer == "" {
 		return apiConfig{}, fmt.Errorf("%w: missing ALUNA_OIDC_ISSUER", errNoOIDC)
@@ -284,6 +292,26 @@ func apiConfigFromEnv() (apiConfig, error) {
 		return apiConfig{}, fmt.Errorf("%w: missing ALUNA_OIDC_AUDIENCE", errNoOIDC)
 	}
 	return cfg, nil
+}
+
+// manualThresholdsFromEnv is ALUNA_MANUAL_POSTING_APPROVAL (ADR-0019): thresholds CUR:units separated by commas, an
+// ISO 4217 code each, once, with whole minor units of 0 or more; empty, none.
+func manualThresholdsFromEnv() (httpapi.ManualPostingThresholds, error) {
+	thresholds := httpapi.ManualPostingThresholds{}
+	v := os.Getenv("ALUNA_MANUAL_POSTING_APPROVAL")
+	if v == "" {
+		return thresholds, nil
+	}
+	for _, item := range strings.Split(v, ",") {
+		code, units, found := strings.Cut(strings.TrimSpace(item), ":")
+		cur, curErr := money.CurrencyOf(code)
+		n, unitsErr := strconv.ParseInt(units, 10, 64)
+		if _, twice := thresholds[cur.Code()]; !found || curErr != nil || unitsErr != nil || n < 0 || twice {
+			return nil, fmt.Errorf("%w: %q is not CUR:units, once per currency", errManualApproval, item)
+		}
+		thresholds[cur.Code()] = n
+	}
+	return thresholds, nil
 }
 
 // charging is how the entity charges: the modality of its GMF exemption, and what a payment that does not go
@@ -381,6 +409,8 @@ var (
 	errNoOIDC        = errors.New("incomplete OIDC configuration")
 	errRailSecret    = fmt.Errorf("ALUNA_SIMBREB_SECRET must have at least %d bytes", minRailSecret)
 	errChargesPolicy = errors.New("invalid policy on the charges of payments")
+	// errManualApproval means an ALUNA_MANUAL_POSTING_APPROVAL that is not thresholds CUR:units.
+	errManualApproval = errors.New("invalid ALUNA_MANUAL_POSTING_APPROVAL")
 )
 
 // connectTimeout bounds the initial connection: if the database does not respond, the process fails
@@ -483,7 +513,7 @@ func newAPI(ctx context.Context, pool *pgxpool.Pool, uow *postgres.UnitOfWork, c
 	complianceSvc.OnResolved(compliance.CasePayment, paymentSvc.ResolveScreening)
 	requests := approvals.New(policy, events)
 	return httpapi.API{
-		LedgerHandlers:         httpapi.NewLedgerHandlers(ledgerSvc, depositSvc, requests, uow, keys, pool),
+		LedgerHandlers:         httpapi.NewLedgerHandlers(ledgerSvc, depositSvc, requests, uow, keys, pool, cfg.manualThresholds),
 		ApprovalHandlers:       httpapi.NewApprovalHandlers(requests, uow, keys, pool),
 		PartyHandlers:          httpapi.NewPartyHandlers(partySvc, requests, uow, keys, pool),
 		ProductHandlers:        httpapi.NewProductHandlers(productSvc, requests, uow, keys, pool),

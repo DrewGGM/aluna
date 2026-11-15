@@ -63,6 +63,7 @@ Todo sale del entorno:
 | `ALUNA_SCREENING_MAX_LIST_AGE_HOURS` | `api` | `48` | Horas, de 1 a 168, que puede tener una lista antes de que el screening la rechace y falle cerrado |
 | `ALUNA_SCREENING_OFAC_SDN_URL`, `ALUNA_SCREENING_OFAC_ALT_URL`, `ALUNA_SCREENING_UN_URL`, `ALUNA_SCREENING_PEP_URL` | `worker` | las de sus dueños | De dónde se descargan las listas, para un espejo interno |
 | `ALUNA_QUOTE_POLICY` | `api`, `worker` | `lower_of` | Con qué comisión se cobra un pago que esperó a cumplimiento: `lower_of`, la menor entre la de la cotización que nombró al iniciarlo (`quote_id`) y la vigente al despejarlo, o `honor`, siempre la cotizada. Sin cotización se cobra la vigente: el core no le mostró ninguna. El GMF es el del momento del débito |
+| `ALUNA_MANUAL_POSTING_APPROVAL` | `api` | sin valor: ningún asiento manual pasa por maker-checker | Desde qué total de débitos, por moneda y en unidades menores, un asiento manual (`POST /v1/transactions`) queda como solicitud `ledger.manual_posting` (ADR-0019): `COP:100000000,USD:500000`; `COP:0` la exige en todo asiento en pesos |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `api`, `worker` | sin valor: nada sale del proceso | Exporta trazas y métricas por OTLP/HTTP, con el resto de variables `OTEL_*` |
 
 ### Notificaciones de los rails
@@ -184,11 +185,12 @@ su `trace_id`. Los montos son enteros de 64 bits en unidades menores.
 
 ### Maker-checker
 
-Diez tipos de comando no corren al pedirlos: crean una solicitud pendiente y responden 202.
+Once tipos de comando no corren al pedirlos: crean una solicitud pendiente y responden 202.
 
 | Solicitud | Se pide con |
 |---|---|
 | `ledger.reversal` | `POST /v1/transactions/{id}/reversal` |
+| `ledger.manual_posting` | `POST /v1/transactions` cuyos débitos llegan, en una moneda, al umbral de `ALUNA_MANUAL_POSTING_APPROVAL` (sin umbral, o por debajo, se asienta de una vez y responde 201); al pedirlo se comprueba como si se asentara |
 | `party.kyc_status_change` | `POST /v1/parties/{id}/kyc-status-changes` |
 | `deposits.account_status_change` | `POST /v1/deposit-accounts/{id}/status-changes` que congela o descongela una cuenta (activarla, reactivarla o cerrarla es inmediato y responde 200) |
 | `payments.suspense_credit` | `POST /v1/payment-orders/{id}/credit` que abona a una cuenta una transferencia que quedó en suspense |
@@ -205,7 +207,9 @@ la solicitud muestra después). Al aprobarla, el comando corre con su cuerpo ori
 si un rechazo de negocio lo detiene, la solicitud queda `failed` y muestra en `failure` el código del problem
 que respondió su comando (por ejemplo `already_reversed`). El texto del error, que puede nombrar internos,
 queda solo en `approvals.requests.error`, y las que fallaron antes de la migración 0047 no tienen `failure`. Quien pidió no puede decidir su propia solicitud (403 `self_approval_forbidden`), y
-una solicitud vence a los 7 días. Los asientos manuales (`POST /v1/transactions`) no pasan por maker-checker.
+una solicitud vence a los 7 días. Los asientos manuales (`POST /v1/transactions`) pasan por maker-checker solo
+desde el umbral de `ALUNA_MANUAL_POSTING_APPROVAL`; quien aprueba queda como su actor. Una cuenta de servicio
+(rol `system`) que asienta por encima del umbral también recibe 202 y no puede aprobar: lo aprueba una persona.
 
 Un asiento manual, un hold, su captura o una reversa que toque la cuenta del ledger de una cuenta de depósito
 bloquea primero esa cuenta, como cualquier movimiento de depósitos, y se rechaza con 409 `account_not_active`

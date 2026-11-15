@@ -27,7 +27,9 @@ dinero real. Antes hay que reemplazar cuatro piezas de desarrollo:
 
 Límites conocidos: el rol `channel` aún no ve recursos propios (todo le responde 404); las transferencias
 recibidas por llave van a la cuenta de suspense porque no hay directorio de llaves; y los asientos manuales
-(`POST /v1/transactions`, roles `operator`, `finance` y `system`) no pasan por maker-checker.
+(`POST /v1/transactions`, roles `operator`, `finance` y `system`) solo pasan por maker-checker desde el umbral
+por moneda de `ALUNA_MANUAL_POSTING_APPROVAL`, que sin valor no aplica; el umbral se mide por asiento (varios
+asientos menores no lo alcanzan), y un hold y su captura (`POST /v1/holds`) mueven dinero sin pasar por él.
 
 | Etapa | Qué entregó |
 |---|---|

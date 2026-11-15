@@ -25,28 +25,36 @@ import (
 // ledger.transactions: their entries came built by the caller and not from a versioned posting rule.
 const manualRuleVersion = "manual.v1"
 
-// Maker-checker request kind of a reversal (FR-3, FR-39) and the permission required to approve it.
+// Maker-checker request kinds of a reversal (FR-3, FR-39) and of a manual posting over its threshold (ADR-0019), and
+// the permissions required to approve them.
 const (
-	reversalKind       = "ledger.reversal"
-	reversalPermission = "ledger.transactions.reverse"
+	reversalKind            = "ledger.reversal"
+	reversalPermission      = "ledger.transactions.reverse"
+	manualPostingKind       = "ledger.manual_posting"
+	manualPostingPermission = "ledger.transactions.post"
 )
 
 // LedgerHandlers implements the contract's ledger operations (api/openapi.yaml).
 type LedgerHandlers struct {
-	ledger    *ledger.Service
-	deposits  *deposits.Service
-	approvals *approvals.Service
-	commands  commands
-	reader    postgres.Querier
+	ledger           *ledger.Service
+	deposits         *deposits.Service
+	approvals        *approvals.Service
+	commands         commands
+	reader           postgres.Querier
+	manualThresholds ManualPostingThresholds
 }
 
-// NewLedgerHandlers creates the ledger handlers and registers in a the reversal request kind, which goes
-// through maker-checker. A posting on the ledger account of a deposit account first locks it through d and is
-// refused if it is not active. keys stores the responses of the commands with Idempotency-Key; reader serves the
-// reads outside a transaction. The legal entity of each request is that of its token (FR-41).
-func NewLedgerHandlers(l *ledger.Service, d *deposits.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store, reader postgres.Querier) *LedgerHandlers {
+// NewLedgerHandlers creates the ledger handlers and registers in a the request kinds of a reversal and of a manual
+// posting that reaches its threshold in thresholds (none if it is empty), which go through maker-checker. A posting on
+// the ledger account of a deposit account first locks it through d and is refused if it is not active. keys stores
+// the responses of the commands with Idempotency-Key; reader serves the reads outside a transaction. The legal
+// entity of each request is that of its token (FR-41).
+func NewLedgerHandlers(l *ledger.Service, d *deposits.Service, a *approvals.Service, uow *postgres.UnitOfWork, keys *idempotency.Store,
+	reader postgres.Querier, thresholds ManualPostingThresholds,
+) *LedgerHandlers {
 	a.RegisterKind(reversalKind, reversalPermission, reverseOnApproval(l, d))
-	return &LedgerHandlers{ledger: l, deposits: d, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader}
+	a.RegisterKind(manualPostingKind, manualPostingPermission, postOnApproval(l, d))
+	return &LedgerHandlers{ledger: l, deposits: d, approvals: a, commands: commands{uow: uow, keys: keys}, reader: reader, manualThresholds: thresholds}
 }
 
 // CreateLedgerAccount creates an account of the token's entity.
@@ -155,44 +163,34 @@ func (h *LedgerHandlers) balanceAsOf(ctx context.Context, account ledger.Account
 	return b, nil
 }
 
-// PostTransaction posts a manual transaction of the token's entity, once per Idempotency-Key.
+// PostTransaction posts a balanced transaction of the token's entity once per Idempotency-Key, or, if it reaches the
+// threshold of manual postings (ADR-0019), checks it and leaves it as a ledger.manual_posting request
+// (202) until another person approves it.
 func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransactionRequestObject) (gen.PostTransactionResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := requireBusinessDate(req.Body.BusinessDate); err != nil {
+	in, err := manualInput(*req.Body, p)
+	if err != nil {
 		return nil, err
 	}
-	if moduleSource(req.Body.Source) {
-		return nil, fmt.Errorf("%w: the %s source belongs to its module", ledger.ErrInvalidPosting, req.Body.Source)
-	}
-	entries := make([]ledger.EntryInput, len(req.Body.Entries))
-	for i, e := range req.Body.Entries {
-		amount, err := amountOf(e.Amount)
-		if err != nil {
-			return nil, fmt.Errorf("entry %d: %w", i, err)
-		}
-		entries[i] = ledger.EntryInput{AccountID: ids.ID(e.AccountId), Amount: amount}
-	}
-	accounts := make([]ids.ID, len(entries))
-	for i, e := range entries {
-		accounts[i] = e.AccountID
-	}
-	in := ledger.PostInput{
-		LegalEntityID: p.LegalEntityID, Code: req.Body.Code, ValueDate: req.Body.ValueDate.Time,
-		BusinessDate: req.Body.BusinessDate.Time, Source: req.Body.Source, ExternalRef: req.Body.ExternalRef,
-		Actor: p.Subject, Channel: apiChannel, RuleVersion: manualRuleVersion, Entries: entries,
-	}
 	resp, err := h.commands.idempotent(ctx, p, postTransaction, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
-		if err := h.deposits.LockActiveHeldIn(ctx, tx, p.LegalEntityID, accounts); err != nil {
+		if !h.manualThresholds.reached(in.Entries) {
+			posted, err := postManual(ctx, h.ledger, h.deposits, tx, in)
+			if err != nil {
+				return nil, err
+			}
+			return toTransactionJSON(posted), nil
+		}
+		if err := checkManual(ctx, h.ledger, h.deposits, tx, in); err != nil {
 			return nil, err
 		}
-		posted, err := h.ledger.Post(ctx, tx, in)
+		requested, err := requestApproval(ctx, h.approvals, tx, manualPostingKind, *req.Body, p)
 		if err != nil {
 			return nil, err
 		}
-		return toTransactionJSON(posted), nil
+		return withStatus{status: http.StatusAccepted, body: requested}, nil
 	})
 	if err != nil {
 		return nil, err

@@ -65,7 +65,8 @@ func apiServerWith(t *testing.T, entity ids.ID, events ledger.Events) *httptest.
 
 // apiServerAs is the full API with the session of the entity's operator subject: every request carries the
 // test token, which entityVerifier accepts as that operator (token verification is tested in auth_test.go).
-// Reversals go through maker-checker as in aluna api.
+// Reversals go through maker-checker as in aluna api; manual postings, only with thresholds
+// (apiServerConfigured).
 func apiServerAs(t *testing.T, entity ids.ID, events ledger.Events, subject string) *httptest.Server {
 	t.Helper()
 	return apiServerAsRole(t, entity, events, subject, testRole)
@@ -73,6 +74,12 @@ func apiServerAs(t *testing.T, entity ids.ID, events ledger.Events, subject stri
 
 // apiServerAsRole is apiServerAs with role instead of operator.
 func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject, role string) *httptest.Server {
+	t.Helper()
+	return apiServerConfigured(t, entity, events, subject, role, nil)
+}
+
+// apiServerConfigured is apiServerAsRole whose manual postings go through maker-checker from thresholds.
+func apiServerConfigured(t *testing.T, entity ids.ID, events ledger.Events, subject, role string, thresholds ManualPostingThresholds) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	uow, keys := postgres.NewUnitOfWork(testPool), idempotency.NewStore(testPool)
@@ -96,7 +103,7 @@ func apiServerAsRole(t *testing.T, entity ids.ID, events ledger.Events, subject,
 	complianceSvc.OnResolved(compliance.CasePayment, paymentSvc.ResolveScreening)
 	requests := approvals.New(policy, events)
 	api := API{
-		LedgerHandlers:         NewLedgerHandlers(ledgerSvc, depositSvc, requests, uow, keys, testPool),
+		LedgerHandlers:         NewLedgerHandlers(ledgerSvc, depositSvc, requests, uow, keys, testPool, thresholds),
 		ApprovalHandlers:       NewApprovalHandlers(requests, uow, keys, testPool),
 		PartyHandlers:          NewPartyHandlers(partySvc, requests, uow, keys, testPool),
 		ProductHandlers:        NewProductHandlers(productSvc, requests, uow, keys, testPool),

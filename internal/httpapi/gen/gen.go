@@ -7502,6 +7502,20 @@ func (response PostTransaction201JSONResponse) VisitPostTransactionResponse(w ht
 	return err
 }
 
+type PostTransaction202JSONResponse Approval
+
+func (response PostTransaction202JSONResponse) VisitPostTransactionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PostTransaction400ApplicationProblemPlusJSONResponse struct {
 	ProblemApplicationProblemPlusJSONResponse
 }

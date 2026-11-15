@@ -393,6 +393,7 @@ func TestAPIConfigFromEnv(t *testing.T) {
 			t.Setenv("ALUNA_RETURN_REFUND_FEES", "") // the default policy, whatever the environment says
 			t.Setenv("ALUNA_GMF_RESTORE_EXEMPTION", "")
 			t.Setenv("ALUNA_QUOTE_POLICY", "")
+			t.Setenv("ALUNA_MANUAL_POSTING_APPROVAL", "")
 			t.Setenv("ALUNA_RETURN_REFUND_GMF_REASONS", "")
 			unsetenv(t, "ALUNA_RETURN_REFUND_GMF_REASONS")
 
@@ -401,6 +402,7 @@ func TestAPIConfigFromEnv(t *testing.T) {
 			want := apiConfig{
 				addr: ":8080", railAddr: ":8081", dsn: tc.dsn, issuer: issuer, audience: audience,
 				charging: charging{gmf: tc.wantGMF, payments: payments.DefaultPolicy()}, railSecret: railSecret,
+				manualThresholds: httpapi.ManualPostingThresholds{},
 			}
 			if tc.wantErr == "" && (err != nil || !reflect.DeepEqual(cfg, want)) {
 				t.Fatalf("cfg = %+v, err = %v, want %+v", cfg, err, want)
@@ -409,5 +411,26 @@ func TestAPIConfigFromEnv(t *testing.T) {
 				t.Fatalf("error = %v, want one about %s", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestTheManualPostingThresholdsComeFromTheEnvironment (ADR-0019): thresholds CUR:units, once per currency, with
+// whole minor units of 0 or more; empty, none.
+func TestTheManualPostingThresholdsComeFromTheEnvironment(t *testing.T) {
+	for value, want := range map[string]httpapi.ManualPostingThresholds{
+		"":                  {},
+		"COP:100000000":     {"COP": 100000000},
+		"COP:0, USD:500000": {"COP": 0, "USD": 500000},
+	} {
+		t.Setenv("ALUNA_MANUAL_POSTING_APPROVAL", value)
+		if got, err := manualThresholdsFromEnv(); err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%q = %v, %v; want %v", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"COP", "COP:-1", "XXX:10", "COP:1.5", "COP:1,COP:2", ","} {
+		t.Setenv("ALUNA_MANUAL_POSTING_APPROVAL", value)
+		if _, err := manualThresholdsFromEnv(); !errors.Is(err, errManualApproval) {
+			t.Errorf("%q = %v, want errManualApproval", value, err)
+		}
 	}
 }

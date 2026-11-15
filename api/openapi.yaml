@@ -91,7 +91,11 @@ paths:
         not stored: it can be retried with the same key. An entry on the ledger account of a deposit account
         that is not active (frozen, dormant or closed) is 409 `account_not_active`. The sources of the
         modules' own postings (`deposits`, `payments`, `ledger.` and theirs, such as
-        `deposits.capitalization`) are reserved: 422 `invalid_posting`.
+        `deposits.capitalization`) are reserved: 422 `invalid_posting`. If the deployment sets thresholds for manual
+        postings (ADR-0019) and the posting's debits reach one in some currency, it is checked as if posted, then
+        answered 202 with a `ledger.manual_posting` maker-checker request; it is posted when someone else with
+        `approvals.decide` and `ledger.transactions.post` approves it in `POST /v1/approvals/{id}/approval`, as
+        its actor. A service account that posts over a threshold gets 202 too, and a person approves it.
       x-aluna-permission: ledger.transactions.post
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -106,6 +110,11 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Transaction"}
+        "202":
+          description: Manual posting pending approval (ADR-0019)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
         "400": {$ref: "#/components/responses/Problem"}
         "404": {$ref: "#/components/responses/Problem"}
         "409": {$ref: "#/components/responses/Problem"}

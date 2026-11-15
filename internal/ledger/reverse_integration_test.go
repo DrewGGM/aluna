@@ -36,7 +36,7 @@ func tryReverse(t *testing.T, in ledger.ReverseInput) (ledger.Transaction, error
 func reverse(t *testing.T, original ids.ID) (ledger.Transaction, error) {
 	t.Helper()
 	return tryReverse(t, ledger.ReverseInput{
-		LegalEntityID: entity, TransactionID: original, Reason: reason, Actor: "operator", BusinessDate: reversalDay,
+		LegalEntityID: entity, TransactionID: original, Reason: reason, Actor: "operator", Channel: "api", BusinessDate: reversalDay,
 	})
 }
 
@@ -191,11 +191,12 @@ func TestReverseRejects(t *testing.T) {
 		in   ledger.ReverseInput
 		want error
 	}{
-		"nonexistent transaction": {ledger.ReverseInput{LegalEntityID: entity, TransactionID: ids.New(), Reason: "r", Actor: "a", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
-		"of another entity":       {ledger.ReverseInput{LegalEntityID: ids.New(), TransactionID: original.ID, Reason: "r", Actor: "a", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
-		"no reason":               {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Actor: "a", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
-		"a blank reason":          {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: " \t", Actor: "a", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
-		"no actor":                {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: "r", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
+		"nonexistent transaction": {ledger.ReverseInput{LegalEntityID: entity, TransactionID: ids.New(), Reason: "r", Actor: "a", Channel: "c", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
+		"of another entity":       {ledger.ReverseInput{LegalEntityID: ids.New(), TransactionID: original.ID, Reason: "r", Actor: "a", Channel: "c", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
+		"no reason":               {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Actor: "a", Channel: "c", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
+		"a blank reason":          {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: " \t", Actor: "a", Channel: "c", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
+		"no actor":                {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: "r", Channel: "c", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
+		"no channel":              {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: "r", Actor: "a", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

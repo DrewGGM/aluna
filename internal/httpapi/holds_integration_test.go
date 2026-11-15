@@ -44,6 +44,7 @@ func TestCaptureAHoldOverHTTP(t *testing.T) {
 		got.Hold.Captured.Amount != 200 || len(got.Transaction.Entries) != 2 {
 		t.Fatalf("capture = %d %s", r.status, r.body)
 	}
+	expectPostedThroughAPI(t, ids.ID(got.Transaction.Id), testSubject)
 	if replay := postTo(t, ts, path, key, captureBody(200)); replay.status != http.StatusOK || !bytes.Equal(replay.body, r.body) {
 		t.Fatalf("capture replay = %d %s, want the same response", replay.status, replay.body)
 	}

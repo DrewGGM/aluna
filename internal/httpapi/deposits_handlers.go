@@ -21,11 +21,6 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// transferChannel is the channel recorded with the transfers that come in through the API, and
-// compliance.ChannelCash the one of cash deposits and withdrawals, wherever they are called from; who called is
-// the actor.
-const transferChannel = "api"
-
 var openDepositAccount = operation{method: http.MethodPost, path: "/v1/deposit-accounts", success: http.StatusCreated}
 
 // errInvalidAccountStatus is a status change to other than active, frozen or closed: the generated code does not
@@ -303,7 +298,7 @@ func (h *DepositHandlers) CreateTransfer(ctx context.Context, req gen.CreateTran
 	key := req.Params.IdempotencyKey
 	in := deposits.TransferInput{
 		LegalEntityID: p.LegalEntityID, From: from, To: to, QuoteID: quoteIDOf(req.Body.QuoteId), Amount: amount,
-		ExternalRef: movementRef(p, op, key), Actor: p.Subject, Channel: transferChannel,
+		ExternalRef: movementRef(p, op, key), Actor: p.Subject, Channel: apiChannel, // a cash movement's is compliance.ChannelCash
 	}
 	resp, err := h.commands.idempotent(ctx, p, op, key, req.Body, func(tx postgres.Tx) (any, error) {
 		posted, err := h.deposits.Transfer(ctx, tx, in)

@@ -84,11 +84,12 @@ func TestASuspenseIsCreditedWithAnotherOperator(t *testing.T) {
 // expectPostedBy checks that the payments transaction of reference ref was posted by actor through the API.
 func expectPostedBy(t *testing.T, ref, actor string) {
 	t.Helper()
-	var got, channel string
-	if err := testPool.QueryRow(t.Context(), `SELECT actor, channel FROM ledger.transactions WHERE source = 'payments' AND external_ref = $1`,
-		ref).Scan(&got, &channel); err != nil || got != actor || channel != "api" {
-		t.Fatalf("%s was posted by %q through %q (%v), want %s through the API", ref, got, channel, err, actor)
+	var id ids.ID
+	if err := testPool.QueryRow(t.Context(), `SELECT id FROM ledger.transactions WHERE source = 'payments' AND external_ref = $1`,
+		ref).Scan(&id); err != nil {
+		t.Fatalf("payments transaction %s: %v", ref, err)
 	}
+	expectPostedThroughAPI(t, id, actor)
 }
 
 // expectEvidence checks that credit request r shows its checker what the transfer is: its amount, its end-to-end id

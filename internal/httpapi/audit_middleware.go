@@ -29,10 +29,13 @@ type CommandAudit struct {
 // Who calls before authenticating: a request rejected without a token keeps this actor and role; an
 // authenticated one, those of its token (notePrincipal).
 const (
-	auditActor   = "anonymous"
-	auditRole    = "none"
-	auditChannel = "api"
+	auditActor = "anonymous"
+	auditRole  = "none"
 )
+
+// apiChannel is the channel of whatever comes in through the API: its audit records', and that of what the
+// handlers post to the ledger, whose actor is the token's subject (FR-7).
+const apiChannel = "api"
 
 // Results of a command in its record, besides the code of the problem it was rejected with.
 const (
@@ -171,7 +174,7 @@ func withAudit(a *CommandAudit, routes *http.ServeMux, log *slog.Logger) func(ht
 				return
 			}
 			trail := &auditTrail{records: a.Records, base: audit.Record{
-				Actor: auditActor, Role: auditRole, Channel: auditChannel, IP: clientIP(r),
+				Actor: auditActor, Role: auditRole, Channel: apiChannel, IP: clientIP(r),
 				CorrelationID: requestIDFrom(r.Context()), Command: pattern,
 			}}
 			defer a.recordApart(r.Context(), trail, log)

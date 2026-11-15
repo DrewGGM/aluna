@@ -96,7 +96,7 @@ func TestReversalsAndCapturesInAClosedPeriodAreRejected(t *testing.T) {
 	original, _ := mustPostRef(t, depositOn(t, entity, cash, deposit, in2025(time.July, 7)))
 	june := in2025(time.June, 30)
 
-	_, err := tryReverse(t, ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: reason, Actor: "operator", BusinessDate: june})
+	_, err := tryReverse(t, ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: reason, Actor: "operator", Channel: "api", BusinessDate: june})
 	if !errors.Is(err, ledger.ErrPeriodClosed) {
 		t.Errorf("reversal in June = %v, want ErrPeriodClosed", err)
 	}
@@ -143,7 +143,7 @@ func TestARetryAfterTheCloseReturnsTheOriginal(t *testing.T) {
 	april := in2025(time.April, 30)
 	in := depositOn(t, entity, cash, deposit, april)
 	original, _ := mustPostRef(t, in)
-	reverseApril := ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: reason, Actor: "operator", BusinessDate: april}
+	reverseApril := ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: reason, Actor: "operator", Channel: "api", BusinessDate: april}
 	reversal, err := tryReverse(t, reverseApril)
 	if err != nil {
 		t.Fatal(err)

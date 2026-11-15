@@ -137,7 +137,7 @@ func TestACommandIsAuditedInItsTransaction(t *testing.T) {
 	id, _ := body["id"].(string)
 	got := onlyRecord(t, correlation)
 	want := audit.Record{
-		Actor: testSubject, Role: testRole, Channel: auditChannel, IP: "127.0.0.1", Command: "POST /v1/transactions",
+		Actor: testSubject, Role: testRole, Channel: apiChannel, IP: "127.0.0.1", Command: "POST /v1/transactions",
 		Targets: slices.Sorted(slices.Values([]string{id, cash, deposit})), Result: resultOK, After: got.After,
 	}
 	if !reflect.DeepEqual(got.Record, want) {

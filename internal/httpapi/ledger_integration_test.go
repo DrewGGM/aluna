@@ -400,6 +400,30 @@ func TestAClosedPeriodIsAConflict(t *testing.T) {
 	}
 }
 
+// expectPostedThroughAPI checks that transaction id was posted on behalf of actor through the API (FR-7).
+func expectPostedThroughAPI(t *testing.T, id ids.ID, actor string) {
+	t.Helper()
+	var got, channel string
+	if err := testPool.QueryRow(t.Context(), `SELECT actor, channel FROM ledger.transactions WHERE id = $1`, id).Scan(&got, &channel); err != nil ||
+		got != actor || channel != "api" {
+		t.Fatalf("transaction %s was posted by %q through %q (%v), want %s through the API", id, got, channel, err, actor)
+	}
+}
+
+// TestAManualPostingRecordsWhoPostedIt (FR-7): a manual posting keeps as its actor the token's subject, and the API
+// as its channel.
+func TestAManualPostingRecordsWhoPostedIt(t *testing.T) {
+	ts := apiServer(t, ids.New())
+	cash, deposit := createAccount(t, ts, "asset"), createAccount(t, ts, "liability")
+	r := postWithKey(t, ts, ids.New().String(), postingBody(t, cash, deposit, 100, 100, ""))
+	var posted gen.Transaction
+	if err := json.Unmarshal([]byte(r.body), &posted); r.status != http.StatusCreated || err != nil {
+		t.Fatalf("post = %d %s (%v)", r.status, r.body, err)
+	}
+
+	expectPostedThroughAPI(t, ids.ID(posted.Id), testSubject)
+}
+
 // TestAManualPostingDoesNotTakeAModuleSource: a manual posting with the source of a module (deposits, payments, or
 // one of theirs) is 422 invalid_posting: its reference would take the place of the module's own movement. A source
 // that only starts as one is not a module's.

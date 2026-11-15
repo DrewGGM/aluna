@@ -21,14 +21,9 @@ import (
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
-// Origin of the manual postings that come in through POST /v1/transactions. They are stored forever in
-// ledger.transactions: rule_version "manual.v1" says the entries came built by the caller and not from a
-// versioned posting rule. Who called is kept in the audit record.
-const (
-	manualActor       = "api"
-	manualChannel     = "api"
-	manualRuleVersion = "manual.v1"
-)
+// manualRuleVersion is the rule_version of the postings of POST /v1/transactions, stored forever in
+// ledger.transactions: their entries came built by the caller and not from a versioned posting rule.
+const manualRuleVersion = "manual.v1"
 
 // Maker-checker request kind of a reversal (FR-3, FR-39) and the permission required to approve it.
 const (
@@ -187,7 +182,7 @@ func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransa
 	in := ledger.PostInput{
 		LegalEntityID: p.LegalEntityID, Code: req.Body.Code, ValueDate: req.Body.ValueDate.Time,
 		BusinessDate: req.Body.BusinessDate.Time, Source: req.Body.Source, ExternalRef: req.Body.ExternalRef,
-		Actor: manualActor, Channel: manualChannel, RuleVersion: manualRuleVersion, Entries: entries,
+		Actor: p.Subject, Channel: apiChannel, RuleVersion: manualRuleVersion, Entries: entries,
 	}
 	resp, err := h.commands.idempotent(ctx, p, postTransaction, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
 		if err := h.deposits.LockActiveHeldIn(ctx, tx, p.LegalEntityID, accounts); err != nil {
@@ -278,7 +273,7 @@ func reverseOnApproval(l *ledger.Service, d *deposits.Service) approvals.Executo
 		if err := d.LockActiveHeldIn(ctx, tx, checker.LegalEntityID, accounts); err != nil {
 			return gen.Transaction{}, err
 		}
-		in := ledger.ReverseInput{LegalEntityID: checker.LegalEntityID, TransactionID: r.TransactionID, Reason: r.Reason, Actor: checker.Subject}
+		in := ledger.ReverseInput{LegalEntityID: checker.LegalEntityID, TransactionID: r.TransactionID, Reason: r.Reason, Actor: checker.Subject, Channel: apiChannel}
 		if r.BusinessDate != nil {
 			in.BusinessDate = r.BusinessDate.Time
 		}
@@ -393,7 +388,7 @@ func (h *LedgerHandlers) CaptureHold(ctx context.Context, req gen.CaptureHoldReq
 	}
 	in := ledger.CaptureInput{
 		LegalEntityID: p.LegalEntityID, HoldID: ids.ID(req.Id), Amount: amount,
-		BusinessDate: req.Body.BusinessDate.Time, Actor: manualActor, Channel: manualChannel,
+		BusinessDate: req.Body.BusinessDate.Time, Actor: p.Subject, Channel: apiChannel,
 	}
 	resp, err := h.commands.idempotent(ctx, p, op, req.Params.IdempotencyKey, req.Body, func(tx postgres.Tx) (any, error) {
 		hold, err := h.ledger.Hold(ctx, tx, p.LegalEntityID, in.HoldID)

@@ -21,17 +21,17 @@ var ErrReversalOfReversal = errors.New("the transaction is a reversal: it cannot
 
 // Reversal header.
 const (
-	reversalSource  = "ledger.reversal"
-	reversalCode    = "reversal"
-	reversalChannel = "ledger"
+	reversalSource = "ledger.reversal"
+	reversalCode   = "reversal"
 )
 
-// ReverseInput asks to reverse transaction TransactionID of entity LegalEntityID.
+// ReverseInput asks to reverse transaction TransactionID of entity LegalEntityID, for Reason, on behalf of Actor
+// through Channel (FR-7).
 type ReverseInput struct {
-	LegalEntityID ids.ID
-	TransactionID ids.ID
-	Reason, Actor string
-	BusinessDate  time.Time
+	LegalEntityID          ids.ID
+	TransactionID          ids.ID
+	Reason, Actor, Channel string
+	BusinessDate           time.Time
 }
 
 // ReversalStore is the persistence of Reverse: Post's plus reading the reversed transaction.
@@ -64,7 +64,7 @@ func Reverse(ctx context.Context, store ReversalStore, guard PeriodGuard, events
 	// at most one reversal per transaction, also between two concurrent reversals.
 	reversal, err := post(ctx, store, guard, PostInput{
 		LegalEntityID: in.LegalEntityID, Code: reversalCode, ValueDate: original.ValueDate, BusinessDate: in.BusinessDate,
-		Source: reversalSource, ExternalRef: original.ID.String(), Actor: in.Actor, Channel: reversalChannel,
+		Source: reversalSource, ExternalRef: original.ID.String(), Actor: in.Actor, Channel: in.Channel,
 		RuleVersion: domain.ReversalRuleVersion, ReversesID: original.ID, Metadata: map[string]string{"reason": in.Reason},
 		Entries: entries,
 	}, pendingRelease{})

@@ -88,6 +88,7 @@ func TestAReversalNeedsAnotherOperator(t *testing.T) {
 	if cash, deposit := balanceOf(t, w.a, w.cash), balanceOf(t, w.a, w.deposit); cash != 0 || deposit != 0 {
 		t.Fatalf("balances after the reversal = %d and %d, want 0 and 0", cash, deposit)
 	}
+	expectPostedThroughAPI(t, ids.ID(reversal.Id), "operator-b")
 }
 
 // TestAReversalTheLedgerRejectsFails: if on approval the ledger rejects the reversal (the transaction already

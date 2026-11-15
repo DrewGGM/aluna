@@ -25,6 +25,8 @@ Dos reglas valen para todo el runbook:
 | `AuditSealLate` | page | [Cola River atascada](#cola-river-atascada) |
 | `AsyncBalancesLagging` | page | [Cola River atascada](#cola-river-atascada) o una transacción larga del clúster |
 | `ScreeningListStale` | page | [El screening contra las listas](#el-screening-contra-las-listas) |
+| `HoldsNotExpiring` | page | [Cola River atascada](#cola-river-atascada) o un hold que no se puede expirar |
+| `EventsUnpublished` | ticket | [Cola River atascada](#cola-river-atascada): un `outbox.publish` que falla o se descartó |
 | `OperationsMetricsMissing` | page | ningún proceso lee el estado de la base: base caída o procesos sin exportar |
 | `AuthorizationFailuresBurst` | page | [Falla del IAM](#falla-del-iam) o un cliente con tokens vencidos |
 | `MakerCheckerApproved` | info | registro de aprobaciones, no requiere acción |
@@ -206,7 +208,8 @@ espera locks, el cuello es el pool.
 ## Cola River atascada
 
 **Síntomas.** `AuditSealLate` (un registro de auditoría espera su sello más de 5 min), `AsyncBalancesLagging`
-(un asiento de una cuenta async espera al agregador más de 5 min),
+(un asiento de una cuenta async espera al agregador más de 5 min), `HoldsNotExpiring` (un hold pendiente lleva
+más de 5 min vencido), `EventsUnpublished` (un evento lleva más de 1 h sin llegar a los consumidores internos),
 `aluna_jobs_queue_depth` que crece en una cola, saldos async atrasados, webhooks o extractos que no salen,
 pagos que se quedan `sent`.
 
@@ -239,6 +242,17 @@ GROUP BY 1;
   plazo si es más largo. Mientras tanto, un periódico de controles, GL, extractos o webhooks no se vuelve a
   encolar, ni al reiniciar el worker: solo corre uno a la vez. Un pago que quedó
   `sent` no se reenvía solo: concíliealo contra el extracto del rail.
+- Un hold vencido que `ledger.holds.expire` no logra expirar queda primero en cada lote y frena la expiración
+  de todas las entidades. El error del job (en los descartados) dice qué falló y en qué cuenta, y el hold es
+  el pendiente vencido más viejo:
+
+  ```sql
+  SELECT id, legal_entity_id, account_id, amount, expires_at
+  FROM ledger.holds WHERE status = 'pending' AND expires_at <= now() ORDER BY expires_at LIMIT 1;
+  ```
+
+  Corrige la causa (por ejemplo, el saldo pendiente descuadrado que viola el `CHECK` de `ledger.balances`, ver
+  [Breaks de reconciliación](#breaks-de-reconciliación)); el job siguiente retoma la expiración.
 - Un `outbox.publish` descartado deja sin entregar su evento a los consumidores internos (los
   acumulados de efectivo para la UIAF). El evento no se purga mientras no se publique, pero River borra
   el job descartado a los 7 días. Dentro de ese plazo, reencólalo con `JobRetry` del cliente de River o,

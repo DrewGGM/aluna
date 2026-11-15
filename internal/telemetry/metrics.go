@@ -15,7 +15,8 @@ import (
 // collection: the transactions posted, the River jobs waiting by queue (every known queue, 0 when it is empty), the
 // holds pending, the reconciliation breaks open, the maker-checker requests a checker ever approved, when the
 // oldest audit record still waiting for its seal was recorded, when the oldest entry of an async account still
-// waiting for the aggregator was posted (zero if none waits) and when each restrictive list was last refreshed.
+// waiting for the aggregator was posted, when the oldest event not yet published was emitted, when the oldest
+// pending hold past its expiry expired (each zero if none) and when each restrictive list was last refreshed.
 type State struct {
 	Postings           int64
 	QueueDepth         map[string]int64
@@ -24,6 +25,8 @@ type State struct {
 	ApprovedRequests   int64
 	OldestUnsealed     time.Time
 	OldestUnaggregated time.Time
+	OldestUnpublished  time.Time
+	OldestOverdueHold  time.Time
 	ListsRefreshed     map[string]time.Time
 }
 
@@ -88,6 +91,7 @@ type instruments struct {
 	postings, approved                   metric.Int64ObservableCounter
 	queueDepth, pendingHolds, openBreaks metric.Int64ObservableGauge
 	unsealedAge, asyncLag, listAge       metric.Float64ObservableGauge
+	unpublishedAge, holdsOverdue         metric.Float64ObservableGauge
 }
 
 func databaseInstruments(meter metric.Meter) (instruments, error) {
@@ -119,6 +123,12 @@ func databaseInstruments(meter metric.Meter) (instruments, error) {
 	in.listAge, err = meter.Float64ObservableGauge("aluna.compliance.list.age", metric.WithUnit("s"),
 		metric.WithDescription("How long since each restrictive list screening reads was refreshed, by list."))
 	add(err)
+	in.unpublishedAge, err = meter.Float64ObservableGauge("aluna.outbox.unpublished.age", metric.WithUnit("s"),
+		metric.WithDescription("How long the oldest event not yet published to the internal consumers has waited; 0 when none waits."))
+	add(err)
+	in.holdsOverdue, err = meter.Float64ObservableGauge("aluna.ledger.holds.overdue", metric.WithUnit("s"),
+		metric.WithDescription("How long the oldest pending hold has been past its expiry; 0 when none is."))
+	add(err)
 	if err := errors.Join(errs...); err != nil {
 		return instruments{}, fmt.Errorf("operations metrics: %w", err)
 	}
@@ -126,7 +136,10 @@ func databaseInstruments(meter metric.Meter) (instruments, error) {
 }
 
 func (in instruments) all() []metric.Observable {
-	return []metric.Observable{in.postings, in.approved, in.queueDepth, in.pendingHolds, in.openBreaks, in.unsealedAge, in.asyncLag, in.listAge}
+	return []metric.Observable{
+		in.postings, in.approved, in.queueDepth, in.pendingHolds, in.openBreaks, in.unsealedAge, in.asyncLag, in.listAge,
+		in.unpublishedAge, in.holdsOverdue,
+	}
 }
 
 func (in instruments) observe(o metric.Observer, s State, now time.Time) {
@@ -139,6 +152,8 @@ func (in instruments) observe(o metric.Observer, s State, now time.Time) {
 	o.ObserveInt64(in.openBreaks, s.OpenBreaks)
 	o.ObserveFloat64(in.unsealedAge, ageAt(s.OldestUnsealed, now))
 	o.ObserveFloat64(in.asyncLag, ageAt(s.OldestUnaggregated, now))
+	o.ObserveFloat64(in.unpublishedAge, ageAt(s.OldestUnpublished, now))
+	o.ObserveFloat64(in.holdsOverdue, ageAt(s.OldestOverdueHold, now))
 	for list, refreshed := range s.ListsRefreshed {
 		o.ObserveFloat64(in.listAge, ageAt(refreshed, now), metric.WithAttributes(attribute.String("list", list)))
 	}

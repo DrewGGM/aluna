@@ -120,7 +120,8 @@ func TestTheOperationsMetricsReportTheState(t *testing.T) {
 	now := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
 	metrics := collect(t, fixed{s: telemetry.State{
 		Postings: 1200, PendingHolds: 7, OpenBreaks: 2, ApprovedRequests: 31, OldestUnsealed: now.Add(-90 * time.Second),
-		OldestUnaggregated: now.Add(-25 * time.Second), ListsRefreshed: map[string]time.Time{"ofac_sdn": now.Add(-2 * time.Hour)},
+		OldestUnaggregated: now.Add(-25 * time.Second), OldestUnpublished: now.Add(-40 * time.Second),
+		OldestOverdueHold: now.Add(-50 * time.Second), ListsRefreshed: map[string]time.Time{"ofac_sdn": now.Add(-2 * time.Hour)},
 		QueueDepth: map[string]int64{"default": 0, "webhooks": 9},
 	}}, now)
 
@@ -131,6 +132,8 @@ func TestTheOperationsMetricsReportTheState(t *testing.T) {
 		{"aluna.approvals.approved", "", "", 31},
 		{"aluna.audit.unsealed.age", "", "", 90},
 		{"aluna.ledger.async.lag", "", "", 25},
+		{"aluna.outbox.unpublished.age", "", "", 40},
+		{"aluna.ledger.holds.overdue", "", "", 50},
 		{"aluna.compliance.list.age", "list", "ofac_sdn", 7200},
 		{"aluna.jobs.queue.depth", "queue", "webhooks", 9},
 		{"aluna.jobs.queue.depth", "queue", "default", 0},
@@ -144,7 +147,12 @@ func TestTheOperationsMetricsReportTheState(t *testing.T) {
 // night does not page.
 func TestNothingWaitingIsAgeZero(t *testing.T) {
 	metrics := collect(t, fixed{s: telemetry.State{QueueDepth: map[string]int64{}}}, time.Now())
-	expect(t, metrics, []expected{{"aluna.audit.unsealed.age", "", "", 0}, {"aluna.ledger.async.lag", "", "", 0}})
+	expect(t, metrics, []expected{
+		{"aluna.audit.unsealed.age", "", "", 0},
+		{"aluna.ledger.async.lag", "", "", 0},
+		{"aluna.outbox.unpublished.age", "", "", 0},
+		{"aluna.ledger.holds.overdue", "", "", 0},
+	})
 }
 
 // TestASourceThatFailsLeavesTheRest: the collection does not fail, so the process still exports the pool's metrics

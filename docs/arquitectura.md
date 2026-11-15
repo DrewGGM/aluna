@@ -375,6 +375,8 @@ stdout en JSON, con `trace_id` y `span_id`. Cada proceso exporta:
 | `aluna.audit.unsealed.age` | Antigüedad del registro de auditoría más viejo sin sellar |
 | `aluna.ledger.async.lag` | Antigüedad del próximo asiento de una cuenta async que espera al agregador |
 | `aluna.compliance.list.age` | Antigüedad de cada lista restrictiva desde su último refresco, por lista |
+| `aluna.outbox.unpublished.age` | Antigüedad del evento más viejo que aún no llega a los consumidores internos |
+| `aluna.ledger.holds.overdue` | Cuánto lleva vencido el hold pendiente más viejo |
 | `aluna.jobs.queue.depth` | Jobs esperando, por cola |
 | `aluna.approvals.approved` | Solicitudes de maker-checker aprobadas |
 | `aluna.compliance.screening.circuit.transitions` | Cambios de estado del circuito del proveedor de screening |

@@ -83,6 +83,20 @@ groups:
         annotations:
           summary: A restrictive list has not been refreshed for 36 hours
           description: The stalest list was refreshed {{ $value | humanizeDuration }} ago; at ALUNA_SCREENING_MAX_LIST_AGE_HOURS (48 by default) screening refuses it and every party and payment waits for compliance (ADR-0018). Lower this threshold if that variable is lowered.
+      - alert: HoldsNotExpiring
+        expr: max(aluna_ledger_holds_overdue_seconds) > 300
+        labels:
+          severity: page
+        annotations:
+          summary: A pending hold has been past its expiry for 5 minutes
+          description: The oldest pending hold expired {{ $value | humanizeDuration }} ago; ledger.holds.expire runs every 30 seconds, and one hold it cannot expire stops the expiry of every entity, keeping their customers' funds held.
+      - alert: EventsUnpublished
+        expr: max(aluna_outbox_unpublished_age_seconds) > 3600
+        labels:
+          severity: ticket
+        annotations:
+          summary: An event has not reached the internal consumers for an hour
+          description: The oldest unpublished event was emitted {{ $value | humanizeDuration }} ago; its outbox.publish job keeps failing, or was discarded and nothing requeues it, and the cash accumulations for the UIAF miss it.
       - alert: OperationsMetricsMissing
         expr: absent(aluna_ledger_holds_pending)
         for: 10m
@@ -90,7 +104,7 @@ groups:
           severity: page
         annotations:
           summary: No process reports the database's state
-          description: Without these metrics the integrity alerts (breaks, audit seal, async lag, stale lists) cannot fire; the reads of the database fail or no process runs.
+          description: Without these metrics the integrity alerts (breaks, audit seal, async lag, stale lists, overdue holds, unpublished events) cannot fire; the reads of the database fail or no process runs.
 
   - name: aluna-security
     rules:

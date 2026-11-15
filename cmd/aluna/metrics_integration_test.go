@@ -85,6 +85,45 @@ func TestTheListsAgeIsReadAsTheApplication(t *testing.T) {
 	}
 }
 
+// TestTheStuckEventsAndHoldsAreReadAsTheApplication (Q-79, Q-60): as the application's role reads them, an event
+// already published, a hold already expired and a pending hold not yet due are not stuck; an event not yet published
+// and a pending hold past its expiry are, and, older than anything the other tests of this package leave, they are
+// the oldest.
+func TestTheStuckEventsAndHoldsAreReadAsTheApplication(t *testing.T) {
+	pool := appPool(t)
+	entity, cash, deposits := ids.New().String(), ids.New().String(), ids.New().String()
+	event := func(createdAt, publishedAt string) string {
+		return `INSERT INTO infra.outbox (id, type, subject, legal_entity_id, schema_version, payload, created_at, published_at)
+			VALUES ('` + ids.New().String() + `', 'aluna.ledger.hold.expired.v1', 'metrics', '` + entity + `', 1, '{}', ` + createdAt + `, ` + publishedAt + `)`
+	}
+	hold := func(status, expiresAt string) string {
+		return `INSERT INTO ledger.holds (id, legal_entity_id, account_id, counter_account_id, currency, amount, status, expires_at)
+			VALUES ('` + ids.New().String() + `', '` + entity + `', '` + deposits + `', '` + cash + `', 'COP', 100, '` + status + `', ` + expiresAt + `)`
+	}
+	asOwner(t, pool,
+		`INSERT INTO ledger.accounts (id, legal_entity_id, code, kind, currency) VALUES ('`+cash+`', '`+entity+`', 'A.CASH', 'asset', 'COP')`,
+		`INSERT INTO ledger.accounts (id, legal_entity_id, code, kind, currency) VALUES ('`+deposits+`', '`+entity+`', 'L.DEPOSITS', 'liability', 'COP')`,
+		event(`'2026-03-01 10:00:00+00'`, `'2026-03-01 10:00:01+00'`), hold("expired", `'2026-03-01 10:00:00+00'`), hold("pending", `now() + interval '1 year'`))
+
+	quiet, err := databaseState{pool: pool}.Read(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quiet.OldestOverdueHold.After(time.Now()) {
+		t.Fatalf("the oldest overdue hold expires at %v, in the future", quiet.OldestOverdueHold)
+	}
+
+	asOwner(t, pool, event(`'2026-03-02 10:00:00+00'`, `NULL`), hold("pending", `'2026-03-02 11:00:00+00'`))
+	s, err := databaseState{pool: pool}.Read(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	emitted, expired := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC), time.Date(2026, time.March, 2, 11, 0, 0, 0, time.UTC)
+	if !s.OldestUnpublished.Equal(emitted) || !s.OldestOverdueHold.Equal(expired) {
+		t.Fatalf("oldest unpublished %v, oldest overdue hold %v; want %v and %v", s.OldestUnpublished, s.OldestOverdueHold, emitted, expired)
+	}
+}
+
 // TestAnAsyncEntryWaitingIsReadAsTheApplication (Q-61): an entry of an async account past the aggregator's cursor,
 // the only one waiting in this package's database, shows up, as the application's role reads it, as the oldest async
 // entry waiting, with its transaction's time.

@@ -54,7 +54,7 @@ type databaseState struct{ pool *pgxpool.Pool }
 // stopped aggregator does not make every collection read its whole backlog.
 func (d databaseState) Read(ctx context.Context) (telemetry.State, error) {
 	var s telemetry.State
-	var oldestUnsealed, oldestUnaggregated *time.Time
+	var oldestUnsealed, oldestUnaggregated, oldestUnpublished, oldestOverdueHold *time.Time
 	err := d.pool.QueryRow(ctx, `SELECT
 			(SELECT coalesce(sum(n_tup_ins), 0)::bigint FROM pg_stat_user_tables WHERE schemaname = 'ledger' AND relname = 'transactions'),
 			(SELECT count(*) FROM ledger.holds WHERE status = 'pending'),
@@ -67,8 +67,11 @@ func (d databaseState) Read(ctx context.Context) (telemetry.State, error) {
 				WHERE a.balance_mode = 'async'
 					AND t.posted_xact >= (SELECT posted_xact FROM ledger.async_cursor)
 					AND (t.posted_xact, e.id) > (SELECT posted_xact, entry_id FROM ledger.async_cursor)
-				ORDER BY t.posted_xact, e.id LIMIT 1)`).
-		Scan(&s.Postings, &s.PendingHolds, &s.OpenBreaks, &s.ApprovedRequests, &oldestUnsealed, &oldestUnaggregated)
+				ORDER BY t.posted_xact, e.id LIMIT 1),
+			(SELECT created_at FROM infra.outbox WHERE published_at IS NULL ORDER BY created_at LIMIT 1),
+			(SELECT expires_at FROM ledger.holds WHERE status = 'pending' AND expires_at <= now() ORDER BY expires_at LIMIT 1)`).
+		Scan(&s.Postings, &s.PendingHolds, &s.OpenBreaks, &s.ApprovedRequests, &oldestUnsealed, &oldestUnaggregated,
+			&oldestUnpublished, &oldestOverdueHold)
 	if err != nil {
 		return telemetry.State{}, fmt.Errorf("read the operations state: %w", err)
 	}
@@ -77,6 +80,12 @@ func (d databaseState) Read(ctx context.Context) (telemetry.State, error) {
 	}
 	if oldestUnaggregated != nil {
 		s.OldestUnaggregated = *oldestUnaggregated
+	}
+	if oldestUnpublished != nil {
+		s.OldestUnpublished = *oldestUnpublished
+	}
+	if oldestOverdueHold != nil {
+		s.OldestOverdueHold = *oldestOverdueHold
 	}
 	if s.QueueDepth, err = d.queueDepth(ctx); err != nil {
 		return telemetry.State{}, err

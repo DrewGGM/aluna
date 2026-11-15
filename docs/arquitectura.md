@@ -432,10 +432,11 @@ lo que confirmó antes de la transacción más vieja), el agregador de saldos as
 
 ### Migraciones
 
-`aluna migrate up` corre cada migración en su propia transacción, salvo `0041_volume_indexes.sql` (ver
-abajo). En una base vacía todas son instantáneas. En una base con historia, estas recorren una tabla que ya
-tenía filas: un índice sin `CONCURRENTLY` bloquea sus escrituras mientras se construye, un `CHECK` nuevo la
-bloquea entera, lecturas incluidas, mientras se valida, y una llave foránea nueva bloquea sus escrituras:
+`aluna migrate up` corre cada migración en su propia transacción, salvo `0041_volume_indexes.sql` y
+`0048_entries_amount_in_index.sql` (ver abajo). En una base vacía todas son instantáneas. En una base con
+historia, estas recorren una tabla que ya tenía filas: un índice sin `CONCURRENTLY` bloquea sus escrituras
+mientras se construye, un `CHECK` nuevo la bloquea entera, lecturas incluidas, mientras se valida, y una llave
+foránea nueva bloquea sus escrituras:
 
 | Migración | Qué hace sobre una tabla existente | Qué bloquea |
 |---|---|---|
@@ -461,8 +462,11 @@ tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y mi
 estado de una cuenta de depósito antes de escribir su historial, y la base lo rechaza. Para volver a una versión
 anterior, baja primero esa migración.
 
-`0041_volume_indexes.sql` no necesita ventana: crea sus índices `CONCURRENTLY`, fuera de una transacción, y
-las escrituras siguen. Si se interrumpe, por ejemplo porque una transacción larga lo hace esperar más que el
+`0041_volume_indexes.sql` y `0048_entries_amount_in_index.sql` no necesitan ventana: crean sus índices
+`CONCURRENTLY`, fuera de una transacción, y las escrituras siguen. La 0048 reemplaza el índice del saldo
+bitemporal por uno que lleva el monto, con el que la suma no lee la tabla; mientras se construye, la base
+mantiene los dos. Si se interrumpe, por ejemplo porque una transacción larga lo hace esperar más que el
 `lock_timeout` de la migración, puede dejar un índice inválido que la siguiente corrida daría por hecho.
 Búscalo con `SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid`, bórralo con
-`DROP INDEX CONCURRENTLY` y vuelve a migrar.
+`DROP INDEX CONCURRENTLY` y vuelve a migrar. En la 0048 ese paso es obligatorio: volver a migrar sin él
+borraría el índice viejo y dejaría el saldo bitemporal sin índice válido.

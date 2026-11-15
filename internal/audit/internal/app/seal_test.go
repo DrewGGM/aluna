@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -42,5 +44,74 @@ func TestTheBlockHashIsPinned(t *testing.T) {
 
 	if err != nil || got != want {
 		t.Fatalf("hash = %x (%v), want %x", got, err, want)
+	}
+}
+
+// lastBlocks is a VerifyStore whose last block is the next of ids at each read, the last one from then on; it reads
+// nothing else.
+type lastBlocks struct {
+	VerifyStore
+	ids []int64
+}
+
+func (l *lastBlocks) LastBlock(context.Context) (Block, error) {
+	id := l.ids[0]
+	if len(l.ids) > 1 {
+		l.ids = l.ids[1:]
+	}
+	return Block{ID: id}, nil
+}
+
+// anchors is an AnchorStore in memory; Get of the id in failing is err.
+type anchors struct {
+	AnchorStore
+	hashes  map[int64][32]byte
+	failing int64
+	err     error
+}
+
+func (a anchors) Get(_ context.Context, id int64) ([32]byte, error) {
+	if id == a.failing {
+		return [32]byte{}, a.err
+	}
+	hash, ok := a.hashes[id]
+	if !ok {
+		return [32]byte{}, ErrNotAnchored
+	}
+	return hash, nil
+}
+
+// TestAnAnchorAheadOfTheDatabaseIsCaught (Q-138 f): with the database's last block 10, an anchor that also holds
+// block 11, or 43 (the end of the window), is ErrAnchorAhead; one that holds up to 10, or block 44, past the window,
+// is fine.
+func TestAnAnchorAheadOfTheDatabaseIsCaught(t *testing.T) {
+	for _, id := range []int64{11, 43} {
+		err := CheckAnchor(t.Context(), &lastBlocks{ids: []int64{10}}, anchors{hashes: map[int64][32]byte{1: {}, 10: {}, id: {}}})
+		if want := (ErrAnchorAhead{BlockID: id, LastBlock: 10}); !errors.Is(err, want) {
+			t.Errorf("anchor with block %d: CheckAnchor = %v, want %v", id, err, want)
+		}
+	}
+	for _, id := range []int64{10, 44} {
+		if err := CheckAnchor(t.Context(), &lastBlocks{ids: []int64{10}}, anchors{hashes: map[int64][32]byte{1: {}, id: {}}}); err != nil {
+			t.Errorf("anchor up to block %d: CheckAnchor = %v, want nil", id, err)
+		}
+	}
+}
+
+// TestABlockSealedDuringTheCheckIsNotAhead: another sealer that commits and anchors block 11 while the check reads
+// is in the database when the check reads again, so it is not a restore.
+func TestABlockSealedDuringTheCheckIsNotAhead(t *testing.T) {
+	err := CheckAnchor(t.Context(), &lastBlocks{ids: []int64{10, 11}}, anchors{hashes: map[int64][32]byte{11: {}}})
+	if err != nil {
+		t.Fatalf("CheckAnchor = %v, want nil", err)
+	}
+}
+
+// TestAnAnchorThatFailsIsNotAhead: an anchor that does not answer is its error, not ErrAnchorAhead.
+func TestAnAnchorThatFailsIsNotAhead(t *testing.T) {
+	unavailable := errors.New("anchor unavailable")
+	err := CheckAnchor(t.Context(), &lastBlocks{ids: []int64{10}}, anchors{failing: 12, err: unavailable})
+	if !errors.Is(err, unavailable) || errors.As(err, new(ErrAnchorAhead)) {
+		t.Fatalf("CheckAnchor = %v, want %v", err, unavailable)
 	}
 }

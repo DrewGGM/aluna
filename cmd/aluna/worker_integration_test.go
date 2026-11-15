@@ -3,9 +3,13 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -42,6 +46,35 @@ func TestRunWorkerStopsOnSIGTERM(t *testing.T) {
 
 	expectExit(t, exit, 0)
 	waitLeaders(t, 0)
+}
+
+// TestTheWorkerDoesNotStartOnAnAnchorAhead (Q-138 f): an anchor that holds the block after the database's last one,
+// as after a restore it did not follow, stops the worker before it takes a job, and says why.
+func TestTheWorkerDoesNotStartOnAnAnchorAhead(t *testing.T) {
+	appDSN, err := pgtest.AppDSN(testDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last int64
+	if err := appPool(t).QueryRow(t.Context(), `SELECT coalesce(max(id), 0) FROM audit.blocks`).Scan(&last); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%020d.sha256", last+1)), []byte(strings.Repeat("0", 64)), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ALUNA_DATABASE_URL", appDSN)
+	t.Setenv("ALUNA_AUDIT_ANCHOR_DIR", dir)
+	t.Setenv("ALUNA_SIMBREB_SECRET", railSecret)
+
+	var logs bytes.Buffer // read after the worker returned
+	exit := make(chan int, 1)
+	go func() { exit <- run([]string{"worker"}, &logs) }()
+	expectExit(t, exit, 1)
+
+	if want := fmt.Sprintf("the audit anchor has block %d", last+1); !strings.Contains(logs.String(), want) {
+		t.Fatalf("logs %q, want %q", logs.String(), want)
+	}
 }
 
 // waitLeaders waits up to 10 s for infra.river_leader to have want rows.

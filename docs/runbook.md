@@ -439,7 +439,11 @@ se restauró no cuenta: el ensayo corre cada trimestre.
      generación vieja queda como evidencia. La vieja guarda las anclas de los bloques perdidos, y un ancla
      WORM no se puede quitar: si la secuencia de bloques salta adelante (lo usual), `audit verify` los lee
      como bloques anclados y borrados; si no salta, la base reusa un id ya anclado y el sellado se detiene.
-     En los dos casos la cadena se rompe.
+     En los dos casos la cadena se rompe. Por eso el worker no arranca si el ancla tiene un bloque entre los
+     33 ids siguientes al último de la base: registra "the audit anchor does not follow the database" y sale
+     con 1 hasta que apunte a la generación nueva. Un ancla que no responde al arrancar solo deja un aviso: el
+     worker arranca, pero no sella nada hasta que puede hacer esa misma revisión, y no sella sobre un ancla
+     adelantada.
    - Antes de arrancar un worker, revisa los pagos que esperan salir: la base restaurada no sabe qué
      recibió el rail después del instante, y el worker los enviaría otra vez. Lo mismo vale para las
      devoluciones al banco de origen que esperan salir (`payments.return`). Concilia cada orden contra el

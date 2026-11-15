@@ -81,7 +81,8 @@ export ALUNA_SIMBREB_SECRET="$(openssl rand -hex 32)"
 app_dsn="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable&options=-c%20role%3Daluna_app"
 ALUNA_DATABASE_URL="$app_dsn" \
 ALUNA_OIDC_ISSUER=http://localhost:8180/realms/aluna ALUNA_OIDC_AUDIENCE=aluna-api ./aluna api &
-# el worker, con un directorio ya existente para el ancla de auditoría
+# el worker, con un directorio ya existente para el ancla de auditoría; si se borra la base, se borra también
+# tmp/anchor: el worker no arranca con un ancla que tiene bloques que la base no tiene
 mkdir -p tmp/anchor && ALUNA_DATABASE_URL="$app_dsn" ALUNA_AUDIT_ANCHOR_DIR=tmp/anchor ./aluna worker &
 until curl -sf localhost:8080/readyz; do sleep 1; done   # {"status":"ok"} cuando la API llega a la base
 # el token del realm de prueba (usuario operator/operator), para el header Authorization: Bearer

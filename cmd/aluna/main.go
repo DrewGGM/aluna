@@ -599,6 +599,8 @@ const (
 	// anchorTimeout bounds each request to the anchor bucket: a seal that does not anchor is completed by the next
 	// one.
 	anchorTimeout = 30 * time.Second
+	// anchorCheckTimeout bounds the worker's check of the anchor at startup: up to 33 requests to the bucket.
+	anchorCheckTimeout = 2 * time.Minute
 	// maxRetentionDays is a century, far below the days a time.Duration overflows at.
 	maxRetentionDays = 36525
 )
@@ -636,6 +638,9 @@ func runWorker(ctx context.Context, cfg workerConfig, log *slog.Logger) int {
 		return 1
 	}
 	defer pool.Close()
+	if anchorAhead(ctx, cfg.records, pool, log) {
+		return 1
+	}
 	unregister := withMetrics(pool, log)
 	defer unregister() // before the pool closes
 	client, err := newWorker(pool, cfg, log)
@@ -651,6 +656,24 @@ func runWorker(ctx context.Context, cfg workerConfig, log *slog.Logger) int {
 	<-client.Stopped()
 	log.Info("worker stopped")
 	return 0
+}
+
+// anchorAhead reports whether the audit anchor holds blocks the database lost to a restore, and logs it: the worker
+// must not start until it points to a new anchor generation. An anchor that cannot be checked does not stop the other
+// jobs: the sealing checks it again before it seals anything (audit.Service.Seal).
+func anchorAhead(ctx context.Context, records *audit.Service, pool *pgxpool.Pool, log *slog.Logger) bool {
+	ctx, cancel := context.WithTimeout(ctx, anchorCheckTimeout)
+	defer cancel()
+	err := records.CheckAnchor(ctx, pool)
+	var ahead audit.ErrAnchorAhead
+	switch {
+	case errors.As(err, &ahead):
+		log.Error("the audit anchor does not follow the database: open a new anchor generation (runbook, PITR)", "error", err)
+		return true
+	case err != nil:
+		log.Warn("could not check the audit anchor; nothing is sealed until it can be", "error", err)
+	}
+	return false
 }
 
 // newWorker builds the worker's River client from the jobs configuration, wired by hand as cfg says.

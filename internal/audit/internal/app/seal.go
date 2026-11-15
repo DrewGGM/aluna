@@ -172,15 +172,14 @@ func walk(ctx context.Context, store VerifyStore, anchor AnchorStore, prev Block
 // notAnchored is nil if the id has no anchor: a seal that did not commit. With an anchor, the block was
 // deleted.
 func notAnchored(ctx context.Context, anchor AnchorStore, id int64) error {
-	_, err := anchor.Get(ctx, id)
+	_, found, err := anchoredHash(ctx, anchor, id)
 	switch {
-	case err == nil:
-		return ErrChainBroken{BlockID: id, Reason: "it is anchored but no longer in the database"}
-	case errors.Is(err, ErrNotAnchored):
-		return nil
-	default:
+	case err != nil:
 		return err
+	case found:
+		return ErrChainBroken{BlockID: id, Reason: "it is anchored but no longer in the database"}
 	}
+	return nil
 }
 
 func verifyBlock(ctx context.Context, store VerifyStore, anchor AnchorStore, prevHash [32]byte, b Block) error {
@@ -198,15 +197,70 @@ func verifyBlock(ctx context.Context, store VerifyStore, anchor AnchorStore, pre
 	if len(records) != b.Records || hash != b.Hash {
 		return ErrChainBroken{BlockID: b.ID, Reason: "its records do not yield its hash"}
 	}
-	anchored, err := anchor.Get(ctx, b.ID)
-	if errors.Is(err, ErrNotAnchored) {
+	anchored, found, err := anchoredHash(ctx, anchor, b.ID)
+	switch {
+	case err != nil:
+		return err
+	case !found:
 		return ErrChainBroken{BlockID: b.ID, Reason: "it has no anchor"}
+	case anchored != b.Hash:
+		return ErrChainBroken{BlockID: b.ID, Reason: "its hash is not the anchored one"}
 	}
+	return nil
+}
+
+// anchoredHash is the anchored hash of block id, and whether it has one.
+func anchoredHash(ctx context.Context, anchor AnchorStore, id int64) (hash [32]byte, found bool, err error) {
+	hash, err = anchor.Get(ctx, id)
+	switch {
+	case errors.Is(err, ErrNotAnchored):
+		return [32]byte{}, false, nil
+	case err != nil:
+		return [32]byte{}, false, err
+	}
+	return hash, true, nil
+}
+
+// anchorLookahead is how many ids after the database's last block CheckAnchor looks at. After a restore the lost
+// timeline's first block follows the restored last one, past the ids it skipped in between: one for each seal that
+// rolled back there, and up to 32 if it recovered from a crash or was a promoted replica, which resumes a sequence
+// that far ahead. 33 cover the second case or a short run of failed seals, not both: a window, not a listing of the
+// anchor.
+const anchorLookahead = 33
+
+// ErrAnchorAhead names an anchored block after the database's last one: the database was restored to an earlier
+// point and the anchor still holds the blocks it lost. Sealing on top would reuse an anchored id or leave the lost
+// ones as deleted blocks; a new anchor generation must hold only the restored ones first (runbook, PITR).
+type ErrAnchorAhead struct {
+	BlockID, LastBlock int64
+}
+
+func (e ErrAnchorAhead) Error() string {
+	return fmt.Sprintf("the audit anchor has block %d, after the database's last block %d", e.BlockID, e.LastBlock)
+}
+
+// CheckAnchor is ErrAnchorAhead if the anchor has a block among the anchorLookahead ids after the database's last
+// one (Q-138 f). A block found is checked against the last block read again: another sealer anchors a block only
+// after it commits, so one it sealed meanwhile is in the database by then.
+func CheckAnchor(ctx context.Context, store VerifyStore, anchor AnchorStore) error {
+	last, err := store.LastBlock(ctx)
 	if err != nil {
 		return err
 	}
-	if anchored != b.Hash {
-		return ErrChainBroken{BlockID: b.ID, Reason: "its hash is not the anchored one"}
+	for id := last.ID + 1; id <= last.ID+anchorLookahead; id++ {
+		_, found, err := anchoredHash(ctx, anchor, id)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		if last, err = store.LastBlock(ctx); err != nil {
+			return err
+		}
+		if id > last.ID {
+			return ErrAnchorAhead{BlockID: id, LastBlock: last.ID}
+		}
 	}
 	return nil
 }

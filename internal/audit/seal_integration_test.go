@@ -259,6 +259,29 @@ func TestAFailedAnchorIsRetried(t *testing.T) {
 	}
 }
 
+// TestNothingIsSealedOnAnAnchorAhead (Q-138 f): a sealer whose anchor holds the block after the database's last one,
+// as after a restore it did not follow, is ErrAnchorAhead and seals nothing, also when the worker could not check
+// the anchor at startup.
+func TestNothingIsSealedOnAnAnchorAhead(t *testing.T) {
+	anchor := dirAnchor(t)
+	last := lastBlock(t)
+	if err := anchor.Put(t.Context(), last+1, [32]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := save(t, record()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := seal(t, audit.NewSealing(anchor), 100)
+
+	if !errors.As(err, new(audit.ErrAnchorAhead)) {
+		t.Fatalf("seal on an anchor ahead = %v, want ErrAnchorAhead", err)
+	}
+	if now := lastBlock(t); now != last {
+		t.Fatalf("block %d was sealed on an anchor ahead of %d", now, last)
+	}
+}
+
 // TestTheFirstBrokenBlockIsReported: with one block altered and a later one deleted, Verify names the first.
 func TestTheFirstBrokenBlockIsReported(t *testing.T) {
 	s := sealer(t)

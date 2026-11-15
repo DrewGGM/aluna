@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/audit/internal/adapters/anchorfs"
@@ -45,11 +46,16 @@ type ErrChainBroken = app.ErrChainBroken
 // ErrNoBlocks means a Verify range with no sealed blocks: there is nothing to verify.
 var ErrNoBlocks = app.ErrNoBlocks
 
+// ErrAnchorAhead names an anchored block after the database's last one: a restore the anchor did not follow.
+type ErrAnchorAhead = app.ErrAnchorAhead
+
 var errNoAnchor = errors.New("the audit service has no anchor: it only records")
 
-// Service stores audit records and, with an anchor, seals and verifies them.
+// Service stores audit records and, with an anchor, seals and verifies them. checked is whether CheckAnchor has
+// passed in this process: until it does, Seal checks first.
 type Service struct {
-	anchor AnchorStore
+	anchor  AnchorStore
+	checked atomic.Bool
 }
 
 // New creates the service that only records (the api): Seal and Verify fail without an anchor.
@@ -84,11 +90,17 @@ func WithS3Anchor(bucketURL, prefix, region string, creds S3Credentials, retain 
 
 // Seal seals up to maxRecords committed records with no block into one block, in its own transaction, and
 // anchors its hash after the commit (ADR-0012): an anchor always belongs to a committed block. If anchoring
-// fails, the block stays unanchored and the next Seal completes it before sealing another. It returns the
-// block id, or 0 if there was nothing to seal.
+// fails, the block stays unanchored and the next Seal completes it before sealing another. Until CheckAnchor has
+// passed in this process, Seal checks the anchor first, and seals nothing on one ahead of the database
+// (ErrAnchorAhead) or one it cannot check. It returns the block id, or 0 if there was nothing to seal.
 func (s *Service) Seal(ctx context.Context, uow *postgres.UnitOfWork, maxRecords int) (int64, error) {
 	if s.anchor == nil {
 		return 0, errNoAnchor
+	}
+	if !s.checked.Load() {
+		if err := uow.Do(ctx, func(tx postgres.Tx) error { return s.CheckAnchor(ctx, tx) }); err != nil {
+			return 0, err
+		}
 	}
 	var sealed app.Block
 	err := uow.Do(ctx, func(tx postgres.Tx) error {
@@ -113,6 +125,20 @@ func (s *Service) Verify(ctx context.Context, q postgres.Querier, from, to int64
 		return errNoAnchor
 	}
 	return app.Verify(ctx, pg.NewStore(q), s.anchor, from, to)
+}
+
+// CheckAnchor is ErrAnchorAhead if the anchor holds a block after the database's last one, as after a restore to an
+// earlier point without a new anchor generation: Seal does not seal on top of it. Once it passes, Seal stops
+// checking. q can be the pool or a Tx.
+func (s *Service) CheckAnchor(ctx context.Context, q postgres.Querier) error {
+	if s.anchor == nil {
+		return errNoAnchor
+	}
+	if err := app.CheckAnchor(ctx, pg.NewStore(q), s.anchor); err != nil {
+		return err
+	}
+	s.checked.Store(true)
+	return nil
 }
 
 // Record stores r within tx, the command's transaction: if the command rolls back, so does its record. A

@@ -469,10 +469,72 @@ lo devuelve al instante restaurado, igual que promover una réplica asíncrona q
 integrador que leyó eventos de después del instante tiene un cursor por delante del contador, y se
 saltaría en silencio los eventos nuevos. Antes de abrir tráfico, avisa a los integradores del instante:
 que relean desde un cursor anterior a él (o desde el principio) deduplicando por id de evento, y que los
-eventos posteriores que recibieron ya no existen. Los webhooks no tienen este problema: su posición vive
-en la base restaurada. Un `pg_dump`/restore o una replicación lógica tampoco conservan el contador, y el
-feed queda vacío para todos hasta que el contador nuevo pase al viejo: el remedio es el mismo. Adelantar
-el contador (`pg_resetwal -e` y `-x`) es irreversible, lo hace solo un DBA y no está ensayado. Tras un
-corte por replicación lógica, abre tráfico cinco minutos después del cambio: el ledger y el historial de
+eventos posteriores que recibieron ya no existen. En una PITR los webhooks no tienen este problema: su
+posición vive en la base restaurada. Un `pg_dump`/restore o una replicación lógica no conservan el contador:
+ver [Restauración lógica o corte por replicación lógica](#restauración-lógica-o-corte-por-replicación-lógica).
+Tras un corte por replicación lógica, abre tráfico cinco minutos después del cambio: el ledger y el historial de
 estados de deposits distinguen sus filas de las replicadas con el mismo número de transacción por su hora,
 con ese margen (`0046_clock_margin.sql`).
+
+## Restauración lógica o corte por replicación lógica
+
+Un `pg_dump`/restore o un corte por replicación lógica (por ejemplo, para sacar una entidad a su propio clúster,
+ADR-0002) dejan un clúster cuyo contador de transacciones arranca por debajo del viejo. Varias piezas guardan
+ese contador: el cursor de los saldos async (`ledger.async_cursor`), el cursor de `GET /v1/events`, la posición
+de cada endpoint de webhooks (`webhooks.endpoints.after_xact`), el trigger de las piernas del ledger y el del
+historial de estados de deposits. Con un contador menor, cada asiento nuevo queda detrás del cursor async y su
+cuenta async no se actualiza nunca, y cada evento nuevo queda detrás de la posición de los endpoints y no se
+entrega; el feed de eventos queda vacío para los integradores hasta que el contador nuevo pase al viejo. La PITR
+y la replicación física conservan el contador y no necesitan esto.
+
+**Diagnóstico.** Si se abrió tráfico sin adelantar la época (ver Mitigación), el control
+`balances_match_entries` abre breaks en las cuentas async (sus asientos nuevos cuentan como agregados y el saldo
+no los tiene). Para confirmarlo, como dueño de las tablas:
+
+```sql
+SELECT pg_current_xact_id() > (SELECT max(posted_xact) FROM ledger.transactions) AS contador_por_delante,
+       (SELECT posted_xact FROM ledger.async_cursor) AS cursor;
+```
+
+**Mitigación.** Antes de abrir tráfico en el clúster nuevo, con la base detenida, adelanta la época del
+contador por encima de la del clúster viejo: `pg_resetwal -e <época>` con `<época>` mayor que la de
+`SELECT pg_current_xact_id()::text::bigint >> 32` leída en el clúster viejo (o, sin él, la de
+`SELECT max(posted_xact)::text::bigint >> 32 FROM ledger.transactions` en el restaurado). Arranca la base y
+comprueba que la consulta de arriba dé `contador_por_delante = true` antes de levantar `api` y `worker`.
+`pg_resetwal` es irreversible y lo corre un DBA; ensáyalo antes en una copia. Si el servicio gestionado de la
+base no permite `pg_resetwal`, no uses restauración lógica: usa PITR o replicación física, que conservan el
+contador. Si ya se abrió tráfico, detén `api` y `worker`, adelanta la época igual y, como dueño de las tablas,
+recalcula el saldo de cada cuenta async como la suma de sus asientos hasta el cursor, que es lo que el control
+compara:
+
+```sql
+UPDATE ledger.balances b SET version = b.version + 1, posted = coalesce((
+    SELECT sum(e.amount) FROM ledger.entries e JOIN ledger.transactions t ON t.id = e.transaction_id
+    CROSS JOIN ledger.async_cursor c
+    WHERE e.account_id = b.account_id AND (t.posted_xact, e.id) <= (c.posted_xact, c.entry_id)), 0)
+FROM ledger.accounts a WHERE a.id = b.account_id AND a.balance_mode = 'async';
+```
+
+Los eventos de esa ventana tampoco salieron por webhook. Llevar un endpoint al primero de ellos
+(`'<instante del corte>'` es cuando se abrió tráfico) hace que la siguiente corrida de `webhooks.deliver` los
+encole, sin repetir los ya entregados (una entrega por endpoint y evento). Pero la corrida vuelve a leer los
+eventos de los últimos 30 días de su entidad, y a un endpoint registrado entre ellos le llegarían los de antes
+de su registro: esos no se mueven, y sus integradores leen la ventana por `GET /v1/events`:
+
+```sql
+UPDATE webhooks.endpoints e SET after_xact = w.before, after_id = '00000000-0000-0000-0000-000000000000'
+FROM (SELECT ((min(created_xact)::text::bigint) - 1)::text::xid8 AS before FROM infra.outbox
+      WHERE created_at >= '<instante del corte>') w
+WHERE e.revoked_at IS NULL AND e.after_xact > w.before AND e.created_at < '<instante del corte>'
+  AND NOT EXISTS (SELECT 1 FROM infra.outbox o WHERE o.legal_entity_id = e.legal_entity_id
+                  AND o.created_at >= now() - interval '30 days' AND o.created_at < e.created_at);
+-- los que no se movieron: sus integradores releen la ventana por la Events API
+SELECT id, legal_entity_id, url FROM webhooks.endpoints e
+WHERE e.revoked_at IS NULL AND e.created_at < '<instante del corte>' AND EXISTS (
+    SELECT 1 FROM infra.outbox o WHERE o.legal_entity_id = e.legal_entity_id
+    AND o.created_at >= now() - interval '30 days' AND o.created_at < e.created_at);
+```
+
+Después levanta `api` y `worker`; los breaks se cierran con la siguiente corrida de controles. Avisa a los
+integradores del feed, como en la PITR, que relean desde antes del corte deduplicando por id de evento, y a los
+de los endpoints que no se movieron, que lean así los eventos de la ventana.

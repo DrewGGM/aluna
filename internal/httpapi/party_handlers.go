@@ -114,11 +114,7 @@ func (h *PartyHandlers) RequestKYCStatusChange(ctx context.Context, req gen.Requ
 		if payload.Version, err = h.parties.CheckKYCChange(ctx, tx, p.LegalEntityID, id, payload.KYCStatus); err != nil {
 			return nil, err
 		}
-		requested, err := h.approvals.Request(ctx, tx, kycChangeKind, payload, p)
-		if err != nil {
-			return nil, err
-		}
-		return toApprovalJSON(requested), nil
+		return requestApproval(ctx, h.approvals, tx, kycChangeKind, payload, p)
 	})
 	if err != nil {
 		return nil, err

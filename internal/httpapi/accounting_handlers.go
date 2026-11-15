@@ -82,11 +82,7 @@ func (h *AccountingHandlers) RequestCuifMappingsLoad(ctx context.Context, req ge
 		if err := h.accounting.CheckMappings(ctx, tx, p.LegalEntityID, mappings); err != nil {
 			return nil, err
 		}
-		requested, err := h.approvals.Request(ctx, tx, cuifLoadKind, cuifLoadRequest{CSV: req.Body.Csv}, p)
-		if err != nil {
-			return nil, err
-		}
-		return toApprovalJSON(requested), nil
+		return requestApproval(ctx, h.approvals, tx, cuifLoadKind, cuifLoadRequest{CSV: req.Body.Csv}, p)
 	})
 	if err != nil {
 		return nil, err
@@ -141,11 +137,7 @@ func (h *AccountingHandlers) RequestPeriodClose(ctx context.Context, req gen.Req
 		if err := h.accounting.CheckPeriodClose(ctx, tx, p.LegalEntityID, req.Period); err != nil {
 			return nil, err
 		}
-		requested, err := h.approvals.Request(ctx, tx, periodCloseKind, periodCloseRequest{Period: req.Period}, p)
-		if err != nil {
-			return nil, err
-		}
-		return toApprovalJSON(requested), nil
+		return requestApproval(ctx, h.approvals, tx, periodCloseKind, periodCloseRequest{Period: req.Period}, p)
 	})
 	if err != nil {
 		return nil, err

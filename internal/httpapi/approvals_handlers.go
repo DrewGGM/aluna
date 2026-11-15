@@ -94,6 +94,16 @@ func (h *ApprovalHandlers) RejectRequest(ctx context.Context, req gen.RejectRequ
 	return resp, nil
 }
 
+// requestApproval asks, within tx, for a maker-checker request of kind with payload, made by p, and returns it as the
+// API shows it.
+func requestApproval(ctx context.Context, a *approvals.Service, tx postgres.Tx, kind string, payload any, p access.Principal) (gen.Approval, error) {
+	requested, err := a.Request(ctx, tx, kind, payload, p)
+	if err != nil {
+		return gen.Approval{}, err
+	}
+	return toApprovalJSON(requested), nil
+}
+
 func toApprovalJSON(r approvals.Request) gen.Approval {
 	a := gen.Approval{
 		Id: [16]byte(r.ID), Kind: r.Kind, Status: gen.ApprovalStatus(r.Status), Payload: r.Payload, Maker: r.Maker,

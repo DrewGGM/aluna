@@ -108,11 +108,7 @@ func (h *ComplianceHandlers) ResolveScreeningCase(ctx context.Context, req gen.R
 		if err := h.compliance.CheckResolution(ctx, tx, p.LegalEntityID, id); err != nil {
 			return nil, err
 		}
-		requested, err := h.approvals.Request(ctx, tx, screeningResolutionKind, payload, p)
-		if err != nil {
-			return nil, err
-		}
-		return toApprovalJSON(requested), nil
+		return requestApproval(ctx, h.approvals, tx, screeningResolutionKind, payload, p)
 	})
 	if err != nil {
 		return nil, err

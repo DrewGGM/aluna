@@ -244,11 +244,7 @@ func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestRev
 		if original.ReversesID != (ids.ID{}) {
 			return nil, fmt.Errorf("%w: %s reverses %s", ledger.ErrReversalOfReversal, id, original.ReversesID)
 		}
-		requested, err := h.approvals.Request(ctx, tx, reversalKind, payload, p)
-		if err != nil {
-			return nil, err
-		}
-		return toApprovalJSON(requested), nil
+		return requestApproval(ctx, h.approvals, tx, reversalKind, payload, p)
 	})
 	if err != nil {
 		return nil, err

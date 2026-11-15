@@ -128,11 +128,7 @@ func (h *ProductHandlers) RequestProductPublication(ctx context.Context, req gen
 		if err != nil {
 			return nil, err
 		}
-		requested, err := h.approvals.Request(ctx, tx, productPublishKind, publicationRequest{VersionID: v.ID, ProductID: v.ProductID, Version: v.Number}, p)
-		if err != nil {
-			return nil, err
-		}
-		return toApprovalJSON(requested), nil
+		return requestApproval(ctx, h.approvals, tx, productPublishKind, publicationRequest{VersionID: v.ID, ProductID: v.ProductID, Version: v.Number}, p)
 	})
 	if err != nil {
 		return nil, err
@@ -216,11 +212,7 @@ func (h *ProductHandlers) RequestMarketParameterLoad(ctx context.Context, req ge
 		if err := h.products.CheckMarketParameter(ctx, tx, parameter); err != nil {
 			return nil, err
 		}
-		requested, err := h.approvals.Request(ctx, tx, marketLoadKind, payload, p)
-		if err != nil {
-			return nil, err
-		}
-		return toApprovalJSON(requested), nil
+		return requestApproval(ctx, h.approvals, tx, marketLoadKind, payload, p)
 	})
 	if err != nil {
 		return nil, err

@@ -130,11 +130,11 @@ func (h *DepositHandlers) changeStatus(ctx context.Context, tx postgres.Tx, p ac
 		if change.Changes, err = h.deposits.StatusChanges(ctx, tx, p.LegalEntityID, a.ID); err != nil {
 			return nil, err
 		}
-		requested, err := h.approvals.Request(ctx, tx, statusChangeKind, change, p)
+		requested, err := requestApproval(ctx, h.approvals, tx, statusChangeKind, change, p)
 		if err != nil {
 			return nil, err
 		}
-		return withStatus{status: http.StatusAccepted, body: toApprovalJSON(requested)}, nil
+		return withStatus{status: http.StatusAccepted, body: requested}, nil
 	}
 	if err := h.deposits.ChangeStatus(ctx, tx, p.LegalEntityID, a.ID, change.Status, p.Subject); err != nil {
 		return nil, err

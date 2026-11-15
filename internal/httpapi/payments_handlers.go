@@ -73,11 +73,7 @@ func (h *PaymentHandlers) CreditSuspendedTransfer(ctx context.Context, req gen.C
 		payload := suspenseCredit{
 			OrderID: id, AccountID: ids.ID(req.Body.AccountId), Amount: moneyJSON(o.Amount), EndToEndID: o.EndToEndID, Reason: o.Reason,
 		}
-		requested, err := h.approvals.Request(ctx, tx, suspenseCreditKind, payload, p)
-		if err != nil {
-			return nil, err
-		}
-		return toApprovalJSON(requested), nil
+		return requestApproval(ctx, h.approvals, tx, suspenseCreditKind, payload, p)
 	})
 	if err != nil {
 		return nil, err
@@ -119,11 +115,7 @@ func (h *PaymentHandlers) ReturnSuspendedTransfer(ctx context.Context, req gen.R
 		payload := suspenseReturn{
 			OrderID: id, ReturnReason: req.Body.Reason, Amount: moneyJSON(o.Amount), EndToEndID: o.EndToEndID, Reason: o.Reason,
 		}
-		requested, err := h.approvals.Request(ctx, tx, suspenseReturnKind, payload, p)
-		if err != nil {
-			return nil, err
-		}
-		return toApprovalJSON(requested), nil
+		return requestApproval(ctx, h.approvals, tx, suspenseReturnKind, payload, p)
 	})
 	if err != nil {
 		return nil, err

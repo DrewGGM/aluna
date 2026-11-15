@@ -150,6 +150,50 @@ func TestPostedTransactionTakesNoNewEntries(t *testing.T) {
 	}
 }
 
+// errRolledBack ends a transaction a test only looks into.
+var errRolledBack = errors.New("rolled back on purpose")
+
+// entriesOfAStampedTransaction inserts, as the tables' owner and in a transaction it rolls back, a transaction of
+// this transaction's xid stamped age before it started, and returns what inserting its entries answered.
+func entriesOfAStampedTransaction(t *testing.T, age string) error {
+	t.Helper()
+	cash, deposit := newAccount(t, legalEntityA, "asset", "COP"), newAccount(t, legalEntityA, "liability", "COP")
+	var entriesErr error
+	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
+		id := ids.New()
+		for _, sql := range []string{
+			`SET LOCAL ROLE NONE`,
+			`ALTER TABLE ledger.transactions DISABLE TRIGGER transactions_stamp`,
+			`INSERT INTO ledger.transactions
+				(id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version, posted_at, posted_xact)
+				VALUES ('` + id.String() + `', '` + legalEntityA.String() + `', 'test', current_date, current_date, 'test', '` + id.String() +
+				`', 'tester', 'test', 'v1', transaction_timestamp() - interval '` + age + `', pg_current_xact_id())`,
+		} {
+			if _, err := tx.Exec(t.Context(), sql); err != nil {
+				return err
+			}
+		}
+		entriesErr = insertEntries(t.Context(), tx, id, []entry{{cash, "COP", 100}, {deposit, "COP", -100}})
+		return errRolledBack
+	})
+	if !errors.Is(err, errRolledBack) {
+		t.Fatal(err)
+	}
+	return entriesErr
+}
+
+// TestATransactionStampedBeforeItsStartIsRestoredOrAClockStep (Q-149): a transaction of this xid stamped an hour
+// before this one started comes from another cluster (a logical restore repeats xids) and takes no entries; one
+// stamped a minute before is this one's, with the clock stepped back since it started, and takes them.
+func TestATransactionStampedBeforeItsStartIsRestoredOrAClockStep(t *testing.T) {
+	if got := sqlState(entriesOfAStampedTransaction(t, "1 hour")); got != prohibitedStatement {
+		t.Errorf("entries of a restored transaction: SQLSTATE = %q, want %q", got, prohibitedStatement)
+	}
+	if err := entriesOfAStampedTransaction(t, "1 minute"); err != nil {
+		t.Errorf("entries of a transaction after a clock step = %v, want them taken", err)
+	}
+}
+
 // TestEntriesInsideASavepointArePosted checks that the "same database transaction" rule does not break a
 // posting with savepoints (pgx uses them with a nested Begin).
 func TestEntriesInsideASavepointArePosted(t *testing.T) {

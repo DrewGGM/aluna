@@ -472,4 +472,7 @@ que relean desde un cursor anterior a él (o desde el principio) deduplicando po
 eventos posteriores que recibieron ya no existen. Los webhooks no tienen este problema: su posición vive
 en la base restaurada. Un `pg_dump`/restore o una replicación lógica tampoco conservan el contador, y el
 feed queda vacío para todos hasta que el contador nuevo pase al viejo: el remedio es el mismo. Adelantar
-el contador (`pg_resetwal -e` y `-x`) es irreversible, lo hace solo un DBA y no está ensayado.
+el contador (`pg_resetwal -e` y `-x`) es irreversible, lo hace solo un DBA y no está ensayado. Tras un
+corte por replicación lógica, abre tráfico cinco minutos después del cambio: el ledger y el historial de
+estados de deposits distinguen sus filas de las replicadas con el mismo número de transacción por su hora,
+con ese margen (`0046_clock_margin.sql`).

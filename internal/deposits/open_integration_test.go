@@ -465,6 +465,53 @@ func TestTheDatabaseGuardsTheAccounts(t *testing.T) {
 	})
 }
 
+// errRolledBack ends a transaction a test only looks into.
+var errRolledBack = errors.New("rolled back on purpose")
+
+// freezeWithHistoryStamped records, as the tables' owner and in a transaction it rolls back, the change of active
+// account id to frozen stamped age before the transaction started, freezes it, and returns what the freeze answered.
+func freezeWithHistoryStamped(t *testing.T, id ids.ID, age string) error {
+	t.Helper()
+	var freezeErr error
+	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
+		for _, sql := range []string{
+			`SET LOCAL ROLE NONE`,
+			`INSERT INTO deposits.status_changes (account_id, from_status, to_status, actor, changed_xact, changed_at)
+				VALUES ('` + id.String() + `', 'active', 'frozen', 'tester', pg_current_xact_id(), transaction_timestamp() - interval '` + age + `')`,
+		} {
+			if _, err := tx.Exec(t.Context(), sql); err != nil {
+				return err
+			}
+		}
+		_, freezeErr = tx.Exec(t.Context(), `UPDATE deposits.accounts SET status = 'frozen' WHERE id = $1`, id)
+		return errRolledBack
+	})
+	if !errors.Is(err, errRolledBack) {
+		t.Fatal(err)
+	}
+	return freezeErr
+}
+
+// TestAHistoryRowStampedBeforeItsTransaction (Q-149): a history row of this xid stamped an hour before this
+// transaction started comes from another cluster and does not stand for the change; one stamped a minute before is
+// this transaction's, with the clock stepped back since it started, and does.
+func TestAHistoryRowStampedBeforeItsTransaction(t *testing.T) {
+	w := newWorld(t)
+	savings, _ := w.product(t, "valid-savings.json", true)
+	open, err := w.open(t, w.party(t, party.KYCApproved), savings.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var pgErr *pgconn.PgError
+	if err := freezeWithHistoryStamped(t, open.ID, "1 hour"); !errors.As(err, &pgErr) || pgErr.Code != "2F003" {
+		t.Errorf("a freeze with a restored history row = %v, want prohibited_sql_statement_attempted", err)
+	}
+	if err := freezeWithHistoryStamped(t, open.ID, "1 minute"); err != nil {
+		t.Errorf("a freeze after a clock step = %v, want it taken", err)
+	}
+}
+
 // withHistory records a change of account id from from to to, and moves it from active to frozen in the same
 // transaction.
 func withHistory(id ids.ID, from, to string) string {

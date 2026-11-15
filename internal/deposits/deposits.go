@@ -63,7 +63,7 @@ var (
 	// ErrInvalidMovement means an amount that is not positive or a transfer to the same account.
 	ErrInvalidMovement = postingrules.ErrInvalidMovement
 	// ErrProductAccountMissing means the entity has no ledger account with the code the product names, in the
-	// account's currency and of the kind its role needs.
+	// account's currency and of the kind its role needs, async where charges are posted.
 	ErrProductAccountMissing = app.ErrProductAccountMissing
 	// ErrLimitExceeded means a movement over a limit of the product (FR-24); the error is a *LimitError.
 	ErrLimitExceeded = domain.ErrLimitExceeded
@@ -433,7 +433,8 @@ func (m movements) version(ctx context.Context, id ids.ID) (products.Version, er
 // CashAccount reads the product and the ledger in the adapter, which keeps the port at five methods: the
 // cash account of a's product.
 func (m movements) CashAccount(ctx context.Context, a Account) (ids.ID, error) {
-	return m.productAccountOf(ctx, a, cashRole)
+	cash, err := m.productAccountOf(ctx, a, cashRole)
+	return cash.ID, err
 }
 
 // productRole is a ledger account a product names: what it is called, the kind it must be (an interest expense that
@@ -455,31 +456,32 @@ var (
 )
 
 // productAccountOf is the ledger account a's product names for r, in a's currency.
-func (m movements) productAccountOf(ctx context.Context, a Account, r productRole) (ids.ID, error) {
+func (m movements) productAccountOf(ctx context.Context, a Account, r productRole) (ledger.Account, error) {
 	v, err := m.version(ctx, a.ProductVersionID)
 	if err != nil {
-		return ids.ID{}, err
+		return ledger.Account{}, err
 	}
 	return m.s.productAccount(ctx, m.tx, a.LegalEntityID, r, r.code(v), a.Currency)
 }
 
 // productAccount is the entity's ledger account with the code a product names for r (its cash, its interest
 // expense), of r's kind and in currency c: anything else is ErrProductAccountMissing, a misconfigured product.
-func (s *Service) productAccount(ctx context.Context, q postgres.Querier, entity ids.ID, r productRole, code string, c money.Currency) (ids.ID, error) {
+func (s *Service) productAccount(ctx context.Context, q postgres.Querier, entity ids.ID, r productRole, code string, c money.Currency,
+) (ledger.Account, error) {
 	a, err := s.ledger.AccountByCode(ctx, q, entity, code)
 	if errors.Is(err, ledger.ErrAccountNotFound) {
-		return ids.ID{}, fmt.Errorf("%w: %s account %q", ErrProductAccountMissing, r.name, code)
+		return ledger.Account{}, fmt.Errorf("%w: %s account %q", ErrProductAccountMissing, r.name, code)
 	}
 	if err != nil {
-		return ids.ID{}, err
+		return ledger.Account{}, err
 	}
 	if a.Currency != c {
-		return ids.ID{}, fmt.Errorf("%w: %s account %q is in %s, not %s", ErrProductAccountMissing, r.name, code, a.Currency.Code(), c.Code())
+		return ledger.Account{}, fmt.Errorf("%w: %s account %q is in %s, not %s", ErrProductAccountMissing, r.name, code, a.Currency.Code(), c.Code())
 	}
 	if a.Kind != r.kind {
-		return ids.ID{}, fmt.Errorf("%w: %s account %q is %s, not %s", ErrProductAccountMissing, r.name, code, a.Kind, r.kind)
+		return ledger.Account{}, fmt.Errorf("%w: %s account %q is %s, not %s", ErrProductAccountMissing, r.name, code, a.Kind, r.kind)
 	}
-	return a.ID, nil
+	return a, nil
 }
 
 func (m movements) BusinessDate(ctx context.Context, entity ids.ID) (calendar.Date, error) {

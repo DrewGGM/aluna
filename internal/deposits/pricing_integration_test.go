@@ -4,6 +4,7 @@ package deposits_test
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -217,6 +218,31 @@ func TestAChargeOfNothingNeedsNoAccount(t *testing.T) {
 
 	if want := charged(t, a.LedgerAccountID, vault, 10000); !slices.Equal(posted.Entries, want) {
 		t.Fatalf("withdrawal = %+v, want only %+v", posted.Entries, want)
+	}
+}
+
+// TestAFeeIncomeInSyncModeIsMisconfigured: a product whose fee income is a sync account cannot charge its fees
+// (ErrProductAccountMissing), and the withdrawal leaves nothing: giving back a returned payment's charges debits
+// that account, which a sync one without balance would refuse.
+func TestAFeeIncomeInSyncModeIsMisconfigured(t *testing.T) {
+	w := newWorld(t)
+	w.vault(t)
+	inTx(t, func(tx postgres.Tx) error {
+		_, err := w.ledger.CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
+			LegalEntityID: w.entity, Code: "I.FEES.SYNC", Kind: ledger.KindIncome, Currency: copOf(t), Mode: ledger.BalanceModeSync,
+		})
+		return err
+	})
+	fields := map[string]string{
+		"accounts": `{"cash": "A.CASH.VAULT", "interest_expense": "E.INTEREST.SAVINGS", "fee_income": "I.FEES.SYNC", "gmf_payable": "L.TAX.GMF"}`,
+	}
+	maps.Copy(fields, withFees)
+	a := w.openWith(t, fields)
+	w.deposited(t, a.ID, 100000000)
+
+	if err := w.withdrawOf(t, w.cashIn(50000000, a.ID, copOf(t))); !errors.Is(err, deposits.ErrProductAccountMissing) || w.balance(t, a) != 100000000 {
+		t.Fatalf("a withdrawal with a sync fee income = %v with a balance of %d, want ErrProductAccountMissing and 1,000,000 COP",
+			err, w.balance(t, a))
 	}
 }
 

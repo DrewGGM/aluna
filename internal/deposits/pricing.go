@@ -77,17 +77,31 @@ func (m movements) Charges(ctx context.Context, a Account, op pricing.Operation,
 
 // FeeIncome is the ledger account the product of a names for its fees.
 func (m movements) FeeIncome(ctx context.Context, a Account) (ids.ID, error) {
-	return m.productAccountOf(ctx, a, feeIncomeRole)
+	return m.chargeAccountOf(ctx, a, feeIncomeRole)
 }
 
 // GMFPayable is the ledger account the product of a names for the GMF.
 func (m movements) GMFPayable(ctx context.Context, a Account) (ids.ID, error) {
-	return m.productAccountOf(ctx, a, gmfPayableRole)
+	return m.chargeAccountOf(ctx, a, gmfPayableRole)
+}
+
+// chargeAccountOf is the ledger account a's product names for r, where charges are posted: it must be async, since
+// giving back a returned payment's charges debits it, and a sync one without balance (the GMF already paid to the
+// DIAN) would refuse the return whole. Reading where charges were posted (statements) does not need it.
+func (m movements) chargeAccountOf(ctx context.Context, a Account, r productRole) (ids.ID, error) {
+	account, err := m.productAccountOf(ctx, a, r)
+	if err != nil {
+		return ids.ID{}, err
+	}
+	if account.Mode != ledger.BalanceModeAsync {
+		return ids.ID{}, fmt.Errorf("%w: %s account %q is %s, not async", ErrProductAccountMissing, r.name, account.Code, account.Mode)
+	}
+	return account.ID, nil
 }
 
 // FeeIncome is, within tx, the ledger account the product of deposit account a names for its fees, in a's
-// currency: one that is missing is ErrProductAccountMissing. Another module that charges a's fees posts them
-// there (payments, FR-31).
+// currency: one that is missing, or sync, is ErrProductAccountMissing. Another module that charges a's fees posts
+// them there (payments, FR-31).
 func (s *Service) FeeIncome(ctx context.Context, tx postgres.Tx, a Account) (ids.ID, error) {
 	return s.movements(tx).FeeIncome(ctx, a)
 }

@@ -198,7 +198,8 @@ espera locks, el cuello es el pool.
   versión nueva del producto que apunte a una cuenta `async` solo descarga las cuentas que se abran
   después, y la clearing y la suspense del rail salen de su código (`L.CLEARING.<RAIL>`), no del
   producto. Las cuentas internas de alto tráfico deben crearse `async` desde el principio; las de cliente
-  siguen `sync`, porque validan el saldo.
+  siguen `sync`, porque validan el saldo. Las de comisiones y GMF, además, tienen que serlo: las cuentas de
+  una versión que nombre una `sync` no pueden cobrar.
 - Medición de referencia: [`docs/benchmarks/`](benchmarks/).
 
 ## Cola River atascada

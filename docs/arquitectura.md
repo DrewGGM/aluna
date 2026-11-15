@@ -111,9 +111,8 @@ el pago restauran lo que el pago usó de la exención de GMF del mes, si `ALUNA_
    (`gmf_payable`); deben existir en el ledger, en la moneda de las cuentas que se abran y del tipo de su papel
    (`cash` activo, `interest_expense` gasto, `fee_income` ingreso, `gmf_payable` pasivo): una del tipo
    equivocado deja las cuentas de esa versión sin mover dinero, y su código no se puede reusar. `fee_income` y
-   `gmf_payable` deben ser `async`: el reintegro de los cargos de un pago devuelto las debita, y una `sync`
-   sin saldo (por ejemplo, el GMF ya pagado a la DIAN) haría fallar la devolución entera, con el monto del
-   cliente retenido en la clearing.
+   `gmf_payable` deben ser `async`, porque el reintegro de los cargos de un pago devuelto las debita: con una
+   `sync`, los retiros, transferencias y pagos con cargos de esa versión responden 500 sin mover dinero.
 4. **Parámetros de mercado.** Un producto con límites en SMMLV necesita el salario mínimo vigente, y una
    cuenta exenta del GMF, la UVT del año (`POST /v1/market-parameters`, maker-checker).
 

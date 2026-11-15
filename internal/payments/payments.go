@@ -234,10 +234,13 @@ func (i initiation) Charges(ctx context.Context, a deposits.Account, amount mone
 	})
 }
 
-func (i initiation) Hold(ctx context.Context, a deposits.Account, rail string, amount money.Amount) (ids.ID, error) {
+func (i initiation) Hold(ctx context.Context, a deposits.Account, rail string, amount money.Amount, charges pricing.Charges) (ids.ID, error) {
 	clearing, err := i.s.railAccount(ctx, i.tx, a.LegalEntityID, clearingAccount, rail, a.Currency)
 	if err != nil {
 		return ids.ID{}, err
+	}
+	if _, err := i.s.chargeAccounts(ctx, i.tx, a, charges.Fees, charges.GMF); err != nil {
+		return ids.ID{}, err // where its charges will be posted, now: the rail settles before they are
 	}
 	h, err := i.s.ledger.PlaceHold(ctx, i.tx, ledger.PlaceHoldInput{
 		LegalEntityID: a.LegalEntityID, AccountID: a.LedgerAccountID, CounterAccountID: clearing, Amount: amount,

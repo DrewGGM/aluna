@@ -112,7 +112,8 @@ func (a accruals) AdjustDate(d calendar.Date, c calendar.Convention) calendar.Da
 }
 
 func (a accruals) ExpenseAccount(ctx context.Context, entity ids.ID, code string, c money.Currency) (ids.ID, error) {
-	return a.s.productAccount(ctx, a.tx, entity, interestExpenseRole, code, c)
+	expense, err := a.s.productAccount(ctx, a.tx, entity, interestExpenseRole, code, c)
+	return expense.ID, err
 }
 
 func (a accruals) Post(ctx context.Context, in ledger.PostInput) (ledger.Transaction, error) {

@@ -90,11 +90,11 @@ func (st statements) CounterAccounts(ctx context.Context, a Account) (app.Counte
 		role productRole
 		id   *ids.ID
 	}{{interestExpenseRole, &c.InterestExpense}, {feeIncomeRole, &c.FeeIncome}, {gmfPayableRole, &c.GMFPayable}} {
-		id, err := m.productAccountOf(ctx, a, k.role)
+		account, err := m.productAccountOf(ctx, a, k.role)
 		if err != nil && !errors.Is(err, ErrProductAccountMissing) {
 			return app.CounterAccounts{}, err
 		}
-		*k.id = id
+		*k.id = account.ID
 	}
 	st.counters[a.ProductVersionID] = c
 	return c, nil

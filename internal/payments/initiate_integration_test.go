@@ -74,8 +74,9 @@ func newWorld(t *testing.T, clearing bool) world {
 	return worldOf(t, "valid-savings.json", clearing)
 }
 
-// worldOf is a world whose account is of the product of a products testdata file.
-func worldOf(t *testing.T, file string, clearing bool) world {
+// worldOf is a world whose account is of the product of a products testdata file; the accounts named in sync are
+// created sync.
+func worldOf(t *testing.T, file string, clearing bool, sync ...string) world {
 	t.Helper()
 	w := world{entity: ids.New()}
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
@@ -97,14 +98,14 @@ func worldOf(t *testing.T, file string, clearing bool) world {
 	if w.payments, err = payments.New(w.ledger, w.deposits, screening, w.pricing, events, testPool, w.rail, payments.DefaultPolicy()); err != nil {
 		t.Fatal(err)
 	}
-	w.accounts(t, clearing)
+	w.accounts(t, clearing, sync)
 	w.account = w.fundedAccount(t, parties, catalog, file)
 	return w
 }
 
 // accounts creates the ledger accounts the savings products name and, if clearing, the rail's clearing and
-// suspense accounts.
-func (w world) accounts(t *testing.T, clearing bool) {
+// suspense accounts; those named in sync are sync.
+func (w world) accounts(t *testing.T, clearing bool, sync []string) {
 	t.Helper()
 	type account struct {
 		code string
@@ -123,6 +124,9 @@ func (w world) accounts(t *testing.T, clearing bool) {
 	}
 	mustDo(t, func(tx postgres.Tx) error {
 		for _, a := range all {
+			if slices.Contains(sync, a.code) {
+				a.mode = ledger.BalanceModeSync
+			}
 			if _, err := w.ledger.CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
 				LegalEntityID: w.entity, Code: a.code, Kind: a.kind, Currency: cop(t, 0).Currency(), Mode: a.mode,
 			}); err != nil {
@@ -516,6 +520,24 @@ func TestARailWithoutClearingAccountIsNotConfigured(t *testing.T) {
 			if _, err := w.initiate(t, w.input(t, 30000000, "@beneficiary")); !errors.Is(err, payments.ErrRailNotConfigured) ||
 				w.balance(t).PendingDebits.Units() != 0 {
 				t.Fatalf("a payment = %v with %d held, want ErrRailNotConfigured and nothing held", err, w.balance(t).PendingDebits.Units())
+			}
+		})
+	}
+}
+
+// TestAPaymentDoesNotHoldWithoutWhereItsChargesGo: a payment whose fee or GMF would go to a sync account, where
+// giving it back could not debit it, is refused before anything is held (deposits.ErrProductAccountMissing): the
+// rail settles before the charges are posted.
+func TestAPaymentDoesNotHoldWithoutWhereItsChargesGo(t *testing.T) {
+	for name, world := range map[string]func(t *testing.T) world{
+		"its fee": func(t *testing.T) world { return worldOf(t, "valid-tiered-savings.json", true, "I.FEES.TIERED") },
+		"its GMF": func(t *testing.T) world { return worldOf(t, "valid-savings.json", true, "L.TAX.GMF") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := world(t)
+			if _, err := w.initiate(t, w.input(t, 30000000, "@beneficiary")); !errors.Is(err, deposits.ErrProductAccountMissing) ||
+				w.balance(t).PendingDebits.Units() != 0 {
+				t.Fatalf("a payment = %v with %d held, want ErrProductAccountMissing and nothing held", err, w.balance(t).PendingDebits.Units())
 			}
 		})
 	}

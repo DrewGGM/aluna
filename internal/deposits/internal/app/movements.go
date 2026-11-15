@@ -19,8 +19,9 @@ var (
 	// ErrAccountNotActive means the account is not active: only an active account moves money (FR-22).
 	ErrAccountNotActive = errors.New("the deposit account is not active")
 	// ErrProductAccountMissing means the entity has no ledger account with the code the product names, in the
-	// deposit account's currency and of the kind its role needs: the product is misconfigured, not the request.
-	ErrProductAccountMissing = errors.New("the product's ledger account is missing or of another kind or currency")
+	// deposit account's currency and of the kind its role needs, async where charges are posted: the product is
+	// misconfigured, not the request.
+	ErrProductAccountMissing = errors.New("the product's ledger account is missing or of another kind, currency or mode")
 	// ErrMinimumWageMissing means a product with limits in SMMLV and no minimum wage in force on the business
 	// date: the market parameters are missing, not the request.
 	ErrMinimumWageMissing = errors.New("no minimum wage (SMMLV) is in force on the business date")

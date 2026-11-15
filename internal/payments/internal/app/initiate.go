@@ -70,8 +70,10 @@ type funds interface {
 	Debit(ctx context.Context, a deposits.Account, amount money.Amount) (time.Time, error)
 	// Charges are the fees and GMF of a transfer of amount from a, by its quote if quoteID names one.
 	Charges(ctx context.Context, a deposits.Account, amount money.Amount, quoteID ids.ID) (pricing.Charges, error)
-	// Hold holds amount on a, already locked, against the clearing account of rail, and returns the hold.
-	Hold(ctx context.Context, a deposits.Account, rail string, amount money.Amount) (ids.ID, error)
+	// Hold holds amount on a, already locked, against the clearing account of rail, and returns the hold. The
+	// accounts the payment's charges are posted to when it settles must be there now
+	// (deposits.ErrProductAccountMissing otherwise): the rail settles before they are posted.
+	Hold(ctx context.Context, a deposits.Account, rail string, amount money.Amount, charges pricing.Charges) (ids.ID, error)
 }
 
 // Initiation is what initiating a payment needs, within its transaction.
@@ -218,7 +220,7 @@ func hold(ctx context.Context, p funds, a deposits.Account, o *Order, quoteID id
 	if total, err = total.Add(charges.GMF); err != nil {
 		return err
 	}
-	if o.HoldID, err = p.Hold(ctx, a, o.Rail, total); err != nil {
+	if o.HoldID, err = p.Hold(ctx, a, o.Rail, total, charges); err != nil {
 		return err
 	}
 	o.Held, o.Fees, o.GMF = total, charges.Fees, charges.GMF

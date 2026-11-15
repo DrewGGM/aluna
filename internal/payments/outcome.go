@@ -244,14 +244,23 @@ func (r orders) Accounts(ctx context.Context, o app.Order) (app.ChargeAccounts, 
 	if err != nil {
 		return app.ChargeAccounts{}, err
 	}
+	return r.s.chargeAccounts(ctx, r.tx, a, o.Fees, o.GMF)
+}
+
+// chargeAccounts are the accounts of a payment of a with fees and gmf: a's, and those its product names for the
+// fees, if any, and for the GMF, if any (deposits.ErrProductAccountMissing if one is not there). Holding a payment
+// checks them, so that settling it finds them.
+func (s *Service) chargeAccounts(ctx context.Context, tx postgres.Tx, a deposits.Account, fees []pricing.Fee, gmf money.Amount,
+) (app.ChargeAccounts, error) {
 	accounts := app.ChargeAccounts{Customer: a.LedgerAccountID}
-	if len(o.Fees) > 0 {
-		if accounts.FeeIncome, err = r.s.deposits.FeeIncome(ctx, r.tx, a); err != nil {
+	var err error
+	if len(fees) > 0 {
+		if accounts.FeeIncome, err = s.deposits.FeeIncome(ctx, tx, a); err != nil {
 			return app.ChargeAccounts{}, err
 		}
 	}
-	if o.GMF.Sign() > 0 {
-		if accounts.GMFPayable, err = r.s.deposits.GMFPayable(ctx, r.tx, a); err != nil {
+	if gmf.Sign() > 0 {
+		if accounts.GMFPayable, err = s.deposits.GMFPayable(ctx, tx, a); err != nil {
 			return app.ChargeAccounts{}, err
 		}
 	}

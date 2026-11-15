@@ -468,6 +468,53 @@ func TestATransactionInAClosedPeriodIsPeriodClosed(t *testing.T) {
 	}
 }
 
+// TestADuplicateAfterItsPeriodClosedFindsTheOriginal (Q-139): a duplicate (source, external_ref) whose insert meets
+// its period closed, as a concurrent retry that checked before the close does, gets ErrDuplicateExternalRef, which
+// the ledger answers with the original posted before the close, instead of period_closed.
+func TestADuplicateAfterItsPeriodClosedFindsTheOriginal(t *testing.T) {
+	entity := ids.New()
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
+			VALUES ($1, 'Entity', '2026-02-02', 'COP')`, entity)
+		return err
+	})
+	cash, deposit := newAccount(t, entity, "asset", "COP"), newAccount(t, entity, "liability", "COP")
+	day, ref := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC), ids.New().String()
+	record := func() app.TransactionRecord {
+		return app.TransactionRecord{
+			ID: ids.New(), LegalEntityID: entity, Code: "test", ValueDate: day, BusinessDate: day, Source: "retry",
+			ExternalRef: ref, Actor: "tester", Channel: "test", RuleVersion: "v1",
+		}
+	}
+	if err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
+		original := record()
+		if _, err := NewStore(tx).InsertTransaction(t.Context(), original, nil); err != nil {
+			return err
+		}
+		return insertEntries(t.Context(), tx, original.ID, []entry{{cash, "COP", 100}, {deposit, "COP", -100}})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, sql := range []string{
+		`INSERT INTO calendar.periods (legal_entity_id, period, status) VALUES ($1, '2026-01', 'open')`,
+		`UPDATE calendar.periods SET status = 'closing' WHERE legal_entity_id = $1`,
+		`UPDATE calendar.periods SET status = 'closed', closed_by = 'finance' WHERE legal_entity_id = $1`,
+	} {
+		if _, err := testPool.Exec(t.Context(), sql, entity); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
+		_, err := NewStore(tx).InsertTransaction(t.Context(), record(), nil)
+		return err
+	})
+
+	if !errors.Is(err, app.ErrDuplicateExternalRef) {
+		t.Fatalf("the duplicate after the close = %v, want %v", err, app.ErrDuplicateExternalRef)
+	}
+}
+
 // execInTx runs stmt in its own transaction, as aluna_app or, with asOwner, switching back to the
 // connection's user (the tables' owner), and returns the SQLSTATE.
 func execInTx(t *testing.T, asOwner bool, stmt string, args ...any) string {

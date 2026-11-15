@@ -80,6 +80,16 @@ func documentKeys(number string) []string {
 	}
 }
 
+// DocumentKey is number as documents are compared, without the variant of a NIT without its check digit: two
+// writings of one document, "16.215.230" and "16215230", have the same key; "" if it has no letters or digits.
+func DocumentKey(number string) string {
+	keys := documentKeys(number)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
 // isNIT reports whether key, a document's capitals and digits, is a NIT with its check digit: digits whose last one
 // is the DIAN check digit of the others, written apart from them (apart, "16215230-1") or run on in a number that
 // is no cédula (runOnNIT).

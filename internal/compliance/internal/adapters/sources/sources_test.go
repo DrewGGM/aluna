@@ -105,6 +105,28 @@ func TestPEPsAreReadPageByPage(t *testing.T) {
 	}
 }
 
+// TestAPEPIsOnePersonHoweverItsDocumentIsWritten (Q-146 d): two posts whose document is written two ways, as the
+// matching reads both, are one person with both names and both documents, so a NIT that groups with another
+// person's cédula still matches by its own number; a document without digits ("-", "N/A") is not grouped.
+func TestAPEPIsOnePersonHoweverItsDocumentIsWritten(t *testing.T) {
+	entries := dedupe([]matching.Entry{
+		{ID: "row-a", Names: []string{"ANA PEREZ"}, Documents: []string{"16.215.230"}},
+		{ID: "row-b", Names: []string{"ANA MARIA PEREZ"}, Documents: []string{"16215230"}},
+		{ID: "row-c", Names: []string{"LUIS GOMEZ"}, Documents: []string{"16215239"}},
+		{ID: "row-d", Names: []string{"JUAN DIAZ"}, Documents: []string{"1621523-9"}},
+		{ID: "row-e", Names: []string{"PEDRO RUIZ"}, Documents: []string{"N/A"}},
+		{ID: "row-f", Names: []string{"MARIO LOPEZ"}, Documents: []string{"n.a."}},
+		{ID: "row-g", Names: []string{"SARA DIAZ"}, Documents: []string{"-"}},
+	})
+
+	if len(entries) != 5 || !slices.Equal(byID(entries, "row-a").Names, []string{"ANA PEREZ", "ANA MARIA PEREZ"}) {
+		t.Fatalf("PEPs = %+v, want row-a with both names, row-c with row-d, and the rest apart", entries)
+	}
+	if got := byID(entries, "row-c").Documents; !slices.Equal(got, []string{"16215239", "1621523-9"}) {
+		t.Errorf("documents of row-c = %v, want both posts' documents", got)
+	}
+}
+
 // TestAPEPSourceWithoutRowIDsIsAnError (ADR-0018): a post with a document and no row id cannot be an entry, whose id
 // would otherwise be the document.
 func TestAPEPSourceWithoutRowIDsIsAnError(t *testing.T) {

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/DrewGGM/aluna/internal/compliance/internal/app"
 	"github.com/DrewGGM/aluna/internal/compliance/internal/domain/matching"
@@ -98,17 +100,29 @@ func parsePEP(page []byte) ([]matching.Entry, int, error) {
 	return entries, len(posts), nil
 }
 
-// dedupe is entries with one entry per person, its first post's, with its posts' names together: a person with two
-// posts, the same document, is listed twice.
+// dedupe is entries with one entry per person, its first post's, with its posts' names and documents together: a
+// person with two posts, the same document however written (matching.DocumentKey), is listed twice. Every post's
+// document stays, so a post grouped by a key it shares with another one still matches by all of its own. A document
+// without digits ("-", "N/A") groups nothing.
 func dedupe(entries []matching.Entry) []matching.Entry {
 	byDocument := map[string]int{}
 	var people []matching.Entry
 	for _, e := range entries {
-		if i, seen := byDocument[e.Documents[0]]; seen {
-			people[i].Names = append(people[i].Names, e.Names...)
+		key := matching.DocumentKey(e.Documents[0])
+		if !strings.ContainsAny(key, "0123456789") {
+			people = append(people, e)
 			continue
 		}
-		byDocument[e.Documents[0]] = len(people)
+		if i, seen := byDocument[key]; seen {
+			people[i].Names = append(people[i].Names, e.Names...)
+			for _, d := range e.Documents {
+				if !slices.Contains(people[i].Documents, d) {
+					people[i].Documents = append(people[i].Documents, d)
+				}
+			}
+			continue
+		}
+		byDocument[key] = len(people)
 		people = append(people, e)
 	}
 	return people

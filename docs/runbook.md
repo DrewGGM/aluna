@@ -261,9 +261,12 @@ GROUP BY 1;
 ## Falla del IAM
 
 **Síntomas.** `AuthorizationFailuresBurst`, 401 `unauthenticated` en todos los canales, una `api` que no
-arranca con `discover OIDC issuer` en el log.
+arranca con `discover OIDC issuer` o `the OIDC issuer must be https` en el log.
 
-**Diagnóstico.** La API descubre el emisor al arrancar y no arranca sin él. Ya en marcha, guarda las
+**Diagnóstico.** La API descubre el emisor al arrancar y no arranca sin él, ni con uno que no sea `https`
+(salvo `http` a esta máquina), ni si su `jwks_uri` no lo es; una redirección a algo que no lo sea corta el
+descubrimiento o la descarga de llaves. También le pide las llaves al arrancar: si su `jwks_uri` falla,
+arranca, lo registra como `fetch OIDC issuer keys` y responde 401 hasta obtenerlas. Ya en marcha, guarda las
 llaves del emisor 10 min y las renueva en segundo plano desde la mitad de ese tiempo; un token con una
 llave desconocida vuelve a pedirlas, a lo sumo una vez cada 30 s. Con el IAM caído, la API sigue
 validando con las llaves que tiene hasta que vencen, y después responde 401 a todo: falla cerrada.

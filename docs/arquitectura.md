@@ -41,7 +41,7 @@ Todo sale del entorno:
 | Variable | Procesos | Por defecto | Uso |
 |---|---|---|---|
 | `ALUNA_DATABASE_URL` | todos salvo `healthcheck` y `version` | obligatoria | Base de la entidad, con el rol de la tabla anterior: el dueño de las tablas, o un usuario miembro de `aluna_app` (o `options=-c role=aluna_app` en la URL) |
-| `ALUNA_OIDC_ISSUER` | `api` | obligatoria | Emisor de los tokens; se descubre al arrancar |
+| `ALUNA_OIDC_ISSUER` | `api` | obligatoria | Emisor de los tokens, `https` (o `http` solo a esta máquina); se descubre y se le piden las llaves al arrancar |
 | `ALUNA_OIDC_AUDIENCE` | `api` | obligatoria | Audiencia que deben traer los tokens |
 | `ALUNA_SIMBREB_SECRET` | `api`, `worker` | obligatoria | Secreto, de al menos 32 bytes y el mismo en los dos, con que el rail simulado firma sus notificaciones |
 | `ALUNA_AUDIT_ANCHOR_DIR` | `worker`, `audit verify` | esta o la siguiente | Directorio, ya existente, del ancla de los bloques de auditoría: desarrollo, o un volumen WORM que admita enlaces duros |
@@ -393,7 +393,9 @@ docker run --rm --env-file migrate.env aluna:0.1.0 migrate up
 ```
 
 - La imagen del [`Dockerfile`](../Dockerfile) es distroless, corre como `nonroot` (uid 65532), no trae shell
-  y arranca `api` por defecto. Su `HEALTHCHECK` es `aluna healthcheck`. El worker no escucha HTTP: corre con
+  y arranca `api` por defecto. Su `HEALTHCHECK` es `aluna healthcheck`. Desde un contenedor, el emisor OIDC
+  tiene que ser `https`: el Keycloak de desarrollo (`http` en el puerto 8180) solo sirve con `--network host`
+  (Linux) y el emisor `http://localhost:8180/realms/aluna`. El worker no escucha HTTP: corre con
   `--no-healthcheck` (en Kubernetes, sin probe HTTP). El directorio del ancla debe admitir escritura del uid
   65532.
 - Con SIGTERM, `api` y `worker` esperan hasta 20 s a que terminen las solicitudes y los jobs en curso. El

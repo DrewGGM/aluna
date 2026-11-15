@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +51,8 @@ var (
 	errNoJWKS       = errors.New("the OIDC issuer does not publish jwks_uri")
 	errBadJWKS      = errors.New("the OIDC issuer did not deliver its keys")
 	errNoPrincipal  = errors.New("request without an authenticated principal")
+	// errInsecureIssuer means an issuer, its jwks_uri or a redirect of theirs that is not trusted.
+	errInsecureIssuer = errors.New("the OIDC issuer must be https, or http to this host")
 )
 
 var unauthenticated = Problem{Status: http.StatusUnauthorized, Code: "unauthenticated", Title: "A valid access token is missing"}
@@ -60,14 +64,18 @@ type OIDCVerifier struct {
 	now      func() time.Time
 }
 
-// NewOIDCVerifier discovers the issuer issuer and verifies its tokens for the audience audience. Failures
-// fetching the issuer's keys go to the log: a token rejected because of them is not the caller's fault.
+// NewOIDCVerifier discovers the issuer issuer and verifies its tokens for the audience audience: the issuer, its
+// jwks_uri and their redirects must be trusted. It fetches the issuer's keys now, so that a broken jwks_uri shows at
+// start; failures fetching them go to the log: a token rejected because of them is not the caller's fault.
 func NewOIDCVerifier(ctx context.Context, issuer, audience string, log *slog.Logger) (*OIDCVerifier, error) {
 	return newOIDCVerifier(ctx, issuer, audience, time.Now, log)
 }
 
 func newOIDCVerifier(ctx context.Context, issuer, audience string, now func() time.Time, log *slog.Logger) (*OIDCVerifier, error) {
-	client := &http.Client{Timeout: issuerTimeout}
+	if u, err := url.Parse(issuer); err != nil || !trusted(u) {
+		return nil, fmt.Errorf("%w: %s", errInsecureIssuer, issuer)
+	}
+	client := &http.Client{Timeout: issuerTimeout, CheckRedirect: trustedRedirect}
 	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, client), issuer)
 	if err != nil {
 		return nil, fmt.Errorf("discover OIDC issuer %s: %w", issuer, err)
@@ -81,9 +89,40 @@ func newOIDCVerifier(ctx context.Context, issuer, audience string, now func() ti
 	if meta.JWKSURL == "" {
 		return nil, fmt.Errorf("%w: %s", errNoJWKS, issuer)
 	}
+	if u, err := url.Parse(meta.JWKSURL); err != nil || !trusted(u) {
+		return nil, fmt.Errorf("%w: jwks_uri %s", errInsecureIssuer, meta.JWKSURL)
+	}
 	keys := &issuerKeys{url: meta.JWKSURL, client: client, now: now, log: log}
+	keys.refresh(ctx)
 	config := &oidc.Config{ClientID: audience, Now: now, SupportedSigningAlgs: []string{oidc.RS256, oidc.ES256}}
 	return &OIDCVerifier{verifier: oidc.NewVerifier(issuer, keys, config), now: now}, nil
+}
+
+// trusted reports whether u is https, or http to this host: what the issuer serves from it decides which tokens
+// are good, so it may not come unauthenticated.
+func trusted(u *url.URL) bool {
+	return u.Scheme == "https" || u.Scheme == "http" && loopback(u.Hostname())
+}
+
+// maxRedirects is how many redirects of the issuer are followed, as many as Go's client follows by default.
+const maxRedirects = 10
+
+// trustedRedirect follows a redirect of the issuer only to a trusted URL: an https issuer that redirected to http
+// would hand over its keys unauthenticated.
+func trustedRedirect(req *http.Request, via []*http.Request) error {
+	if !trusted(req.URL) {
+		return fmt.Errorf("%w: redirected to %s", errInsecureIssuer, req.URL.Redacted())
+	}
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	return nil
+}
+
+// loopback reports whether host names this machine: localhost or a loopback address.
+func loopback(host string) bool {
+	ip := net.ParseIP(host)
+	return strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || ip != nil && ip.IsLoopback()
 }
 
 // Verify verifies raw and returns the principal of its claims.

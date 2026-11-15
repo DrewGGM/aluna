@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -327,23 +328,27 @@ func TestForgedTokensDoNotFloodTheIssuer(t *testing.T) {
 	}
 }
 
-// TestAHungIssuerIsCutAndLogged: a key download the issuer does not answer is cut at 5 s and logged; with no
-// current keys, it is retried after a second and the token is valid.
+// TestAHungIssuerIsCutAndLogged: the keys are fetched at start; a download the issuer does not answer is cut at 5 s
+// and logged, and a token is not valid meanwhile; with no current keys, it is retried after a second and the token
+// is valid.
 func TestAHungIssuerIsCutAndLogged(t *testing.T) {
 	iss := newTestIssuer(t)
 	clock := &testClock{now: time.Now()}
 	var logs syncBuffer
-	ts := authenticated(t, verifierLogging(t, iss, clock.Now, &logs))
-	token := iss.bearerOf(t, iss.claims(ids.New()))
 	iss.hangs.Store(1)
 
 	start := time.Now()
-	status, _, _ := get(t, ts.URL, token)
-	if took := time.Since(start); status != http.StatusUnauthorized || took < issuerTimeout || took > issuerTimeout+time.Second {
-		t.Fatalf("with the issuer hung = %d in %s, want 401 in about %s", status, took, issuerTimeout)
+	v := verifierLogging(t, iss, clock.Now, &logs)
+	if took := time.Since(start); took < issuerTimeout || took > issuerTimeout+time.Second {
+		t.Fatalf("starting with the issuer hung took %s, want about %s", took, issuerTimeout)
 	}
 	if !strings.Contains(logs.String(), "fetch OIDC issuer keys") {
 		t.Fatalf("the issuer failure was not logged:\n%s", logs.String())
+	}
+	ts := authenticated(t, v)
+	token := iss.bearerOf(t, iss.claims(ids.New()))
+	if status, _, _ := get(t, ts.URL, token); status != http.StatusUnauthorized {
+		t.Fatalf("with no keys yet = %d, want 401", status)
 	}
 
 	clock.advance(jwksRetry)
@@ -479,7 +484,7 @@ func TestAHungIssuerIsAskedOnce(t *testing.T) {
 func keysOf(iss *testIssuer, now func() time.Time, timeout time.Duration) *issuerKeys {
 	return &issuerKeys{
 		url: iss.url + "/keys", client: &http.Client{Timeout: timeout}, now: now,
-		log: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		log: discardLog(),
 	}
 }
 
@@ -550,6 +555,66 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// discardLog is a logger whose lines go nowhere.
+func discardLog() *slog.Logger { return slog.New(slog.NewJSONHandler(io.Discard, nil)) }
+
+// TestWhatAnIssuerIsTrustedFrom: https anywhere, http only to this machine (localhost, IPv4 or IPv6 loopback).
+func TestWhatAnIssuerIsTrustedFrom(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"https://iam.example/realms/aluna":   true,
+		"http://localhost:8180/realms/aluna": true,
+		"http://LOCALHOST.:8180":             true,
+		"http://127.0.0.1:8180":              true,
+		"http://[::1]:8180":                  true,
+		"http://iam.example/realms/aluna":    false,
+		"http://localhost.example":           false,
+		"ftp://iam.example":                  false,
+	} {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := trusted(u); got != want {
+			t.Errorf("trusted(%s) = %t, want %t", raw, got, want)
+		}
+	}
+}
+
+// TestAnIssuerMustBeTrusted: an issuer that is not trusted is refused before it is asked for anything (iam.example
+// does not resolve), and so is a trusted one whose jwks_uri is not, or that redirects to an untrusted address.
+func TestAnIssuerMustBeTrusted(t *testing.T) {
+	for _, issuer := range []string{"http://iam.example/realms/aluna", "ftp://iam.example", "://"} {
+		if _, err := newOIDCVerifier(t.Context(), issuer, testAudience, time.Now, discardLog()); !errors.Is(err, errInsecureIssuer) {
+			t.Errorf("issuer %s = %v, want errInsecureIssuer", issuer, err)
+		}
+	}
+	var issuer string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"issuer": issuer, "jwks_uri": "http://keys.example/jwks"}) //nolint:errcheck,gosec // test response
+	}))
+	t.Cleanup(ts.Close)
+	issuer = ts.URL
+	if _, err := newOIDCVerifier(t.Context(), issuer, testAudience, time.Now, discardLog()); !errors.Is(err, errInsecureIssuer) {
+		t.Errorf("a jwks_uri over http elsewhere = %v, want errInsecureIssuer", err)
+	}
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://iam.example/.well-known/openid-configuration", http.StatusFound)
+	}))
+	t.Cleanup(redirecting.Close)
+	if _, err := newOIDCVerifier(t.Context(), redirecting.URL, testAudience, time.Now, discardLog()); !errors.Is(err, errInsecureIssuer) {
+		t.Errorf("an issuer that redirects to http elsewhere = %v, want errInsecureIssuer", err)
+	}
+}
+
+// TestTheKeysAreFetchedAtStart: creating the verifier fetches the issuer's keys once, before any token.
+func TestTheKeysAreFetchedAtStart(t *testing.T) {
+	iss := newTestIssuer(t)
+	verifierFor(t, iss, time.Now)
+	if n := iss.keyCalls.Load(); n != 1 {
+		t.Fatalf("key downloads at start = %d, want 1", n)
+	}
+}
+
 // TestAnIssuerWithoutJWKSIsRejected: an issuer that does not publish jwks_uri cannot verify tokens.
 func TestAnIssuerWithoutJWKSIsRejected(t *testing.T) {
 	var issuer string
@@ -559,7 +624,7 @@ func TestAnIssuerWithoutJWKSIsRejected(t *testing.T) {
 	t.Cleanup(ts.Close)
 	issuer = ts.URL
 
-	_, err := newOIDCVerifier(t.Context(), issuer, testAudience, time.Now, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	_, err := newOIDCVerifier(t.Context(), issuer, testAudience, time.Now, discardLog())
 
 	if !errors.Is(err, errNoJWKS) {
 		t.Fatalf("issuer without jwks_uri = %v, want errNoJWKS", err)

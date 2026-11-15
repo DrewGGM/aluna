@@ -211,7 +211,7 @@ func (l benchLedger) posting(rng *rand.Rand) []ledger.EntryInput {
 }
 
 // postIdempotent posts entries with the statements of commands.idempotent and underSavepoint
-// (internal/httpapi/idempotency.go) for a command that succeeds, in their order: key claim, savepoint,
+// (internal/httpapi/commands.go) for a command that succeeds, in their order: key claim, savepoint,
 // Post, stored response and audit record. If that path adds a statement, it has to be added here; the
 // fingerprint, scope, body and summary are simplified because they do not change the SQL. The key (also
 // the external reference) is random, like a client's: a time-ordered key would always insert at the end

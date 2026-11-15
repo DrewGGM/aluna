@@ -400,6 +400,27 @@ func TestAClosedPeriodIsAConflict(t *testing.T) {
 	}
 }
 
+// TestAManualPostingDoesNotTakeAModuleSource: a manual posting with the source of a module (deposits, payments, or
+// one of theirs) is 422 invalid_posting: its reference would take the place of the module's own movement. A source
+// that only starts as one is not a module's.
+func TestAManualPostingDoesNotTakeAModuleSource(t *testing.T) {
+	ts := apiServer(t, ids.New())
+	cash, deposit := createAccount(t, ts, "asset"), createAccount(t, ts, "liability")
+	for _, source := range []string{"deposits", "payments", "deposits.capitalization"} {
+		body := strings.Replace(postingBody(t, cash, deposit, 100, 100, ""), `"source":"test"`, `"source":"`+source+`"`, 1)
+
+		r := postWithKey(t, ts, ids.New().String(), body)
+
+		if r.status != http.StatusUnprocessableEntity || problemCode(t, r) != "invalid_posting" {
+			t.Errorf("posting with source %s = %d %s, want 422 invalid_posting", source, r.status, r.body)
+		}
+	}
+	body := strings.Replace(postingBody(t, cash, deposit, 100, 100, ""), `"source":"test"`, `"source":"depositsx"`, 1)
+	if r := postWithKey(t, ts, ids.New().String(), body); r.status != http.StatusCreated {
+		t.Errorf("posting with source depositsx = %d %s, want 201", r.status, r.body)
+	}
+}
+
 // TestTheZeroBusinessDateIsInvalid: through the API the business date is the caller's; 0001-01-01 is not
 // taken as absent (the ledger would use the entity's) but as invalid.
 func TestTheZeroBusinessDateIsInvalid(t *testing.T) {

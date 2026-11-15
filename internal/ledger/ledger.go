@@ -85,6 +85,7 @@ var (
 	ErrTransactionNotFound  = app.ErrTransactionNotFound
 	ErrDuplicateExternalRef = app.ErrDuplicateExternalRef
 	ErrAlreadyReversed      = app.ErrAlreadyReversed
+	ErrReversalOfReversal   = app.ErrReversalOfReversal
 	ErrHoldNotFound         = app.ErrHoldNotFound
 	ErrInvalidPage          = app.ErrInvalidPage
 	ErrInvalidHold          = domain.ErrInvalidHold

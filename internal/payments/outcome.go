@@ -63,11 +63,13 @@ var (
 
 // What the ledger records of a payment's capture and charges.
 const (
-	channelRail    = "rail"
-	channelAPI     = "api" // a person, through the API, as an approver
-	sourcePayments = "payments"
-	codeCharges    = "payments.charges"
+	channelRail = "rail"
+	channelAPI  = "api" // a person, through the API, as an approver
+	codeCharges = "payments.charges"
 )
+
+// Source is the source of this module's postings in the ledger: each one's external reference is its order.
+const Source = "payments"
 
 // NewSimulatedRail is the simulated Bre-B rail (AR-2): it notifies the core at baseURL with client, signing with
 // secret, and logs to log the notifications the core did not take; the core verifies them with the same secret.
@@ -209,7 +211,7 @@ func (r orders) postToday(ctx context.Context, o app.Order, code, what, actor, c
 		return err
 	}
 	if _, err := r.s.ledger.Post(ctx, r.tx, ledger.PostInput{
-		LegalEntityID: o.LegalEntityID, Code: code, ValueDate: today, BusinessDate: today, Source: sourcePayments,
+		LegalEntityID: o.LegalEntityID, Code: code, ValueDate: today, BusinessDate: today, Source: Source,
 		ExternalRef: o.ID.String() + "/" + what, Actor: actor, Channel: channel, RuleVersion: postingrules.RuleVersion, Entries: entries,
 	}); err != nil {
 		return fmt.Errorf("book the %s of order %s: %w", what, o.ID, err)
@@ -267,7 +269,7 @@ func (r orders) Capture(ctx context.Context, o app.Order, charges []ledger.Entry
 	}
 	_, err = r.s.ledger.Post(ctx, r.tx, ledger.PostInput{
 		LegalEntityID: o.LegalEntityID, Code: codeCharges, ValueDate: captured.BusinessDate, BusinessDate: captured.BusinessDate,
-		Source: sourcePayments, ExternalRef: o.ID.String(), Actor: o.Rail, Channel: channelRail, RuleVersion: postingrules.RuleVersion,
+		Source: Source, ExternalRef: o.ID.String(), Actor: o.Rail, Channel: channelRail, RuleVersion: postingrules.RuleVersion,
 		Entries: charges,
 	})
 	return err

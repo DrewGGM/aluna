@@ -16,7 +16,7 @@ import (
 // The capitalizations in the ledger: their source and transaction code, and who posts them (the accrual job,
 // not a customer); each one's external reference is <account>:<period>, so a period is posted once.
 const (
-	capitalizationSource  = "deposits.capitalization"
+	capitalizationSource  = MovementSource + ".capitalization"
 	codeCapitalization    = "deposits.interest_capitalization"
 	capitalizationActor   = "deposits.accrual"
 	capitalizationChannel = "job"

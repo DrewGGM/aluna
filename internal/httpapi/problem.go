@@ -128,7 +128,7 @@ var problems = []struct {
 	// httpapi
 	{errInvalidIdempotencyKey, invalidRequest("Invalid Idempotency-Key",
 		fmt.Sprintf("The key must be UTF-8 text of up to %d characters.", maxIdempotencyKey))},
-	{errReversalOfReversal, conflict("reversal_of_reversal", "The transaction is already a reversal")},
+	{ledger.ErrReversalOfReversal, conflict("reversal_of_reversal", "The transaction is already a reversal")},
 	{errInvalidResolution, invalidRequest("Unknown resolution", "resolution is cleared or confirmed.")},
 	{errInvalidApprovalStatus, invalidRequest("Unknown request status", "status is pending, approved, rejected, failed or expired.")},
 	{errInvalidAccountStatus, invalidRequest("Unknown account status", "status is active, frozen or closed; the dormancy job sets dormant.")},

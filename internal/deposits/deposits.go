@@ -209,6 +209,10 @@ func (s *Service) Transfer(ctx context.Context, tx postgres.Tx, in TransferInput
 // undoTimeout bounds undoing a failed movement, which runs even if the request was canceled.
 const undoTimeout = 5 * time.Second
 
+// Source is the source of this module's postings in the ledger: its movements', and, as sub-sources
+// ("deposits.capitalization"), its capitalizations'.
+const Source = app.MovementSource
+
 // atomically runs move under a savepoint of tx and undoes it if move fails: a rejected movement leaves nothing
 // in tx, as a rejected ledger posting does, although its limits are checked after posting.
 func atomically(ctx context.Context, tx postgres.Tx, move func() (ledger.Transaction, error)) (ledger.Transaction, error) {

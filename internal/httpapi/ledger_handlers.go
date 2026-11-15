@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/ledger"
 	"github.com/DrewGGM/aluna/internal/money"
+	"github.com/DrewGGM/aluna/internal/payments"
 	"github.com/DrewGGM/aluna/internal/postgres"
 )
 
@@ -169,6 +169,9 @@ func (h *LedgerHandlers) PostTransaction(ctx context.Context, req gen.PostTransa
 	if err := requireBusinessDate(req.Body.BusinessDate); err != nil {
 		return nil, err
 	}
+	if moduleSource(req.Body.Source) {
+		return nil, fmt.Errorf("%w: the %s source belongs to its module", ledger.ErrInvalidPosting, req.Body.Source)
+	}
 	entries := make([]ledger.EntryInput, len(req.Body.Entries))
 	for i, e := range req.Body.Entries {
 		amount, err := amountOf(e.Amount)
@@ -222,13 +225,10 @@ type reversalRequest struct {
 	BusinessDate  *openapi_types.Date `json:"business_date,omitempty"`
 }
 
-// errReversalOfReversal means requesting the reversal of a transaction that is already a reversal:
-// approving it would apply the original again without the checker seeing it in the payload.
-var errReversalOfReversal = errors.New("the transaction is a reversal: it cannot be reversed")
-
 // RequestReversal requests the reversal of a transaction of the token's entity: it stays as a
 // ledger.reversal request until another person approves it (FR-39), once per Idempotency-Key. That of a
-// reversal is rejected: to apply the original again, it is posted anew.
+// reversal is rejected when requested, not left to fail once approved (ledger.Reverse refuses it too): to apply
+// the original again, it is posted anew.
 func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestReversalRequestObject) (gen.RequestReversalResponseObject, error) {
 	p, err := principal(ctx)
 	if err != nil {
@@ -247,7 +247,7 @@ func (h *LedgerHandlers) RequestReversal(ctx context.Context, req gen.RequestRev
 			return nil, err
 		}
 		if original.ReversesID != (ids.ID{}) {
-			return nil, fmt.Errorf("%w: %s reverses %s", errReversalOfReversal, id, original.ReversesID)
+			return nil, fmt.Errorf("%w: %s reverses %s", ledger.ErrReversalOfReversal, id, original.ReversesID)
 		}
 		requested, err := h.approvals.Request(ctx, tx, reversalKind, payload, p)
 		if err != nil {
@@ -309,6 +309,20 @@ func toTransactionJSON(tx ledger.Transaction) gen.Transaction {
 }
 
 func dateOf(t time.Time) openapi_types.Date { return openapi_types.Date{Time: t} }
+
+// moduleSources are the sources the modules post their own movements with: their external references are theirs
+// (a movement's, an order's), so a manual posting that took one would take the place of the module's.
+var moduleSources = [...]string{deposits.Source, payments.Source}
+
+// moduleSource reports whether source is a module's, or one of its sub-sources ("deposits.capitalization").
+func moduleSource(source string) bool {
+	for _, m := range moduleSources {
+		if source == m || strings.HasPrefix(source, m+".") {
+			return true
+		}
+	}
+	return false
+}
 
 // requireBusinessDate rejects the zero date (0001-01-01): the ledger would take it as absent and use the
 // entity's, and through the API the caller sends the business date.

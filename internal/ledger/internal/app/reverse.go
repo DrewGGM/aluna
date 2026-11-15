@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -13,6 +14,10 @@ import (
 // ErrAlreadyReversed means a transaction that already has its reversal: Reverse returns the existing
 // reversal together with this error.
 var ErrAlreadyReversed = errors.New("the transaction was already reversed")
+
+// ErrReversalOfReversal means reversing a transaction that is itself a reversal: that would apply the original
+// again without anyone posting it, so a movement undone by mistake is posted again as a new transaction.
+var ErrReversalOfReversal = errors.New("the transaction is a reversal: it cannot be reversed")
 
 // Reversal header.
 const (
@@ -37,15 +42,19 @@ type ReversalStore interface {
 
 // Reverse posts the reversal of a transaction (FR-3): its entries with the opposite sign, with the
 // original's value date and in's business date. It goes through Post, so it honors the limits: reversing
-// an already spent deposit is ErrInsufficientFunds. If the transaction already has a reversal, it returns
-// it with ErrAlreadyReversed and writes nothing; if it posts it, it emits transaction.reversed.
+// an already spent deposit is ErrInsufficientFunds. A reversal is not reversed (ErrReversalOfReversal). If the
+// transaction already has a reversal, it returns it with ErrAlreadyReversed and writes nothing; if it posts it,
+// it emits transaction.reversed.
 func Reverse(ctx context.Context, store ReversalStore, guard PeriodGuard, events Events, in ReverseInput) (Transaction, error) {
-	if in.Reason == "" {
+	if strings.TrimSpace(in.Reason) == "" {
 		return Transaction{}, fmt.Errorf("%w: missing reversal reason", ErrInvalidPosting)
 	}
 	original, err := store.TransactionOf(ctx, in.LegalEntityID, in.TransactionID)
 	if err != nil {
 		return Transaction{}, err
+	}
+	if original.ReversesID != (ids.ID{}) {
+		return Transaction{}, fmt.Errorf("%w: %s reverses %s", ErrReversalOfReversal, original.ID, original.ReversesID)
 	}
 	entries, err := domain.ReversalEntries(original.Entries)
 	if err != nil {

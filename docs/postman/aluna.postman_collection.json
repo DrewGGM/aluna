@@ -1906,7 +1906,7 @@
                 "transactions"
               ]
             },
-            "description": "Idempotent by `Idempotency-Key` (7 days): the same payload with the same key receives the original response (also a business 4xx) without posting again; another payload is 422 `idempotency_key_reused` and a request that has not finished, 409 `request_in_progress`. A 5xx is not stored: it can be retried with the same key. An entry on the ledger account of a deposit account that is not active (frozen, dormant or closed) is 409 `account_not_active`.\n\nPermission: `ledger.transactions.post`"
+            "description": "Idempotent by `Idempotency-Key` (7 days): the same payload with the same key receives the original response (also a business 4xx) without posting again; another payload is 422 `idempotency_key_reused` and a request that has not finished, 409 `request_in_progress`. A 5xx is not stored: it can be retried with the same key. An entry on the ledger account of a deposit account that is not active (frozen, dormant or closed) is 409 `account_not_active`. The sources of the modules' own postings (`deposits`, `payments`, `ledger.` and theirs, such as `deposits.capitalization`) are reserved: 422 `invalid_posting`.\n\nPermission: `ledger.transactions.post`"
           }
         },
         {

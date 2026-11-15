@@ -26,9 +26,9 @@ var (
 	ErrMinimumWageMissing = errors.New("no minimum wage (SMMLV) is in force on the business date")
 )
 
-// Source of the deposit movements in the ledger and their transaction codes.
+// Source of the deposit movements in the ledger, and of this module's postings, and their transaction codes.
 const (
-	movementSource = "deposits"
+	MovementSource = "deposits"
 	codeDeposit    = "deposits.cash_deposit"
 	codeWithdrawal = "deposits.withdrawal"
 	codeTransfer   = "deposits.internal_transfer"
@@ -408,7 +408,7 @@ func post(ctx context.Context, s Movements, a domain.Account, today calendar.Dat
 	day := today.Time()
 	posted, err := s.Post(ctx, ledger.PostInput{
 		LegalEntityID: a.LegalEntityID, Code: h.code, ValueDate: day, BusinessDate: day,
-		Source: movementSource, ExternalRef: h.externalRef, Actor: h.actor, Channel: h.channel,
+		Source: MovementSource, ExternalRef: h.externalRef, Actor: h.actor, Channel: h.channel,
 		RuleVersion: postingrules.RuleVersion, Entries: entries,
 	})
 	if err != nil {

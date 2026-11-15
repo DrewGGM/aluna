@@ -103,7 +103,7 @@ type ledgerModel struct {
 	accounts   []ledger.Account
 	posted     map[ids.ID]int64 // expected signed balance
 	reserved   map[ids.ID]int64 // expected pending amount on the side through which the account loses balance
-	reversible []posting        // posted transactions not yet reversed
+	reversible []posting        // posted transactions not yet reversed, nor reversals
 	holds      []modelHold
 }
 
@@ -244,10 +244,10 @@ func (m *ledgerModel) reverseStep(rt *rapid.T) {
 		legs[j] = leg{l.account, -l.units}
 	}
 	refused := m.refuses(legs, ids.ID{}, 0)
-	reversal, err := reverse(m.t, original.id)
+	_, err := reverse(m.t, original.id)
 	if m.settled(rt, "reversal", err, refused) {
 		m.apply(legs)
-		m.reversible = append(slices.Delete(m.reversible, i, i+1), posting{reversal.ID, legs})
+		m.reversible = slices.Delete(m.reversible, i, i+1) // a reversal is not reversed
 		m.ran.reversals++
 	}
 }

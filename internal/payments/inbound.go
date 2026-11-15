@@ -63,7 +63,7 @@ func (r receiving) Record(ctx context.Context, o app.Order) (bool, error) {
 // aluna.payments.order.<status>.v1.
 func (r receiving) Book(ctx context.Context, o app.Order, code string, valueDate time.Time, entries []ledger.EntryInput) error {
 	if _, err := r.s.ledger.Post(ctx, r.tx, ledger.PostInput{
-		LegalEntityID: o.LegalEntityID, Code: code, ValueDate: valueDate, Source: sourcePayments, ExternalRef: o.ID.String(),
+		LegalEntityID: o.LegalEntityID, Code: code, ValueDate: valueDate, Source: Source, ExternalRef: o.ID.String(),
 		Actor: o.Rail, Channel: channelRail, RuleVersion: postingrules.RuleVersion, Entries: entries,
 	}); err != nil {
 		return fmt.Errorf("book transfer %s: %w", o.ExternalRef, err)

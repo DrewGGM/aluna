@@ -169,8 +169,9 @@ func TestReversingASpentDepositRespectsTheLimits(t *testing.T) {
 	}
 }
 
-// TestAReversalCanBeReversed: reversing a reversal applies the original again.
-func TestAReversalCanBeReversed(t *testing.T) {
+// TestAReversalIsNotReversed (FR-3): reversing a reversal is ErrReversalOfReversal and moves no money: it would
+// apply the original again without anyone posting it.
+func TestAReversalIsNotReversed(t *testing.T) {
 	cash, deposit := createAccount(t, ledger.KindAsset), createAccount(t, ledger.KindLiability)
 	original, _ := mustPostRef(t, transfer(t, cash.ID, deposit.ID, ids.New().String()))
 	reversal, err := reverse(t, original.ID)
@@ -178,8 +179,8 @@ func TestAReversalCanBeReversed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := reverse(t, reversal.ID); err != nil || postedOf(t, cash) != 100 {
-		t.Fatalf("reversing the reversal = %v, cash %d; want cash at 100", err, postedOf(t, cash))
+	if _, err := reverse(t, reversal.ID); !errors.Is(err, ledger.ErrReversalOfReversal) || postedOf(t, cash) != 0 {
+		t.Fatalf("reversing the reversal = %v, cash %d; want ErrReversalOfReversal and cash at 0", err, postedOf(t, cash))
 	}
 }
 
@@ -193,6 +194,7 @@ func TestReverseRejects(t *testing.T) {
 		"nonexistent transaction": {ledger.ReverseInput{LegalEntityID: entity, TransactionID: ids.New(), Reason: "r", Actor: "a", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
 		"of another entity":       {ledger.ReverseInput{LegalEntityID: ids.New(), TransactionID: original.ID, Reason: "r", Actor: "a", BusinessDate: time.Now()}, ledger.ErrTransactionNotFound},
 		"no reason":               {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Actor: "a", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
+		"a blank reason":          {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: " \t", Actor: "a", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
 		"no actor":                {ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: "r", BusinessDate: time.Now()}, ledger.ErrInvalidPosting},
 	}
 	for name, tc := range cases {

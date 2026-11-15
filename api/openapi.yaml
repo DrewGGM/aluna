@@ -1264,7 +1264,8 @@ paths:
       description: >-
         Revokes an endpoint of the token's entity: it gets no more events, and the deliveries still pending fail, so
         an endpoint whose secret leaked stops being sent to; only a request already on its way still goes out.
-        Revoking it again answers the same, with when it was first revoked. Another entity's endpoint, or one that does not exist, is 404 `not_found`.
+        Revoking it again answers the same, with when it was first revoked. Another entity's endpoint, or one that
+        does not exist, is 404 `not_found`.
       x-aluna-permission: webhooks.endpoints.revoke
       parameters:
         - $ref: "#/components/parameters/ID"

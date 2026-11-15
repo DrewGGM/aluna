@@ -446,7 +446,7 @@ bloquea entera, lecturas incluidas, mientras se valida, y una llave foránea nue
 | `0036_released_debits.sql` | columna con `CHECK` en `deposits.counters` | los movimientos de depósitos y los pagos |
 | `0038_gmf_restored.sql` | columnas con `CHECK` en `pricing.gmf_monthly` y `payments.orders` | las cotizaciones y los pagos |
 | `0039_payments_quoted_fees.sql` | columna con `CHECK` en `payments.orders` | los pagos |
-| `0042_webhook_revocation.sql` | columnas con `CHECK` en `webhooks.endpoints` | el registro de endpoints y el encolado de webhooks |
+| `0042_webhook_revocation.sql` | columnas con `CHECK` y un trigger en `webhooks.endpoints` | el registro de endpoints y el encolado y el envío de webhooks |
 
 Aplícalas en una ventana de mantenimiento, con la API fuera de rotación: tardan lo que tarde recorrer la
 tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y migrándolo (ver

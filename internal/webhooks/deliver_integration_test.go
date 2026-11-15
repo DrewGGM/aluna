@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/postgres"
@@ -366,18 +368,18 @@ func TestAnEndpointRevokedWhileARunQueuesGetsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	i := slices.IndexFunc(subscriptions, func(s app.Subscription) bool { return s.EndpointID == endpointID })
+	if i < 0 {
+		t.Fatalf("endpoint %s is not among the subscriptions", endpointID)
+	}
+
 	if _, err := revoke(t, entity, endpointID); err != nil {
 		t.Fatal(err)
 	}
-	for _, sub := range subscriptions {
-		if sub.EndpointID != endpointID {
-			continue
-		}
-		if err := uow.Do(t.Context(), func(tx postgres.Tx) error {
-			return app.Enqueue(t.Context(), pg.NewStore(tx), sub, time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC), 50)
-		}); err != nil {
-			t.Fatal(err)
-		}
+	if err := uow.Do(t.Context(), func(tx postgres.Tx) error {
+		return app.Enqueue(t.Context(), pg.NewStore(tx), subscriptions[i], time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC), 50)
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	if queued := queuedFor(t, endpointID); queued != 0 {
@@ -442,8 +444,9 @@ func TestAnEndpointIsRevokedOnce(t *testing.T) {
 	if _, err := revoke(t, ids.New(), endpointID); !errors.Is(err, webhooks.ErrEndpointNotFound) {
 		t.Errorf("another entity revoking = %v, want ErrEndpointNotFound", err)
 	}
-	if _, err := testPool.Exec(t.Context(), `UPDATE webhooks.endpoints SET revoked_at = NULL, revoked_by = NULL WHERE id = $1`, endpointID); err == nil {
-		t.Error("the revocation was undone")
+	_, err = testPool.Exec(t.Context(), `UPDATE webhooks.endpoints SET revoked_at = NULL, revoked_by = NULL WHERE id = $1`, endpointID)
+	if pgErr := (*pgconn.PgError)(nil); !errors.As(err, &pgErr) || pgErr.Code != "2F003" {
+		t.Errorf("undoing the revocation = %v, want the guard's prohibited_sql_statement_attempted", err)
 	}
 }
 

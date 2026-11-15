@@ -433,9 +433,10 @@ func TestPostedRowsAreImmutable(t *testing.T) {
 	}
 }
 
-// TestATransactionInAClosedPeriodIsPeriodClosed (Q-131 a): an insert into a closed period, which is what a posting
-// that checked its period before a close meets after it, is refused by transactions_in_open_period and reported as
-// the calendar's closed period, so the client gets period_closed and not a 500.
+// TestATransactionInAClosedPeriodIsPeriodClosed (Q-131 a, Q-76 b): an insert into a closed period or before one,
+// which is what a posting that checked its period before a close meets after it, is refused by
+// transactions_in_open_period and reported as the calendar's closed period, so the client gets period_closed and not
+// a 500.
 func TestATransactionInAClosedPeriodIsPeriodClosed(t *testing.T) {
 	entity := ids.New()
 	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
@@ -453,16 +454,17 @@ func TestATransactionInAClosedPeriodIsPeriodClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	day := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
-	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
-		_, err := NewStore(tx).InsertTransaction(t.Context(), app.TransactionRecord{
-			ID: ids.New(), LegalEntityID: entity, Code: "test", ValueDate: day, BusinessDate: day, Source: "test",
-			ExternalRef: ids.New().String(), Actor: "tester", Channel: "test", RuleVersion: "v1",
-		}, nil)
-		return err
-	})
-	if !errors.Is(err, calendar.ErrPeriodClosed) {
-		t.Fatalf("insert in a closed period = %v, want %v", err, calendar.ErrPeriodClosed)
+	for _, day := range []time.Time{time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC), time.Date(2025, time.December, 15, 0, 0, 0, 0, time.UTC)} {
+		err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
+			_, err := NewStore(tx).InsertTransaction(t.Context(), app.TransactionRecord{
+				ID: ids.New(), LegalEntityID: entity, Code: "test", ValueDate: day, BusinessDate: day, Source: "test",
+				ExternalRef: ids.New().String(), Actor: "tester", Channel: "test", RuleVersion: "v1",
+			}, nil)
+			return err
+		})
+		if !errors.Is(err, calendar.ErrPeriodClosed) {
+			t.Errorf("insert on %s = %v, want %v", day.Format(time.DateOnly), err, calendar.ErrPeriodClosed)
+		}
 	}
 }
 

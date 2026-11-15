@@ -25,6 +25,16 @@ func (p *periods) PeriodStatus(_ context.Context, _ ids.ID, period string) (app.
 	return s, ok, nil
 }
 
+func (p *periods) LastClosedPeriod(context.Context, ids.ID) (string, error) {
+	var last string
+	for period, s := range p.statuses {
+		if s == app.PeriodClosed && period > last {
+			last = period
+		}
+	}
+	return last, nil
+}
+
 func (p *periods) MarkClosing(_ context.Context, _ ids.ID, period string) (bool, error) {
 	if s, ok := p.statuses[period]; ok && s != app.PeriodOpen {
 		return false, nil
@@ -113,5 +123,26 @@ func TestAPeriodClosesOnce(t *testing.T) {
 	p.statuses["2026-02"] = app.PeriodClosing
 	if err := app.ClosePeriod(t.Context(), p, ids.New(), "2026-02", "finance-b", v.of(p, "2026-02")); !errors.Is(err, app.ErrPeriodClosed) || v.calls != 0 {
 		t.Fatalf("ClosePeriod of a closing period = %v after %d verifications, want ErrPeriodClosed", err, v.calls)
+	}
+}
+
+// TestNothingPostsUpToTheLastClose (FR-15, ADR-0006): with June closed, a business date in June or before it is
+// ErrPeriodClosed, whatever the earlier month's status or whether it has a row; July and later take postings, and
+// so does any month of an entity that closed none.
+func TestNothingPostsUpToTheLastClose(t *testing.T) {
+	p := newPeriods()
+	p.statuses["2025-06"], p.statuses["2025-05"], p.statuses["2025-03"] = app.PeriodClosed, app.PeriodClosing, app.PeriodClosed
+	for _, d := range []domain.Date{{Year: 2025, Month: time.June, Day: 30}, {Year: 2025, Month: time.May, Day: 30}, {Year: 2025, Month: time.April, Day: 1}, {Year: 2019, Month: time.March, Day: 1}} {
+		if err := app.EnsureOpen(t.Context(), p, ids.New(), d); !errors.Is(err, app.ErrPeriodClosed) {
+			t.Errorf("EnsureOpen(%v) = %v, want ErrPeriodClosed", d, err)
+		}
+	}
+	for _, d := range []domain.Date{{Year: 2025, Month: time.July, Day: 1}, {Year: 2026, Month: time.January, Day: 1}} {
+		if err := app.EnsureOpen(t.Context(), p, ids.New(), d); err != nil {
+			t.Errorf("EnsureOpen(%v) = %v, want nil", d, err)
+		}
+	}
+	if err := app.EnsureOpen(t.Context(), newPeriods(), ids.New(), domain.Date{Year: 2019, Month: time.March, Day: 1}); err != nil {
+		t.Errorf("EnsureOpen with nothing closed = %v, want nil", err)
 	}
 }

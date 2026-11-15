@@ -49,7 +49,7 @@
                 }
               ]
             },
-            "description": "Asks to close a month of the entity (FR-37, US-14) and answers 202 with an `accounting.period_close` maker-checker request. When someone else with `accounting.periods.close` approves it, the period goes closing, its trial balance must sum zero in every currency and no reconciliation break may be open, and it is closed: from then on a posting with a business date in it is 409 `period_closed`. If a check fails, the request is left `failed` with why and the period stays open. A closed period never reopens. A period that is not a month is 400; one the business date has not left is 422 `period_not_ended`; one closed already is 409 `period_closed`. Idempotent by `Idempotency-Key`.\n\nPermission: `accounting.periods.close`"
+            "description": "Asks to close a month of the entity (FR-37, US-14) and answers 202 with an `accounting.period_close` maker-checker request. When someone else with `accounting.periods.close` approves it, the period goes closing, its trial balance must sum zero in every currency and no reconciliation break may be open, and it is closed: from then on a posting with a business date in it or before it is 409 `period_closed`. If a check fails, the request is left `failed` with why and the period stays open. A closed period never reopens. A period that is not a month is 400; one the business date has not left is 422 `period_not_ended`; one closed already is 409 `period_closed`. Idempotent by `Idempotency-Key`.\n\nPermission: `accounting.periods.close`"
           }
         }
       ]

@@ -156,7 +156,7 @@ var problems = []struct {
 	{ledger.ErrAmountExceedsHold, unprocessable("amount_exceeds_hold", "The amount exceeds the held amount")},
 	{ledger.ErrInvalidHold, unprocessable("invalid_hold", "Invalid hold data")},
 	{ledger.ErrTransactionNotFound, notFound},
-	{ledger.ErrPeriodClosed, conflict("period_closed", "The accounting period of the business date is closed")},
+	{ledger.ErrPeriodClosed, conflict("period_closed", "The business date falls in a closed accounting period or before one")},
 	{ledger.ErrAlreadyReversed, conflict("already_reversed", "The transaction is already reversed")},
 	// access
 	{access.ErrForbidden, forbidden},

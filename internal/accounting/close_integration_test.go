@@ -234,6 +234,50 @@ func TestAPostingThatCheckedBeforeTheCloseIsRefusedAfterIt(t *testing.T) {
 	}
 }
 
+// TestABackdatedPostingThatCheckedBeforeALaterCloseIsRefusedAfterIt (Q-76 b): a posting into January that checked
+// before February closed waits for the close, which holds the entity's back-dated lock, and meets it closed.
+func TestABackdatedPostingThatCheckedBeforeALaterCloseIsRefusedAfterIt(t *testing.T) {
+	w := newCloseWorld(t)
+	posting := make(chan error, 1)
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(t.Context(), `SELECT pg_advisory_xact_lock(calendar.period_lock_key($1, 'backdated'))`, w.entity); err != nil {
+			return err
+		}
+		go func() {
+			posting <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error { return w.postIn(t, tx, "2026-01-15") })
+		}()
+		waitsForThePeriod(t, w.entity, "backdated")
+		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.periods (legal_entity_id, period, status, closed_at, closed_by)
+			VALUES ($1, '2026-02', 'closed', clock_timestamp(), 'finance-b')`, w.entity)
+		return err
+	})
+
+	if err := <-posting; !errors.Is(err, ledger.ErrPeriodClosed) {
+		t.Fatalf("posting = %v, want %v", err, ledger.ErrPeriodClosed)
+	}
+}
+
+// TestACloseWaitsForTheBackdatedPostingsInFlight (Q-76 b): the close of February waits for a posting into January
+// still in flight, and closes once it commits.
+func TestACloseWaitsForTheBackdatedPostingsInFlight(t *testing.T) {
+	w := newCloseWorld(t)
+	closed := make(chan error, 1)
+	if err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
+		if err := w.postIn(t, tx, "2026-01-15"); err != nil {
+			return err
+		}
+		go func() { closed <- w.close(t, "2026-02") }()
+		waitsForThePeriod(t, w.entity, "backdated")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := <-closed; err != nil {
+		t.Fatalf("the close after the posting = %v", err)
+	}
+}
+
 // waitsForThePeriod returns once someone waits for the advisory lock of the entity's period.
 func waitsForThePeriod(t *testing.T, entity ids.ID, period string) {
 	t.Helper()

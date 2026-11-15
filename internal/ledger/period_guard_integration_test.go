@@ -47,20 +47,23 @@ func depositOn(t *testing.T, entity ids.ID, cash, deposit ledger.Account, busine
 // in2025 is day d of month m of 2025, the year of registeredEntity's calendar.
 func in2025(m time.Month, d int) time.Time { return time.Date(2025, m, d, 0, 0, 0, 0, time.UTC) }
 
-// TestAPostingInAClosedPeriodIsRejected (FR-15): with a business date in June, closed, the posting is
-// ErrPeriodClosed and leaves nothing; in May (closing), July (open) and August (no row) it goes through.
+// TestAPostingInAClosedPeriodIsRejected (FR-15, ADR-0006): with a business date in June, closed, or before it (May,
+// closing; April and 2019, months without a row), the posting is ErrPeriodClosed and leaves nothing; in July (open)
+// and August (no row) it goes through.
 func TestAPostingInAClosedPeriodIsRejected(t *testing.T) {
 	entity, cash, deposit := registeredEntity(t)
 
-	_, _, err := postRef(t, depositOn(t, entity, cash, deposit, in2025(time.June, 30)))
-
-	if !errors.Is(err, ledger.ErrPeriodClosed) {
-		t.Fatalf("posting in June = %v, want ErrPeriodClosed", err)
+	for _, d := range []time.Time{
+		in2025(time.June, 30), in2025(time.May, 30), in2025(time.April, 30), time.Date(2019, time.March, 1, 0, 0, 0, 0, time.UTC),
+	} {
+		if _, _, err := postRef(t, depositOn(t, entity, cash, deposit, d)); !errors.Is(err, ledger.ErrPeriodClosed) {
+			t.Errorf("posting on %s = %v, want ErrPeriodClosed", d.Format(time.DateOnly), err)
+		}
 	}
 	if b := balanceOf(t, cash); b.Posted.Units() != 0 {
-		t.Fatalf("balance = %+v, the rejected posting should not have posted", b)
+		t.Fatalf("balance = %+v, the rejected postings should not have posted", b)
 	}
-	for _, d := range []time.Time{in2025(time.May, 30), in2025(time.July, 7), in2025(time.August, 1)} {
+	for _, d := range []time.Time{in2025(time.July, 7), in2025(time.August, 1)} {
 		if _, _, err := postRef(t, depositOn(t, entity, cash, deposit, d)); err != nil {
 			t.Errorf("posting on %s = %v, the period is not closed", d.Format(time.DateOnly), err)
 		}
@@ -136,24 +139,24 @@ func closePeriod(t *testing.T, entity ids.ID, period string) {
 	})
 }
 
-// TestARetryAfterTheCloseReturnsTheOriginal (FR-11): what was posted in April stays idempotent after
-// April is closed: the posting's retry returns the original and the reversal's, the reversal.
+// TestARetryAfterTheCloseReturnsTheOriginal (FR-11): what was posted in July stays idempotent after
+// July is closed: the posting's retry returns the original and the reversal's, the reversal.
 func TestARetryAfterTheCloseReturnsTheOriginal(t *testing.T) {
 	entity, cash, deposit := registeredEntity(t)
-	april := in2025(time.April, 30)
-	in := depositOn(t, entity, cash, deposit, april)
+	july := in2025(time.July, 7)
+	in := depositOn(t, entity, cash, deposit, july)
 	original, _ := mustPostRef(t, in)
-	reverseApril := ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: reason, Actor: "operator", Channel: "api", BusinessDate: april}
-	reversal, err := tryReverse(t, reverseApril)
+	reverseJuly := ledger.ReverseInput{LegalEntityID: entity, TransactionID: original.ID, Reason: reason, Actor: "operator", Channel: "api", BusinessDate: july}
+	reversal, err := tryReverse(t, reverseJuly)
 	if err != nil {
 		t.Fatal(err)
 	}
-	closePeriod(t, entity, "2025-04")
+	closePeriod(t, entity, "2025-07")
 
 	if again, duplicate := mustPostRef(t, in); !duplicate || again.ID != original.ID {
 		t.Errorf("posting retry = %s (duplicate %v), want the original %s", again.ID, duplicate, original.ID)
 	}
-	if again, err := tryReverse(t, reverseApril); !errors.Is(err, ledger.ErrAlreadyReversed) || again.ID != reversal.ID {
+	if again, err := tryReverse(t, reverseJuly); !errors.Is(err, ledger.ErrAlreadyReversed) || again.ID != reversal.ID {
 		t.Errorf("reversal retry = %s, %v; want the reversal %s with ErrAlreadyReversed", again.ID, err, reversal.ID)
 	}
 }

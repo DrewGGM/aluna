@@ -125,7 +125,7 @@ func Post(ctx context.Context, store PostingStore, guard PeriodGuard, events Eve
 	return posted, nil
 }
 
-// PeriodGuard rejects posting with a business date inside a closed period (FR-15).
+// PeriodGuard rejects posting with a business date the calendar has closed (FR-15).
 type PeriodGuard interface {
 	EnsureOpen(ctx context.Context, entity ids.ID, businessDate time.Time) error
 }

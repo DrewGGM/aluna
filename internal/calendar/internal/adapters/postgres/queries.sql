@@ -9,10 +9,15 @@ UPDATE calendar.legal_entities SET business_date = @next WHERE id = @id AND busi
 -- name: PeriodStatus :one
 SELECT status FROM calendar.periods WHERE legal_entity_id = @legal_entity_id AND period = @period;
 
--- Takes the period's advisory lock until the transaction ends, exclusive: the postings in flight in it end first,
--- and the rest wait for the close (migration 0029 takes it shared on every transaction).
+-- name: LastClosedPeriod :one
+SELECT coalesce(max(period), '')::text AS period FROM calendar.periods WHERE legal_entity_id = @legal_entity_id AND status = 'closed';
+
+-- Takes the period's advisory lock and the entity's back-dated lock until the transaction ends, exclusive: the
+-- postings in flight in the period or before it end first, and the rest wait for the close (migrations 0029 and 0043
+-- take them shared).
 -- name: LockPeriod :exec
-SELECT pg_advisory_xact_lock(calendar.period_lock_key(@legal_entity_id, @period));
+SELECT pg_advisory_xact_lock(calendar.period_lock_key(@legal_entity_id, @period)),
+    pg_advisory_xact_lock(calendar.period_lock_key(@legal_entity_id, 'backdated'));
 
 -- A period without a row is open; one that is not open stays as it is, and no row changes.
 -- name: MarkPeriodClosing :execrows

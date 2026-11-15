@@ -20,7 +20,7 @@ const (
 	PeriodClosed  PeriodStatus = "closed"
 )
 
-// ErrPeriodClosed means a business date inside a closed period: nothing is posted.
+// ErrPeriodClosed means a business date in a closed period or before one: nothing is posted.
 var ErrPeriodClosed = errors.New("accounting period closed")
 
 // PeriodStore reads the status of periods.
@@ -41,15 +41,22 @@ func PeriodStatusOf(ctx context.Context, store PeriodStore, entity ids.ID, d dom
 	return status, nil
 }
 
-// EnsureOpen is ErrPeriodClosed if d falls in a closed period. A period that is closing still accepts
-// postings (the closing adjustments).
-func EnsureOpen(ctx context.Context, store PeriodStore, entity ids.ID, d domain.Date) error {
-	status, err := PeriodStatusOf(ctx, store, entity, d)
+// ClosedPeriodStore reads the latest closed period.
+type ClosedPeriodStore interface {
+	// LastClosedPeriod is the entity's latest closed period, yyyy-mm, or "" if none is.
+	LastClosedPeriod(ctx context.Context, entity ids.ID) (string, error)
+}
+
+// EnsureOpen is ErrPeriodClosed if d falls in the entity's last closed period or before it, a month without a row
+// included (FR-15, ADR-0006: back-dating only up to the last close). The database refuses the same (migration 0043),
+// after the locks that order it with a close.
+func EnsureOpen(ctx context.Context, store ClosedPeriodStore, entity ids.ID, d domain.Date) error {
+	last, err := store.LastClosedPeriod(ctx, entity)
 	if err != nil {
 		return err
 	}
-	if status == PeriodClosed {
-		return fmt.Errorf("%w: %s", ErrPeriodClosed, periodOf(d))
+	if period := periodOf(d); period <= last {
+		return fmt.Errorf("%w: %s, and %s is closed", ErrPeriodClosed, period, last)
 	}
 	return nil
 }

@@ -123,9 +123,9 @@ type Calendar interface {
 	BusinessDate(ctx context.Context, q postgres.Querier, legalEntity ids.ID) (calendar.Date, error)
 }
 
-// PeriodGuard rejects posting with a business date inside a closed period (FR-15).
+// PeriodGuard rejects posting with a business date the calendar has closed (FR-15).
 type PeriodGuard interface {
-	// EnsureOpen is calendar.ErrPeriodClosed if d falls in a closed period of the entity.
+	// EnsureOpen is calendar.ErrPeriodClosed if the entity's calendar has closed d (calendar.Service.EnsureOpen).
 	EnsureOpen(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d calendar.Date) error
 }
 
@@ -202,7 +202,7 @@ type periodGuard struct {
 	q   postgres.Querier
 }
 
-// EnsureOpen is calendar.ErrPeriodClosed if businessDate's calendar day falls in a closed period.
+// EnsureOpen is calendar.ErrPeriodClosed if the calendar has closed businessDate's calendar day.
 func (g periodGuard) EnsureOpen(ctx context.Context, entity ids.ID, businessDate time.Time) error {
 	return g.cal.EnsureOpen(ctx, g.q, entity, calendar.DateOf(businessDate))
 }

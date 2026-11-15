@@ -321,8 +321,10 @@ nocturno.
   de negocio.
 - **Cierre de periodo.** Un mes que la fecha de negocio ya dejó atrás se cierra con
   `POST /v1/accounting-periods/{period}/closure` (maker-checker). Al aprobarse, su balance de prueba debe
-  sumar cero por moneda y no puede haber breaks abiertos; después, todo asiento con fecha de negocio en él es
-  409 `period_closed`, y un periodo cerrado no se reabre.
+  sumar cero por moneda y no puede haber breaks abiertos; después, todo asiento con fecha de negocio en él o
+  antes, aunque ese mes no tenga fila, es 409 `period_closed`, y un periodo cerrado no se reabre. La base lo
+  refuerza (`0043_backdated_postings.sql`): un asiento con fecha anterior al mes de la entidad toma un lock de la
+  entidad que el cierre toma exclusivo, así que un cierre espera a los asientos retroactivos en curso.
 - **Extractos.** Con el periodo cerrado, `deposits.statements.generate` genera el extracto del mes de cada
   cuenta. `GET /v1/deposit-accounts/{id}/statements/{period}` lo devuelve como JSON canónico con su
   `content_hash` (SHA-256), que no cambia.

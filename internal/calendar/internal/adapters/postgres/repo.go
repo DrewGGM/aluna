@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	_ app.Store        = (*Store)(nil)
-	_ app.PeriodStore  = (*Store)(nil)
-	_ app.PeriodCloser = (*Store)(nil)
-	_ app.EntityStore  = (*Store)(nil)
+	_ app.Store             = (*Store)(nil)
+	_ app.PeriodStore       = (*Store)(nil)
+	_ app.PeriodCloser      = (*Store)(nil)
+	_ app.ClosedPeriodStore = (*Store)(nil)
+	_ app.EntityStore       = (*Store)(nil)
 )
 
 // Store implements calendar persistence over a connection or a transaction.
@@ -72,6 +73,15 @@ func (s *Store) PeriodStatus(ctx context.Context, entity ids.ID, period string) 
 		return "", false, fmt.Errorf("read period %s: %w", period, err)
 	}
 	return app.PeriodStatus(status), true, nil
+}
+
+// LastClosedPeriod is the entity's latest closed period, yyyy-mm, or "" if none is.
+func (s *Store) LastClosedPeriod(ctx context.Context, entity ids.ID) (string, error) {
+	period, err := s.q.LastClosedPeriod(ctx, entity)
+	if err != nil {
+		return "", fmt.Errorf("read the last closed period: %w", err)
+	}
+	return period, nil
 }
 
 // MarkClosing moves the entity's period from open, or no row, to closing; false if it was not open. It holds the

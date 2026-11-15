@@ -148,8 +148,8 @@ func (s *Service) ClosePeriod(ctx context.Context, tx postgres.Tx, legalEntity i
 	return app.ClosePeriod(ctx, pg.NewStore(tx), legalEntity, period, by, verify)
 }
 
-// EnsureOpen is ErrPeriodClosed if d falls in a closed period of the entity: the ledger asks for it
-// before posting. It reads without locking, like BusinessDate.
+// EnsureOpen is ErrPeriodClosed if d falls in the entity's last closed period or before it (app.EnsureOpen): the
+// ledger asks for it before posting. It reads without locking, like BusinessDate.
 func (s *Service) EnsureOpen(ctx context.Context, q postgres.Querier, legalEntity ids.ID, d Date) error {
 	return app.EnsureOpen(ctx, pg.NewStore(q), legalEntity, d)
 }

@@ -74,17 +74,17 @@ func (s Store) LockHeldIn(ctx context.Context, entity ids.ID, ledgerAccounts []i
 	return held, nil
 }
 
-// SetStatus moves account a to status to, with a's last customer activity, and records the change with its
-// actor.
+// SetStatus records the change of account a to status to with its actor, and moves it there with a's last customer
+// activity: the database takes the status only with its row in the history (migration 0045).
 func (s Store) SetStatus(ctx context.Context, a domain.Account, to domain.Status, actor string) error {
-	if _, err := s.q.Exec(ctx, `UPDATE deposits.accounts SET status = $2, last_customer_activity_on = $3 WHERE id = $1`,
-		a.ID, to, a.LastCustomerActivityOn.Time()); err != nil {
-		return fmt.Errorf("move deposit account %s to %s: %w", a.ID, to, err)
-	}
 	_, err := s.q.Exec(ctx, `INSERT INTO deposits.status_changes (account_id, from_status, to_status, actor) VALUES ($1, $2, $3, $4)`,
 		a.ID, a.Status, to, actor)
 	if err != nil {
 		return fmt.Errorf("record the status change of deposit account %s: %w", a.ID, err)
+	}
+	if _, err := s.q.Exec(ctx, `UPDATE deposits.accounts SET status = $2, last_customer_activity_on = $3 WHERE id = $1`,
+		a.ID, to, a.LastCustomerActivityOn.Time()); err != nil {
+		return fmt.Errorf("move deposit account %s to %s: %w", a.ID, to, err)
 	}
 	return nil
 }

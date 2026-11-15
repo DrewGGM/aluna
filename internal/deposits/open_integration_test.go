@@ -426,7 +426,8 @@ func (w world) cash(t *testing.T) ids.ID {
 }
 
 // TestTheDatabaseGuardsTheAccounts: even as the tables' owner, an account is not deleted or truncated, its
-// identity does not change, a closed one does not change and its history is not touched.
+// identity does not change, a closed one does not change, its status does not change without its row in the history
+// of the same transaction, and its history is not touched.
 func TestTheDatabaseGuardsTheAccounts(t *testing.T) {
 	w := newWorld(t)
 	savings, _ := w.product(t, "valid-savings.json", true)
@@ -441,6 +442,12 @@ func TestTheDatabaseGuardsTheAccounts(t *testing.T) {
 	if err := w.change(t, closed.ID, deposits.Closed); err != nil {
 		t.Fatal(err)
 	}
+	// an active → frozen of another transaction in the history does not stand for a new one
+	for _, to := range []deposits.Status{deposits.Frozen, deposits.Active} {
+		if err := w.change(t, open.ID, to); err != nil {
+			t.Fatal(err)
+		}
+	}
 	expectProhibited(t, []prohibited{
 		{"delete", `DELETE FROM deposits.accounts WHERE id = '` + open.ID.String() + `'`, "never deleted"},
 		{"change the party", `UPDATE deposits.accounts SET party_id = gen_random_uuid() WHERE id = '` + open.ID.String() + `'`, "only the status"},
@@ -450,9 +457,20 @@ func TestTheDatabaseGuardsTheAccounts(t *testing.T) {
 		{"change the opening date", `UPDATE deposits.accounts SET opened_on = '2020-01-01' WHERE id = '` + open.ID.String() + `'`, "only the status"},
 		{"truncate the accounts", `TRUNCATE deposits.accounts CASCADE`, "never updated, deleted or truncated"},
 		{"reopen", `UPDATE deposits.accounts SET status = 'active' WHERE id = '` + closed.ID.String() + `'`, "is closed"},
+		{"change the status without its history", `UPDATE deposits.accounts SET status = 'frozen' WHERE id = '` + open.ID.String() + `'`, "without its status change"},
+		{"change the status with the history of another origin", withHistory(open.ID, "dormant", "frozen"), "without its status change"},
+		{"change the status with the history of another destination", withHistory(open.ID, "active", "closed"), "without its status change"},
 		{"erase the history", `DELETE FROM deposits.status_changes WHERE account_id = '` + closed.ID.String() + `'`, "never updated, deleted or truncated"},
 		{"rewrite the history", `UPDATE deposits.status_changes SET actor = 'other' WHERE account_id = '` + closed.ID.String() + `'`, "never updated, deleted or truncated"},
 	})
+}
+
+// withHistory records a change of account id from from to to, and moves it from active to frozen in the same
+// transaction.
+func withHistory(id ids.ID, from, to string) string {
+	return `INSERT INTO deposits.status_changes (account_id, from_status, to_status, actor)
+		VALUES ('` + id.String() + `', '` + from + `', '` + to + `', 'tester');
+		UPDATE deposits.accounts SET status = 'frozen' WHERE id = '` + id.String() + `'`
 }
 
 // prohibited is a statement the database must reject, even from the tables' owner, with its message.

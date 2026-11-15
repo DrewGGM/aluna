@@ -456,6 +456,10 @@ Aplícalas en una ventana de mantenimiento, con la API fuera de rotación: tarda
 tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y migrándolo (ver
 [Restauración PITR](runbook.md#restauración-pitr)).
 
+`0045_status_change_recorded.sql` exige el `api` y el `worker` de su misma versión: los anteriores cambian el
+estado de una cuenta de depósito antes de escribir su historial, y la base lo rechaza. Para volver a una versión
+anterior, baja primero esa migración.
+
 `0041_volume_indexes.sql` no necesita ventana: crea sus índices `CONCURRENTLY`, fuera de una transacción, y
 las escrituras siguen. Si se interrumpe, por ejemplo porque una transacción larga lo hace esperar más que el
 `lock_timeout` de la migración, puede dejar un índice inválido que la siguiente corrida daría por hecho.

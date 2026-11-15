@@ -337,7 +337,11 @@ func TestAFailingEntityDoesNotStopTheOthers(t *testing.T) {
 			if _, err := tx.Exec(ctx, `SET LOCAL ROLE NONE`); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `UPDATE deposits.accounts SET status = 'closed' WHERE legal_entity_id = $1`, broken.entity)
+			if _, err := tx.Exec(ctx, `INSERT INTO deposits.status_changes (account_id, from_status, to_status, actor)
+				SELECT id, status, 'closed', 'tester' FROM deposits.accounts WHERE legal_entity_id = $1 AND status <> 'closed'`, broken.entity); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `UPDATE deposits.accounts SET status = 'closed' WHERE legal_entity_id = $1 AND status <> 'closed'`, broken.entity)
 			return err
 		})
 		if err != nil {

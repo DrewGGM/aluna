@@ -33,6 +33,16 @@ func TestNamesCompareAsScreeningDoes(t *testing.T) {
 	}
 }
 
+// TestAnEntryIsItsBestHit: a subject with two names close to the same entry's is one hit, with the closer name's
+// score.
+func TestAnEntryIsItsBestHit(t *testing.T) {
+	x := NewIndex([]Entry{{List: "ofac_sdn", ID: "4108", Names: []string{"RODRIGUEZ OREJUELA, Miguel Angel"}}})
+	hits := x.Match([]string{"Miguel Angel Rodriguez Orejuela", "Miguel Angel Rodriguez Orejeula"}, nil, 0.92, func(string) bool { return true })
+	if len(hits) != 1 || hits[0].Score != 1 {
+		t.Fatalf("hits = %+v, want one, of the exact name", hits)
+	}
+}
+
 // TestJaroWinklerIsTheKnownSimilarity: the textbook pairs give the textbook values.
 func TestJaroWinklerIsTheKnownSimilarity(t *testing.T) {
 	for _, tc := range []struct {

@@ -60,11 +60,8 @@ func Words(name string) []string {
 }
 
 // documentKeys are number as documents are compared: capitals and digits only, so that "16.215.230" is
-// "16215230"; and, for a NIT with its check digit, the number without it too, so that a NIT matches with and
-// without it. A NIT is a number whose last digit is the DIAN check digit of the others, written apart from them
-// ("16215230-1"), or run on in a number that is no cédula: of 10 digits from 8 or 9 on, a company's, or of 9 digits
-// from 1 to 7 on, a person's (no cédula has 9 digits). A 10-digit number from 1 on is a cédula, whose last digit is
-// a check digit for one cédula in eleven: taken as a NIT, it would match another person's number.
+// "16215230"; and, for a NIT with its check digit (isNIT), the number without it too, so that a NIT matches with
+// and without it.
 func documentKeys(number string) []string {
 	key := strings.Map(func(r rune) rune {
 		r = unicode.ToUpper(r)
@@ -83,18 +80,22 @@ func documentKeys(number string) []string {
 	}
 }
 
-// isNIT reports whether key, a document's capitals and digits, is a NIT with its check digit: apart says whether
-// the check digit was written apart from the others.
+// isNIT reports whether key, a document's capitals and digits, is a NIT with its check digit: digits whose last one
+// is the DIAN check digit of the others, written apart from them (apart, "16215230-1") or run on in a number that
+// is no cédula (runOnNIT).
 func isNIT(key string, apart bool) bool {
 	if strings.Trim(key, "0123456789") != "" || len(key) < 2 || len(key) > len(nitWeights)+1 {
 		return false
 	}
-	return (apart || noCedula(key)) && checkDigit(key[:len(key)-1]) == key[len(key)-1]
+	return (apart || runOnNIT(key)) && checkDigit(key[:len(key)-1]) == key[len(key)-1]
 }
 
-// noCedula reports whether digits, a document's, can be no cédula: 10 digits from 8 or 9 on, a company's NIT, or 9
-// digits from 1 to 7 on, a person's.
-func noCedula(digits string) bool {
+// runOnNIT reports whether digits, written without a separator, can only be a NIT with its check digit: 10 digits
+// from 8 or 9 on, a company's, or 9 digits from 1 to 7 on, a person's (no cédula has 9 digits). A 10-digit number
+// from 1 on is a cédula, whose last digit is a check digit for one cédula in eleven: taken as a NIT, it would match
+// another person's number. A 9-digit number from 8 or 9 on may be a company's NIT without its check digit, and is
+// left as written.
+func runOnNIT(digits string) bool {
 	return len(digits) == 10 && (digits[0] == '8' || digits[0] == '9') || len(digits) == 9 && digits[0] >= '1' && digits[0] <= '7'
 }
 

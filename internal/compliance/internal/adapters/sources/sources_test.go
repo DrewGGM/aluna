@@ -52,14 +52,14 @@ func byID(entries []matching.Entry, id string) matching.Entry {
 }
 
 // TestOFACIsReadWithItsAliasesAndDocuments (ADR-0018): an SDN entry has its name, the aliases of ALT.CSV and of
-// its remarks, and the documents of its remarks, each once.
+// its remarks, and the documents of its remarks, each once; a row without its number is no entry.
 func TestOFACIsReadWithItsAliasesAndDocuments(t *testing.T) {
 	ts := owner(t)
 
 	version, entries, err := OFAC(ts.Client(), ts.URL+"/SDN.CSV", ts.URL+"/ALT.CSV").Fetch(t.Context())
 
 	if err != nil || len(entries) != 3 || version == "" {
-		t.Fatalf("OFAC = %d entries, version %q (%v), want the 3 of the excerpt", len(entries), version, err)
+		t.Fatalf("OFAC = %d entries, version %q (%v), want the 3 of the excerpt with a number", len(entries), version, err)
 	}
 	if got := byID(entries, "36").Names; !slices.Equal(got, []string{"AEROCARIBBEAN AIRLINES", "AERO-CARIBBEAN"}) {
 		t.Errorf("names of 36 = %v, want its own and its ALT.CSV alias", got)

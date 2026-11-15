@@ -131,16 +131,15 @@ WHERE id = @id;
 SELECT posted_xact, entry_id FROM ledger.async_cursor FOR UPDATE;
 
 -- The aggregation horizon: the xmin of a snapshot of the server, the oldest transaction in progress (this one's
--- included) or, with none, the next to finish. Every transaction below it has committed or aborted and adds no
--- entries.
+-- included, since its lock on the cursor gave it an xid). Every transaction below it has committed or aborted and
+-- adds no entries.
 -- name: AggregationHorizon :one
 SELECT pg_snapshot_xmin(pg_current_snapshot())::xid8 AS horizon;
 
 -- Async account entries after the cursor, in (posted_xact, id) order, only from database transactions below the
 -- horizon, read before this statement, so it sees all of them. It walks transactions by posted_xact and reads
--- each one's entries by transaction_id: with a direct join,
--- the planner enters through the async account and reads its whole history on every batch. OFFSET 0
--- keeps it from flattening the subquery and going back to that plan.
+-- each one's entries by transaction_id: with a direct join, the planner enters through the async account and reads
+-- its whole history on every batch. OFFSET 0 keeps it from flattening the subquery and going back to that plan.
 -- name: AsyncEntriesAfter :many
 SELECT t.posted_xact, e.id, e.account_id, e.currency, e.amount
 FROM ledger.transactions t

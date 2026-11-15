@@ -140,8 +140,8 @@ SELECT pg_snapshot_xmin(pg_current_snapshot())::xid8 AS horizon
 `
 
 // The aggregation horizon: the xmin of a snapshot of the server, the oldest transaction in progress (this one's
-// included) or, with none, the next to finish. Every transaction below it has committed or aborted and adds no
-// entries.
+// included, since its lock on the cursor gave it an xid). Every transaction below it has committed or aborted and
+// adds no entries.
 func (q *Queries) AggregationHorizon(ctx context.Context) (uint64, error) {
 	row := q.db.QueryRow(ctx, aggregationHorizon)
 	var horizon uint64
@@ -181,9 +181,8 @@ type AsyncEntriesAfterRow struct {
 
 // Async account entries after the cursor, in (posted_xact, id) order, only from database transactions below the
 // horizon, read before this statement, so it sees all of them. It walks transactions by posted_xact and reads
-// each one's entries by transaction_id: with a direct join,
-// the planner enters through the async account and reads its whole history on every batch. OFFSET 0
-// keeps it from flattening the subquery and going back to that plan.
+// each one's entries by transaction_id: with a direct join, the planner enters through the async account and reads
+// its whole history on every batch. OFFSET 0 keeps it from flattening the subquery and going back to that plan.
 func (q *Queries) AsyncEntriesAfter(ctx context.Context, arg AsyncEntriesAfterParams) ([]AsyncEntriesAfterRow, error) {
 	rows, err := q.db.Query(ctx, asyncEntriesAfter,
 		arg.PostedXact,

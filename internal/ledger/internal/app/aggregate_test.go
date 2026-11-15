@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"math"
+	"slices"
 	"testing"
 
 	"github.com/DrewGGM/aluna/internal/ids"
@@ -41,23 +43,26 @@ func TestTheCursorMovesWhereTheStoreSays(t *testing.T) {
 		t.Fatal(err)
 	}
 	account, at := ids.New(), AsyncCursor{Xact: 10, EntryID: 7}
+	batch := []domain.EntryInput{{AccountID: account, Amount: money.New(-300, cop)}, {AccountID: account, Amount: money.New(100, cop)}}
 	for name, c := range map[string]struct {
-		batch      []domain.EntryInput
-		to         AsyncCursor
-		n          int
-		moved, sum int64
+		batch []domain.EntryInput
+		to    AsyncCursor
+		n     int
+		moves bool
+		sum   int64
 	}{
-		"a batch":                     {[]domain.EntryInput{{AccountID: account, Amount: money.New(-300, cop)}, {AccountID: account, Amount: money.New(100, cop)}}, AsyncCursor{Xact: 12, EntryID: 9}, 2, 1, -200},
-		"an empty batch ahead":        {nil, AsyncCursor{Xact: 20, EntryID: 1<<63 - 1}, 0, 1, 0},
-		"an empty batch where it was": {nil, at, 0, 0, 0},
+		"a batch":                     {batch: batch, to: AsyncCursor{Xact: 12, EntryID: 9}, n: 2, moves: true, sum: -200},
+		"an empty batch ahead":        {to: AsyncCursor{Xact: 20, EntryID: math.MaxInt64}, moves: true},
+		"an empty batch where it was": {to: at},
 	} {
 		store := &aggregation{cursor: at, to: c.to, batch: c.batch, added: map[ids.ID]int64{}}
 		n, err := AggregateAsyncBalances(t.Context(), store, 100)
-		if err != nil || n != c.n || int64(len(store.moved)) != c.moved || store.added[account] != c.sum {
-			t.Errorf("%s: %d entries (%v), moved %v, added %d; want %d, %d moves, %d", name, n, err, store.moved, store.added[account], c.n, c.moved, c.sum)
+		want := []AsyncCursor(nil)
+		if c.moves {
+			want = []AsyncCursor{c.to}
 		}
-		if c.moved == 1 && store.moved[0] != c.to {
-			t.Errorf("%s: moved to %v, want %v", name, store.moved[0], c.to)
+		if err != nil || n != c.n || !slices.Equal(store.moved, want) || store.added[account] != c.sum {
+			t.Errorf("%s: %d entries (%v), moved %v, added %d; want %d, moved %v, %d", name, n, err, store.moved, store.added[account], c.n, want, c.sum)
 		}
 	}
 }

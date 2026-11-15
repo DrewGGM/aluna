@@ -219,6 +219,59 @@ func TestEntityCreateChecksItsFlags(t *testing.T) {
 // railSecret is a secret of the simulated rail as long as the shortest it takes.
 const railSecret = "a secret of the simulated rail.."
 
+// expectListScreening checks that the environment configures the lists' screening: the api, the defaults and the
+// identity service's token; the worker, the UN list of the mirror and the others the official ones.
+func expectListScreening(t *testing.T) {
+	t.Helper()
+	l, err := listScreeningFromEnv()
+	if err != nil || l.Threshold != 0.92 || l.MaxAge != 48*time.Hour || l.IdentityToken != "t0k3n" {
+		t.Fatalf("screening = %+v (%v)", l, err)
+	}
+	s, err := listSourcesFromEnv()
+	if err != nil || s.UN != "https://mirror.example/consolidated.xml" || !strings.HasPrefix(s.OFACSDN, "https://sanctionslistservice.ofac.treas.gov/") {
+		t.Fatalf("sources = %+v (%v)", s, err)
+	}
+}
+
+// TestTheScreeningComesFromTheEnvironment (ADR-0018): without ALUNA_SCREENING_VENDOR the vendor is the fake one;
+// with lists, the api takes the identity service, the threshold and the maximum age, and the worker the official
+// lists unless a URL says otherwise; anything else is refused.
+func TestTheScreeningComesFromTheEnvironment(t *testing.T) {
+	for _, key := range []string{
+		"ALUNA_SCREENING_VENDOR", "ALUNA_SCREENING_IDENTITY_URL", "ALUNA_SCREENING_IDENTITY_TOKEN", "ALUNA_SCREENING_THRESHOLD",
+		"ALUNA_SCREENING_MAX_LIST_AGE_HOURS", "ALUNA_SCREENING_OFAC_SDN_URL", "ALUNA_SCREENING_OFAC_ALT_URL", "ALUNA_SCREENING_UN_URL",
+		"ALUNA_SCREENING_PEP_URL",
+	} {
+		t.Setenv(key, "")
+	}
+	l, err := listScreeningFromEnv()
+	s, err2 := listSourcesFromEnv()
+	if err != nil || err2 != nil || l != nil || s != nil {
+		t.Fatalf("the default = %+v, %+v (%v, %v), want the fake vendor", l, s, err, err2)
+	}
+
+	t.Setenv("ALUNA_SCREENING_VENDOR", "lists")
+	t.Setenv("ALUNA_SCREENING_IDENTITY_URL", "https://onboarding.example/identity")
+	t.Setenv("ALUNA_SCREENING_IDENTITY_TOKEN", "t0k3n")
+	t.Setenv("ALUNA_SCREENING_UN_URL", "https://mirror.example/consolidated.xml")
+	expectListScreening(t)
+
+	for key, value := range map[string]string{
+		"ALUNA_SCREENING_VENDOR": "vendorx", "ALUNA_SCREENING_THRESHOLD": "high", "ALUNA_SCREENING_MAX_LIST_AGE_HOURS": "two",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, value)
+			if _, err := listScreeningFromEnv(); !errors.Is(err, errScreening) {
+				t.Fatalf("%s=%s = %v, want errScreening", key, value, err)
+			}
+		})
+	}
+	t.Setenv("ALUNA_SCREENING_VENDOR", "vendorx")
+	if _, err := listSourcesFromEnv(); !errors.Is(err, errScreening) {
+		t.Fatalf("the worker with vendorx = %v, want errScreening", err)
+	}
+}
+
 // TestTheAuditAnchorComesFromTheEnvironment (ADR-0017): the anchor is a directory or an S3 bucket, exactly one of
 // them; a bucket needs its keys and a retention of whole days, from one to a century.
 func TestTheAuditAnchorComesFromTheEnvironment(t *testing.T) {

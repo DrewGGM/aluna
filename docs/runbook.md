@@ -276,7 +276,8 @@ llaves que todavía tienen y no volverían a arrancar. No hay modo degradado sin
 ## Falla del screening
 
 **Síntomas.** Parties que quedan `pending_screening` al registrarse, órdenes de pago `pending_screening`,
-`aluna_compliance_screening_circuit_transitions_total{state="open"}` que sube.
+`aluna_compliance_screening_circuit_transitions_total{state="open"}` que sube. Con listas restrictivas viejas
+el circuito no se abre: ver [El screening contra las listas](#el-screening-contra-las-listas).
 
 **Diagnóstico.** El screening falla cerrado: un error del proveedor, una respuesta que tarda más de 2 s o
 el circuito abierto dejan el caso pendiente, nunca limpio. El circuito se abre tras 5 fallas seguidas, no
@@ -292,9 +293,78 @@ llama al proveedor durante 30 s y luego deja pasar una consulta de prueba. Los c
   `pending_screening`. Una orden de pago despejada retiene sus fondos y sale a enviarse: con el GMF del
   momento y, si nombró una cotización, la comisión cotizada o la menor entre esa y la vigente, según
   `ALUNA_QUOTE_POLICY`; sin cotización, la comisión vigente. Una confirmada, o una despejada cuya cuenta ya no
-  tiene fondos, no está activa o pasaría un límite de su producto, queda `rejected` (`RR04`, `AM04`, `AC06` o `AM02`) sin retener nada. Una orden que nadie
-  resuelve en 7 días queda `rejected` (`SCREENING_EXPIRED`); resolver su caso después registra la decisión y
-  no la envía.
+  tiene fondos, no está activa o pasaría un límite de su producto, queda `rejected` (`RR04`, `AM04`, `AC06` o
+  `AM02`) sin retener nada. Una orden que nadie resuelve en 7 días queda `rejected` (`SCREENING_EXPIRED`);
+  resolver su caso después registra la decisión y no la envía.
+
+### El screening contra las listas
+
+Con `ALUNA_SCREENING_VENDOR=lists` (ADR-0018), el screening no llama a un proveedor: compara al sujeto con las
+listas mismas, como permite la SFC.
+- **OFAC SDN y la lista consolidada de la ONU** (obligatoria, Ley 1121 de 2006) se revisan para parties y
+  beneficiarios. **Los PEP** (Decreto 830 de 2021) solo para parties: un PEP pide debida diligencia al
+  vincularlo, no bloquea un pago.
+- **Cómo coincide un sujeto:** por un documento exacto, o por un nombre con una similitud desde
+  `ALUNA_SCREENING_THRESHOLD` (Jaro-Winkler sobre las palabras sin tildes, partículas ni orden). La
+  referencia del caso nombra las entradas y por qué coincidieron: `ofac_sdn:4108~0.95` por un nombre con
+  esa similitud, `pep_co:row-3nd6_dj5w-askv=document` por el documento. Un PEP se nombra por el id de la
+  fila de datos.gov.co (búscalo con `$where=:id='row-…'`), nunca por su documento, que no puede ir en el
+  caso ni en sus eventos.
+- **El servicio de identidad** es de la entidad: Aluna no guarda nombres ni documentos. La `api` lo llama con
+  `GET {ALUNA_SCREENING_IDENTITY_URL}/{entidad legal}/{party|key|account}/{referencia externa}` y
+  `Authorization: Bearer {ALUNA_SCREENING_IDENTITY_TOKEN}`: la entidad, porque la referencia de una party
+  solo es única dentro de ella, y `key` o `account` porque una llave y una cuenta pueden escribirse igual.
+  Debe responder en menos de 2 s, sin redirigir, con 200 y `{"names": ["..."], "documents": ["..."]}`, o
+  con 404 si no conoce al sujeto. Los nombres pueden llevar las tildes compuestas o aparte. Los documentos
+  van como números, sin tipo (`CC`, `NIT`); los puntos, guiones y espacios no cuentan. Un NIT coincide con
+  y sin su dígito de verificación cuando lo lleva aparte (`16215230-1`) o, pegado, si es de empresa (10
+  dígitos desde 8 o 9) o de persona (9 dígitos desde 1 a 7): una cédula de 10 dígitos nunca se recorta. Los
+  documentos de un sujeto sin nombre se comparan igual. De una party responde el sistema de
+  vinculación; de un beneficiario (su llave o su cuenta), el directorio del rail. Un sujeto que no conoce,
+  o del que no da ningún nombre, queda como posible coincidencia con la referencia `identity:unknown`.
+- **El worker descarga las listas cada 6 horas** (`compliance.lists.refresh`) de sus dueños, o de un espejo
+  con `ALUNA_SCREENING_*_URL`, y reemplaza la que cambió. No reemplaza una lista que llega vacía ni una que
+  llega con menos de la mitad de sus entradas: guarda la anterior y el job falla.
+- **La `api` lee las listas al arrancar y cada minuto.** Si no puede leerlas al arrancar, no arranca; si
+  falla una lectura posterior, lo registra en el log `reload the restrictive lists` y sigue con las que
+  tenía hasta que pasan de su antigüedad máxima.
+- **Con `ALUNA_SCREENING_VENDOR=fake`**, el valor por defecto, la `api` arranca con el log `screening with the
+  fake vendor`: ese proveedor despeja a casi todos y no sirve en producción.
+
+**Síntomas propios.** Todo screening queda pendiente con el caso sin referencia del proveedor: las listas
+faltan o pasaron de su antigüedad máxima, o el servicio de identidad no responde. Muchos casos con la
+referencia `identity:unknown` señalan sujetos que el servicio de identidad no conoce.
+
+**Diagnóstico.** La antigüedad de las listas, como dueño de las tablas:
+
+```sql
+SELECT list, version, entries, refreshed_at, now() - refreshed_at AS age FROM compliance.lists;
+```
+
+Una lista con más de `ALUNA_SCREENING_MAX_LIST_AGE_HOURS` horas (48 por defecto), o que falta, hace fallar
+cerrado todo screening que la revisa: la de PEP, solo el de parties, y sin abrir el circuito del proveedor,
+así que los pagos siguen. El error del job `compliance.lists.refresh` dice qué dueño no respondió o qué
+lista llegó vacía o encogida (ver [Cola River atascada](#cola-river-atascada)). Los casos de la última hora,
+por referencia:
+
+```sql
+SELECT coalesce(vendor_ref, '(sin respuesta)') AS ref, count(*) FROM compliance.cases
+WHERE created_at > now() - interval '1 hour' GROUP BY 1 ORDER BY 2 DESC;
+```
+
+Si los casos quedan sin respuesta con las listas al día en la base, busca primero el log `reload the
+restrictive lists` de la `api`: si aparece, la `api` no logra releerlas (permisos, pool, consultas lentas)
+y sus listas en memoria envejecen aunque la base esté al día; reiniciarla las vuelve a cargar o, si no
+puede, la deja sin arrancar con el error a la vista. Si no aparece, el que falla es el servicio de
+identidad: revisa sus logs y que responda en menos de 2 s.
+
+**Mitigación.**
+- Si un dueño no responde, el job lo reintenta en 6 horas y las otras listas se refrescan igual. Mientras
+  tanto, apunta su `ALUNA_SCREENING_*_URL` a un espejo interno con el mismo formato.
+- Si el servicio de identidad no conoce a un sujeto, la party o el pago quedan pendientes: revisa que su
+  referencia externa exista en el sistema de vinculación.
+- Ajustar el umbral cambia cuántos homónimos llegan a cumplimiento. Bájalo solo con cumplimiento, nunca para
+  despejar casos.
 
 ## Restauración PITR
 

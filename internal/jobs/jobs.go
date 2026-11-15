@@ -104,6 +104,14 @@ const (
 	webhooksTimeout  = 15 * time.Minute
 )
 
+// The restrictive lists (ADR-0018) are downloaded every six hours, so that screening, which refuses a list older
+// than its maximum age (48 hours by default), keeps working through a day of failed downloads. A run reads some
+// 25 MB from three owners.
+const (
+	listsInterval = 6 * time.Hour
+	listsTimeout  = 15 * time.Minute
+)
+
 // Sealing (ADR-0012) closes blocks of at most auditBlockSize records, sealRounds per run so it finishes
 // before the job's time limit; whatever is left goes to the next run.
 const (
@@ -130,6 +138,9 @@ type Deps struct {
 	Webhooks       *webhooks.Service
 	// WebhookSender is the client webhooks are sent with (webhooks.NewSender).
 	WebhookSender webhooks.Sender
+	// ListSources are where the restrictive lists are refreshed from, when screening reads them (ADR-0018); nil
+	// with the fake screening vendor, which reads none.
+	ListSources *compliance.ListSources
 }
 
 // Config is the worker's River configuration: the queues, the workers from Register, the periodic jobs
@@ -137,8 +148,9 @@ type Deps struct {
 func Config(deps Deps) *river.Config {
 	workers := river.NewWorkers()
 	Register(workers, deps)
+	periodic := addRefreshingLists(workers, deps, Periodic())
 	return &river.Config{
-		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: Periodic(),
+		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: periodic,
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1}, QueueControls: {MaxWorkers: 1},
 			QueueGL: {MaxWorkers: 1}, QueueWebhooks: {MaxWorkers: 1}, payments.Queue: {MaxWorkers: 4},
@@ -208,6 +220,18 @@ func deliveringWebhooks(deps Deps) *task[deliverWebhooks] {
 	}}
 }
 
+// addRefreshingLists is periodic with the refresh of the lists, whose worker it registers in w, if screening reads
+// them (deps.ListSources); periodic as it is otherwise.
+func addRefreshingLists(w *river.Workers, deps Deps, periodic []*river.PeriodicJob) []*river.PeriodicJob {
+	if deps.ListSources == nil {
+		return periodic
+	}
+	river.AddWorker(w, &task[refreshLists]{timeout: listsTimeout, run: func(ctx context.Context) error {
+		return compliance.RefreshLists(ctx, deps.UnitOfWork, *deps.ListSources)
+	}})
+	return append(periodic, every(listsInterval, refreshLists{}))
+}
+
 // expiringPendingPayments is the worker of expirePendingPayments.
 func expiringPendingPayments(deps Deps) *task[expirePendingPayments] {
 	return &task[expirePendingPayments]{run: func(ctx context.Context) error {
@@ -230,9 +254,9 @@ func holderOf(d *deposits.Service) compliance.HolderOf {
 	}
 }
 
-// Periodic are the periodic jobs. They also run at startup (RunOnStart): River's scheduler lives in the
-// leader's memory, and without it a worker that restarts more often than the interval would never run
-// them.
+// Periodic are the periodic jobs, but for the refresh of the restrictive lists, which only runs when screening
+// reads them (addRefreshingLists). They also run at startup (RunOnStart): River's scheduler lives in the leader's
+// memory, and without it a worker that restarts more often than the interval would never run them.
 func Periodic() []*river.PeriodicJob {
 	return []*river.PeriodicJob{
 		every(30*time.Second, expireHolds{}),
@@ -281,6 +305,12 @@ type aggregateAsync struct{}
 
 func (aggregateAsync) Kind() string                 { return "ledger.balances.aggregate" }
 func (aggregateAsync) InsertOpts() river.InsertOpts { return insertOpts(QueueLedger) }
+
+// refreshLists downloads the restrictive lists screening reads (compliance.RefreshLists).
+type refreshLists struct{}
+
+func (refreshLists) Kind() string                 { return "compliance.lists.refresh" }
+func (refreshLists) InsertOpts() river.InsertOpts { return insertOpts(river.QueueDefault) }
 
 // expirePendingPayments rejects the payments that waited for compliance too long (payments.ExpirePending).
 type expirePendingPayments struct{}

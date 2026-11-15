@@ -72,7 +72,12 @@ commands:
                              codes separated by commas; empty refunds none), and
                              ALUNA_GMF_RESTORE_EXEMPTION (same_month, the default, or never); and
                              the fees of a payment that waited for compliance, ALUNA_QUOTE_POLICY
-                             (lower_of, the default, of those quoted and the tariff, or honor)
+                             (lower_of, the default, of those quoted and the tariff, or honor);
+                             ALUNA_SCREENING_VENDOR is fake (the default, for development) or lists,
+                             which screens against the restrictive lists (ADR-0018) and asks
+                             ALUNA_SCREENING_IDENTITY_URL, with ALUNA_SCREENING_IDENTITY_TOKEN, who a
+                             subject is; ALUNA_SCREENING_THRESHOLD (0.92 by default) and
+                             ALUNA_SCREENING_MAX_LIST_AGE_HOURS (48 by default, up to 168)
   worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls, GL,
                              payments) on ALUNA_DATABASE_URL, anchoring blocks in
                              ALUNA_AUDIT_ANCHOR_DIR or, with Object Lock, in the S3 bucket at
@@ -83,7 +88,10 @@ commands:
                              elect a leader for the periodic jobs; it reads ALUNA_GMF_MODALITY,
                              the variables of what a payment gives back and ALUNA_SIMBREB_SECRET as
                              api does, and the simulated rail notifies ALUNA_SIMBREB_NOTIFY_URL
-                             (default http://localhost:8081)
+                             (default http://localhost:8081); with ALUNA_SCREENING_VENDOR=lists it
+                             refreshes the lists every 6 hours from their owners, or from
+                             ALUNA_SCREENING_OFAC_SDN_URL, ALUNA_SCREENING_OFAC_ALT_URL,
+                             ALUNA_SCREENING_UN_URL and ALUNA_SCREENING_PEP_URL
   audit verify --from N --to M
                              recomputes the audit chain of blocks N to M and checks it against
                              their anchors, read as worker anchors them
@@ -249,6 +257,7 @@ type apiConfig struct {
 	addr, railAddr, dsn string
 	issuer, audience    string
 	charging            charging
+	screening           *compliance.ListScreeningConfig // nil with the fake vendor
 	railSecret          string
 }
 
@@ -259,6 +268,9 @@ func apiConfigFromEnv() (apiConfig, error) {
 	}
 	var err error
 	if cfg.charging, err = chargingFromEnv(); err != nil {
+		return apiConfig{}, err
+	}
+	if cfg.screening, err = listScreeningFromEnv(); err != nil {
 		return apiConfig{}, err
 	}
 	if cfg.railSecret, err = railSecretFromEnv(); err != nil {
@@ -405,7 +417,7 @@ func runAPI(ctx context.Context, cfg apiConfig, verifier httpapi.TokenVerifier, 
 	defer unregister() // before the pool closes
 	uow := postgres.NewUnitOfWork(pool)
 	rail := payments.NewSimulatedRail("", []byte(cfg.railSecret), http.DefaultClient, log) // api only reads its notifications
-	api, err := newAPI(pool, uow, cfg.charging, authz.policy, rail)
+	api, err := newAPI(ctx, pool, uow, cfg, authz.policy, rail, log)
 	if err != nil {
 		log.Error("wire the modules", "error", err)
 		return 1
@@ -443,9 +455,11 @@ func closeAll(lns []net.Listener) error {
 	return errors.Join(errs...)
 }
 
-// newAPI wires the modules by hand over pool, with how the entity charges, the policy that says who approves each
-// maker-checker request and the payments rail.
-func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, c charging, policy *access.Policy, rail payments.Rail) (httpapi.API, error) {
+// newAPI wires the modules by hand over pool, while ctx lasts, with how cfg says the entity charges and screens,
+// the policy that says who approves each maker-checker request and the payments rail; it logs to log.
+func newAPI(ctx context.Context, pool *pgxpool.Pool, uow *postgres.UnitOfWork, cfg apiConfig, policy *access.Policy, rail payments.Rail,
+	log *slog.Logger,
+) (httpapi.API, error) {
 	events, err := outbox.New(pool)
 	if err != nil {
 		return httpapi.API{}, fmt.Errorf("configure the outbox: %w", err)
@@ -453,13 +467,16 @@ func newAPI(pool *pgxpool.Pool, uow *postgres.UnitOfWork, c charging, policy *ac
 	keys := idempotency.NewStore(pool)
 	calendarSvc := calendar.New(events, time.Now)
 	ledgerSvc := ledger.New(calendarSvc, events)
-	complianceSvc := compliance.New(events)
+	complianceSvc, err := complianceFor(ctx, cfg.screening, events, pool, log)
+	if err != nil {
+		return httpapi.API{}, err
+	}
 	partySvc := party.New(events, complianceSvc.PartyScreener())
 	complianceSvc.OnResolved(compliance.CaseParty, compliance.ResolvingParties(partySvc))
 	productSvc := products.New(events)
-	pricingSvc := pricing.New(productSvc, calendarSvc, c.gmf)
+	pricingSvc := pricing.New(productSvc, calendarSvc, cfg.charging.gmf)
 	depositSvc := deposits.New(ledgerSvc, partySvc, productSvc, calendarSvc, pricingSvc, events)
-	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, rail, c.payments)
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, rail, cfg.charging.payments)
 	if err != nil {
 		return httpapi.API{}, err
 	}
@@ -545,8 +562,12 @@ func workerCommand(ctx context.Context, stdout io.Writer) int {
 		log.Error("worker configuration", "error", err)
 		return 1
 	}
-	c, err := chargingFromEnv()
-	if err != nil {
+	cfg := workerConfig{dsn: dsn, records: records}
+	if cfg.charging, err = chargingFromEnv(); err != nil {
+		log.Error("worker configuration", "error", err)
+		return 1
+	}
+	if cfg.lists, err = listSourcesFromEnv(); err != nil {
 		log.Error("worker configuration", "error", err)
 		return 1
 	}
@@ -555,8 +576,18 @@ func workerCommand(ctx context.Context, stdout io.Writer) int {
 		log.Error("worker configuration", "error", err)
 		return 1
 	}
-	rail := payments.NewSimulatedRail(envOr("ALUNA_SIMBREB_NOTIFY_URL", "http://localhost:8081"), []byte(secret), &http.Client{}, log)
-	return runWorker(ctx, dsn, records, c, rail, log)
+	cfg.rail = payments.NewSimulatedRail(envOr("ALUNA_SIMBREB_NOTIFY_URL", "http://localhost:8081"), []byte(secret), &http.Client{}, log)
+	return runWorker(ctx, cfg, log)
+}
+
+// workerConfig is the configuration of aluna worker: its database, the audit service that seals, how the entity
+// charges, where the lists are refreshed from (nil with the fake screening vendor) and the payments rail.
+type workerConfig struct {
+	dsn      string
+	records  *audit.Service
+	charging charging
+	lists    *compliance.ListSources
+	rail     payments.Rail
 }
 
 var (
@@ -596,10 +627,10 @@ func auditFromEnv() (*audit.Service, error) {
 // runWorker connects to the database, wires the jobs by hand and runs River until ctx is canceled; payments go
 // through rail. It then stops taking jobs and waits up to shutdownTimeout for the running ones before
 // canceling them.
-func runWorker(ctx context.Context, dsn string, records *audit.Service, c charging, rail payments.Rail, log *slog.Logger) int {
+func runWorker(ctx context.Context, cfg workerConfig, log *slog.Logger) int {
 	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	pool, err := postgres.Open(openCtx, dsn)
+	pool, err := postgres.Open(openCtx, cfg.dsn)
 	if err != nil {
 		log.Error("could not connect to the database", "error", err)
 		return 1
@@ -607,7 +638,7 @@ func runWorker(ctx context.Context, dsn string, records *audit.Service, c chargi
 	defer pool.Close()
 	unregister := withMetrics(pool, log)
 	defer unregister() // before the pool closes
-	client, err := newWorker(pool, records, c, rail, log)
+	client, err := newWorker(pool, cfg, log)
 	if err != nil {
 		log.Error("configure the worker", "error", err)
 		return 1
@@ -622,9 +653,8 @@ func runWorker(ctx context.Context, dsn string, records *audit.Service, c chargi
 	return 0
 }
 
-// newWorker builds the worker's River client from the jobs configuration, wired by hand; c is how the entity
-// charges, and rail the payments rail.
-func newWorker(pool *pgxpool.Pool, records *audit.Service, c charging, rail payments.Rail, log *slog.Logger) (*river.Client[pgx.Tx], error) {
+// newWorker builds the worker's River client from the jobs configuration, wired by hand as cfg says.
+func newWorker(pool *pgxpool.Pool, cfg workerConfig, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	events, err := outbox.New(pool)
 	if err != nil {
 		return nil, err
@@ -634,19 +664,19 @@ func newWorker(pool *pgxpool.Pool, records *audit.Service, c charging, rail paym
 	productSvc := products.New(events)
 	complianceSvc := compliance.New(events)
 	parties := party.New(events, complianceSvc.PartyScreener()) // the jobs read parties, never register them
-	pricingSvc := pricing.New(productSvc, calendarSvc, c.gmf)
+	pricingSvc := pricing.New(productSvc, calendarSvc, cfg.charging.gmf)
 	depositSvc := deposits.New(ledgerSvc, parties, productSvc, calendarSvc, pricingSvc, events)
-	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, rail, c.payments) // the jobs send payments, never initiate them
+	paymentSvc, err := payments.New(ledgerSvc, depositSvc, complianceSvc, pricingSvc, events, pool, cfg.rail, cfg.charging.payments) // the jobs send payments, never initiate them
 	if err != nil {
 		return nil, err
 	}
-	cfg := jobs.Config(jobs.Deps{
+	riverCfg := jobs.Config(jobs.Deps{
 		UnitOfWork: postgres.NewUnitOfWork(pool), Ledger: ledgerSvc, Idempotency: idempotency.NewStore(pool), Outbox: events,
-		Audit: records, Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
-		Accounting: accounting.New(calendarSvc, events), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(),
+		Audit: cfg.records, Deposits: depositSvc, Payments: paymentSvc, Reconciliation: reconciliation.New(events),
+		Accounting: accounting.New(calendarSvc, events), Webhooks: webhooks.New(), WebhookSender: webhooks.NewSender(), ListSources: cfg.lists,
 	})
-	cfg.SoftStopTimeout, cfg.Logger = shutdownTimeout, log
-	client, err := river.NewClient(riverpgxv5.New(pool), cfg)
+	riverCfg.SoftStopTimeout, riverCfg.Logger = shutdownTimeout, log
+	client, err := river.NewClient(riverpgxv5.New(pool), riverCfg)
 	if err != nil {
 		return nil, fmt.Errorf("river client: %w", err)
 	}

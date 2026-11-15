@@ -1,4 +1,5 @@
-// Package fakescreening is the screening vendor of development and tests, until one is chosen (Q-16, D-2).
+// Package fakescreening is the screening vendor of development and tests; production screens against the lists
+// (app.ListScreening, ADR-0018).
 // It clears every subject except those whose external reference starts with one of its prefixes.
 package fakescreening
 

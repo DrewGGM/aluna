@@ -36,13 +36,14 @@ type (
 
 // Outcomes, subject kinds and case kinds.
 const (
-	OutcomeClear       = app.OutcomeClear
-	OutcomePending     = app.OutcomePending
-	SubjectBeneficiary = app.SubjectBeneficiary
-	CaseParty          = app.CaseParty
-	CasePayment        = app.CasePayment
-	CaseCleared        = app.CaseCleared
-	CaseConfirmed      = app.CaseConfirmed
+	OutcomeClear   = app.OutcomeClear
+	OutcomePending = app.OutcomePending
+	SubjectKey     = app.SubjectKey
+	SubjectAccount = app.SubjectAccount
+	CaseParty      = app.CaseParty
+	CasePayment    = app.CasePayment
+	CaseCleared    = app.CaseCleared
+	CaseConfirmed  = app.CaseConfirmed
 )
 
 // Errors of compliance.
@@ -75,10 +76,13 @@ type Service struct {
 	resolved map[CaseKind]Resolved
 }
 
-// New creates the service; it publishes its events to events. Its vendor is the fake one until a real one is
-// chosen (Q-16, D-2).
-func New(events Events) *Service {
-	return &Service{screener: app.NewScreener(fakescreening.Vendor{}, time.Now), events: events, resolved: map[CaseKind]Resolved{}}
+// New creates the service of development and tests, and of the worker, which never screens; it publishes its events
+// to events. Its vendor is the fake one: the api of production screens against the lists (NewWithLists).
+func New(events Events) *Service { return newService(fakescreening.Vendor{}, events) }
+
+// newService is the service that screens with vendor and publishes its events to events.
+func newService(vendor app.ScreeningPort, events Events) *Service {
+	return &Service{screener: app.NewScreener(vendor, time.Now), events: events, resolved: map[CaseKind]Resolved{}}
 }
 
 // OnResolved registers, during wiring, what resolving a case of kind does; registering it again replaces it.
@@ -97,6 +101,7 @@ func (s *Service) ScreenPayment(ctx context.Context, tx postgres.Tx, entity, ord
 }
 
 func (s *Service) screen(ctx context.Context, tx postgres.Tx, entity ids.ID, kind CaseKind, subjectID ids.ID, subject Subject) (Outcome, error) {
+	subject.LegalEntityID = entity
 	c, err := app.Open(ctx, pg.NewStore(tx), s.screener, entity, kind, subjectID, subject)
 	if err != nil {
 		return OutcomePending, err

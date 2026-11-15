@@ -14,8 +14,9 @@ dinero real. Antes hay que reemplazar cuatro piezas de desarrollo:
 
 - **Rail de pagos:** los pagos salen y entran por un rail simulado (`simbreb`); falta el conector del rail
   real y la liquidación de su cuenta clearing.
-- **Screening SARLAFT:** el proveedor de listas es un adaptador falso que despeja a casi todos; falta
-  contratar e integrar uno real.
+- **Screening SARLAFT:** con `ALUNA_SCREENING_VENDOR=lists` filtra contra OFAC SDN, la lista consolidada de
+  la ONU y los PEP de datos.gov.co, descargadas cada 6 horas (ADR-0018). Necesita el servicio de identidad de
+  la entidad, que dice quién es cada sujeto. Sin esa variable usa un proveedor falso de desarrollo.
 - **Ancla de auditoría:** los hashes de los bloques sellados van a un directorio (`ALUNA_AUDIT_ANCHOR_DIR`)
   en desarrollo, o en producción a un bucket S3 con Object Lock en modo compliance
   (`ALUNA_AUDIT_ANCHOR_S3_URL`), que nadie puede reescribir ni borrar durante su retención. Falta crear ese

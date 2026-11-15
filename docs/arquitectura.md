@@ -57,6 +57,11 @@ Todo sale del entorno:
 | `ALUNA_RETURN_REFUND_FEES` | `api`, `worker` | `true` | Si un pago que devuelve el banco del beneficiario reintegra su comisión (`true` o `false`) |
 | `ALUNA_RETURN_REFUND_GMF_REASONS` | `api`, `worker` | `AC01,AC03,AC04,AC06,AG01,AG02,AM05,BE04,MD07,MS02,MS03,RC01,RR01,RR02,RR03,RR04` | Causales ISO 20022 de devolución que anulan el pago (la transferencia no se pudo completar) y reintegran su GMF; separadas por coma, y vacía para ninguna. Una causal voluntaria (`CUST`, `MD06`, `FOCR`, `DUPL`) es una operación nueva y no lo reintegra |
 | `ALUNA_GMF_RESTORE_EXEMPTION` | `api`, `worker` | `same_month` | Si un pago rechazado por el rail, o devuelto con una causal que lo anula, devuelve a la exención de GMF del mes lo que usó de ella (`same_month`, mientras sea ese mes) o no (`never`) |
+| `ALUNA_SCREENING_VENDOR` | `api`, `worker` | `fake` | Con qué se filtra a parties y beneficiarios (FR-42): `fake`, el proveedor falso de desarrollo, o `lists`, contra las listas restrictivas mismas (ADR-0018). Producción usa `lists` |
+| `ALUNA_SCREENING_IDENTITY_URL`, `ALUNA_SCREENING_IDENTITY_TOKEN` | `api` | obligatorias con `lists` | Servicio de identidad de la entidad, que dice quién es un sujeto (Aluna no guarda nombres ni documentos), y su token ([contrato](runbook.md#el-screening-contra-las-listas)) |
+| `ALUNA_SCREENING_THRESHOLD` | `api` | `0.92` | Similitud de nombres, de 0,5 a 1, desde la que un nombre coincide con uno de una lista |
+| `ALUNA_SCREENING_MAX_LIST_AGE_HOURS` | `api` | `48` | Horas, de 1 a 168, que puede tener una lista antes de que el screening la rechace y falle cerrado |
+| `ALUNA_SCREENING_OFAC_SDN_URL`, `ALUNA_SCREENING_OFAC_ALT_URL`, `ALUNA_SCREENING_UN_URL`, `ALUNA_SCREENING_PEP_URL` | `worker` | las de sus dueños | De dónde se descargan las listas, para un espejo interno |
 | `ALUNA_QUOTE_POLICY` | `api`, `worker` | `lower_of` | Con qué comisión se cobra un pago que esperó a cumplimiento: `lower_of`, la menor entre la de la cotización que nombró al iniciarlo (`quote_id`) y la vigente al despejarlo, o `honor`, siempre la cotizada. Sin cotización se cobra la vigente: el core no le mostró ninguna. El GMF es el del momento del débito |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `api`, `worker` | sin valor: nada sale del proceso | Exporta trazas y métricas por OTLP/HTTP, con el resto de variables `OTEL_*` |
 
@@ -280,6 +285,7 @@ siguiente. Los marcados con *una a la vez* no se encolan si ya hay uno esperando
 | `deposits.statements.generate` | `default` | 1 h | Genera los extractos mensuales de los periodos cerrados (una a la vez) |
 | `webhooks.deliver` | `webhooks` | 10 s | Encola los eventos nuevos de cada endpoint e intenta las entregas pendientes (una a la vez) |
 | `payments.pending.expire` | `payments` | 1 h | Rechaza (`SCREENING_EXPIRED`) las órdenes que llevan más de 7 días esperando a cumplimiento |
+| `compliance.lists.refresh` | `default` | 6 h | Con `ALUNA_SCREENING_VENDOR=lists`, descarga OFAC SDN, la lista consolidada de la ONU y los PEP, y reemplaza la que cambió |
 | `outbox.publish` | `default` | por evento | Entrega un evento a los consumidores internos |
 | `payments.send` | `payments` | por orden | Envía una orden `held` al rail |
 | `payments.return` | `payments` | por orden | Entrega al rail la devolución de una transferencia que volvió a su banco; sin respuesta o rechazada se cancela sin reintentar, y el extracto del día abre un break sin ella |

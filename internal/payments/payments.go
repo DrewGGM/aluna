@@ -198,12 +198,11 @@ func (i initiation) DepositAccount(ctx context.Context, entity, id ids.ID) (depo
 }
 
 func (i initiation) ScreenBeneficiary(ctx context.Context, o app.Order) (bool, error) {
-	ref := o.Creditor.Key
-	if ref == "" {
-		ref = o.Creditor.Number
+	subject := compliance.Subject{Kind: compliance.SubjectKey, ID: o.ID, ExternalRef: o.Creditor.Key}
+	if subject.ExternalRef == "" {
+		subject.Kind, subject.ExternalRef = compliance.SubjectAccount, o.Creditor.Number
 	}
-	outcome, err := i.s.compliance.ScreenPayment(ctx, i.tx, o.LegalEntityID, o.ID,
-		compliance.Subject{Kind: compliance.SubjectBeneficiary, ID: o.ID, ExternalRef: ref})
+	outcome, err := i.s.compliance.ScreenPayment(ctx, i.tx, o.LegalEntityID, o.ID, subject)
 	return outcome == compliance.OutcomeClear, err
 }
 

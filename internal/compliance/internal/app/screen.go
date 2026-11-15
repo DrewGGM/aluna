@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -75,7 +76,8 @@ func NewScreener(port ScreeningPort, now func() time.Time) *Screener {
 // Screen is OutcomeClear if the vendor clears subject, and OutcomePending otherwise (FR-42), with the vendor's
 // reference to its check when it answered. A caller whose ctx ends is OutcomePending too, but that is not the
 // vendor failing: it does not count towards opening the circuit, and a caller that has already given up does
-// not call the vendor.
+// not call the vendor. Nor do stale lists (ErrStaleLists), which hold up only the subjects screened against them:
+// counted, a party held up by stale PEPs would open the circuit for the beneficiaries of payments too.
 func (s *Screener) Screen(ctx context.Context, subject Subject) (o Outcome, vendorRef string) {
 	if ctx.Err() != nil {
 		return OutcomePending, ""
@@ -85,7 +87,7 @@ func (s *Screener) Screen(ctx context.Context, subject Subject) (o Outcome, vend
 		return OutcomePending, ""
 	}
 	r, err := s.call(ctx, subject)
-	if err != nil && ctx.Err() != nil {
+	if err != nil && (ctx.Err() != nil || errors.Is(err, ErrStaleLists)) {
 		s.release(a)
 		return OutcomePending, ""
 	}
@@ -165,8 +167,9 @@ func (s *Screener) record(ctx context.Context, a admission, answered bool) {
 	}
 }
 
-// release frees the probe, if a call admitted as a took it: its caller gave up without an answer. Nothing
-// else changes the circuit while a probe is in flight.
+// release frees the probe, if a call admitted as a took it: its caller gave up without an answer, or the lists
+// were stale, neither of which says anything of the vendor. Nothing else changes the circuit while a probe is in
+// flight.
 func (s *Screener) release(a admission) {
 	if a.state != circuitHalfOpen {
 		return

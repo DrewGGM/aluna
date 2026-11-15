@@ -211,7 +211,7 @@ func TestAVendorThatDoesNotAnswerLeavesACaseWithoutReference(t *testing.T) {
 func TestAPaymentIsScreenedLikeAParty(t *testing.T) {
 	w := newWorld(t)
 	order := ids.New()
-	beneficiary := compliance.Subject{Kind: compliance.SubjectBeneficiary, ID: ids.New(), ExternalRef: fakescreening.MatchPrefix + "acme"}
+	beneficiary := compliance.Subject{Kind: compliance.SubjectKey, ID: ids.New(), ExternalRef: fakescreening.MatchPrefix + "acme"}
 
 	var o compliance.Outcome
 	err := w.do(t, func(tx postgres.Tx) error {
@@ -303,7 +303,7 @@ func TestAKindWithoutCallbackIsNotResolved(t *testing.T) {
 	order := ids.New()
 	err := w.do(t, func(tx postgres.Tx) error {
 		_, err := w.svc.ScreenPayment(t.Context(), tx, w.entity, order, compliance.Subject{
-			Kind: compliance.SubjectBeneficiary, ID: ids.New(), ExternalRef: fakescreening.MatchPrefix + "acme",
+			Kind: compliance.SubjectKey, ID: ids.New(), ExternalRef: fakescreening.MatchPrefix + "acme",
 		})
 		return err
 	})

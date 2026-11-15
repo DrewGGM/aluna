@@ -138,7 +138,7 @@ Cada contexto de negocio es un módulo en `internal/<módulo>/`; los demás solo
 | `pricing` | Comisiones y GMF de un retiro o una transferencia, cotizados antes y cobrados exactamente; exención del GMF | `POST /v1/quotes`, `POST /v1/deposit-accounts/{id}/gmf-exemption` |
 | `products` | Productos de depósito con versiones inmutables publicadas por maker-checker y parámetros de mercado con vigencia | `POST /v1/products`, `POST /v1/products/{id}/versions`, `GET /v1/product-versions/{id}`, `POST .../publication`, `POST` y `GET /v1/market-parameters` |
 | `reconciliation` | Controles continuos sobre el ledger, importación de extractos del rail y breaks hasta que alguien los resuelve | `POST /v1/reconciliation/statements`, `GET /v1/reconciliation/breaks`, `POST /v1/reconciliation/breaks/{id}/resolution` |
-| `webhooks` | Events API y entrega de los eventos a los endpoints registrados | `GET /v1/events`, `POST /v1/webhook-endpoints` |
+| `webhooks` | Events API y entrega de los eventos a los endpoints registrados | `GET /v1/events`, `POST /v1/webhook-endpoints`, `POST /v1/webhook-endpoints/{id}/revocation` |
 
 Además hay piezas transversales sin API propia: la idempotencia, el outbox, la conexión a PostgreSQL, la
 telemetría y el adaptador HTTP. La [colección de Postman](postman/README.md) tiene una petición por operación.
@@ -266,7 +266,11 @@ Cada evento se escribe en `infra.outbox` en la transacción de su efecto, como C
   `POST` firmado con Standard Webhooks: `webhook-id` (igual en cada reintento), `webhook-timestamp` y
   `webhook-signature` (`v1,` y el HMAC-SHA256 en base64 de `id.timestamp.body`). Un 2xx lo da por entregado;
   si no, se reintenta 8 veces, con una espera que empieza en unos 17 min y se duplica, durante 72 h, y luego
-  queda `failed`. No se siguen redirecciones.
+  queda `failed`. No se siguen redirecciones. `POST /v1/webhook-endpoints/{id}/revocation` revoca un endpoint
+  (por ejemplo, si su secreto se filtró): no recibe más eventos y sus entregas pendientes quedan `failed`; solo
+  sale la petición que ya iba en camino. La revocación no se deshace, y bajar `0042_webhook_revocation.sql` se
+  niega mientras haya endpoints revocados. Para rotar el secreto se registra un endpoint nuevo y se revoca el
+  viejo.
 
 ## Jobs del worker
 
@@ -353,7 +357,7 @@ binario (un cambio de permisos es una versión nueva) y lo que no da se niega co
 | `compliance` | Cumplimiento | Consultas, cambios de KYC, resolución de screening, eventos, decidir solicitudes |
 | `auditor` | Auditoría interna o revisoría fiscal | Solo lectura, incluidos GL, breaks y eventos |
 | `system` | Servicios internos y el programador de tareas | Asientos y holds, y el rollover de la fecha de negocio |
-| `integrator` | Quien sigue los eventos de la entidad | `GET /v1/events` y `POST /v1/webhook-endpoints`, nada más |
+| `integrator` | Quien sigue los eventos de la entidad | `GET /v1/events`, registrar y revocar sus endpoints de webhooks, nada más |
 
 ## Observabilidad
 
@@ -442,6 +446,7 @@ bloquea entera, lecturas incluidas, mientras se valida, y una llave foránea nue
 | `0036_released_debits.sql` | columna con `CHECK` en `deposits.counters` | los movimientos de depósitos y los pagos |
 | `0038_gmf_restored.sql` | columnas con `CHECK` en `pricing.gmf_monthly` y `payments.orders` | las cotizaciones y los pagos |
 | `0039_payments_quoted_fees.sql` | columna con `CHECK` en `payments.orders` | los pagos |
+| `0042_webhook_revocation.sql` | columnas con `CHECK` en `webhooks.endpoints` | el registro de endpoints y el encolado de webhooks |
 
 Aplícalas en una ventana de mantenimiento, con la API fuera de rotación: tardan lo que tarde recorrer la
 tabla. Mide antes ese tiempo restaurando el último backup en otro clúster y migrándolo (ver

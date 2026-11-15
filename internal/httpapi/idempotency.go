@@ -150,6 +150,11 @@ func (r storedResponse) VisitRegisterWebhookEndpointResponse(w http.ResponseWrit
 	return r.write(w)
 }
 
+// VisitRevokeWebhookEndpointResponse writes the response of POST /v1/webhook-endpoints/{id}/revocation.
+func (r storedResponse) VisitRevokeWebhookEndpointResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // VisitRequestPeriodCloseResponse writes the response of POST /v1/accounting-periods/{period}/closure.
 func (r storedResponse) VisitRequestPeriodCloseResponse(w http.ResponseWriter) error {
 	return r.write(w)

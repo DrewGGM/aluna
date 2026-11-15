@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/DrewGGM/aluna/internal/httpapi/gen"
+	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/postgres"
 	"github.com/DrewGGM/aluna/internal/webhooks"
 )
@@ -38,6 +39,28 @@ func (h *WebhookHandlers) RegisterWebhookEndpoint(ctx context.Context, req gen.R
 			return nil, err
 		}
 		return gen.WebhookEndpoint{Id: [16]byte(e.ID), Url: e.URL, Secret: e.Secret, CreatedAt: e.CreatedAt}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// RevokeWebhookEndpoint revokes an endpoint of the token's entity: it gets no more events, and its pending
+// deliveries fail.
+func (h *WebhookHandlers) RevokeWebhookEndpoint(ctx context.Context, req gen.RevokeWebhookEndpointRequestObject) (gen.RevokeWebhookEndpointResponseObject, error) {
+	p, err := principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := ids.ID(req.Id)
+	op := resourceOperation("webhook-endpoints", id, "revocation", http.StatusOK)
+	resp, err := h.commands.run(ctx, op, func(tx postgres.Tx) (any, error) {
+		e, err := h.webhooks.RevokeEndpoint(ctx, tx, p.LegalEntityID, id, p.Subject)
+		if err != nil {
+			return nil, err
+		}
+		return gen.RevokedWebhookEndpoint{Id: req.Id, Url: e.URL, RevokedAt: e.RevokedAt}, nil
 	})
 	if err != nil {
 		return nil, err

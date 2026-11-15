@@ -15,8 +15,12 @@ import (
 	"github.com/DrewGGM/aluna/internal/webhooks/internal/app"
 )
 
-// ErrInvalidEndpoint means a webhook endpoint that is not an https URL of the internet (SSRF).
-var ErrInvalidEndpoint = app.ErrInvalidEndpoint
+var (
+	// ErrInvalidEndpoint means a webhook endpoint that is not an https URL of the internet (SSRF).
+	ErrInvalidEndpoint = app.ErrInvalidEndpoint
+	// ErrEndpointNotFound means the entity has no webhook endpoint with that id.
+	ErrEndpointNotFound = app.ErrEndpointNotFound
+)
 
 // Endpoint is a registered webhook endpoint and its secret, which only its registration shows.
 type Endpoint struct {
@@ -54,6 +58,23 @@ func (s *Service) RegisterEndpoint(ctx context.Context, tx postgres.Tx, entity i
 	return e, nil
 }
 
+// RevokedEndpoint is a revoked webhook endpoint: its URL and when it was revoked.
+type RevokedEndpoint struct {
+	URL       string
+	RevokedAt time.Time
+}
+
+// RevokeEndpoint revokes, within tx, the entity's endpoint id, by who: it gets no more events and its pending
+// deliveries fail, so one whose secret leaked stops being sent to; only a request already on its way still goes
+// out. Revoking it again answers the same. ErrEndpointNotFound if the entity has no endpoint id.
+func (s *Service) RevokeEndpoint(ctx context.Context, tx postgres.Tx, entity, id ids.ID, by string) (RevokedEndpoint, error) {
+	url, at, err := pg.NewStore(tx).RevokeEndpoint(ctx, entity, id, by)
+	if err != nil {
+		return RevokedEndpoint{}, err
+	}
+	return RevokedEndpoint{URL: url, RevokedAt: at}, nil
+}
+
 // Deliver queues for each endpoint up to batch new events of its entity and then attempts up to batch due deliveries
 // with sender (FR-46): each one is POSTed signed at the time of its attempt until its endpoint answers 2xx, retried up
 // to 8 times in 72 hours with an exponential backoff, and then failed. It reads the time from now at each step, and
@@ -74,12 +95,26 @@ func (s *Service) Deliver(ctx context.Context, uow *postgres.UnitOfWork, sender 
 		return errors.Join(append(errs, err)...)
 	}
 	for _, d := range claimed {
-		a := app.Attempted(d, app.Send(ctx, sender, d, now()), now())
-		if err := uow.Do(ctx, func(tx postgres.Tx) error { return pg.NewStore(tx).Record(ctx, d.ID, a) }); err != nil {
+		if err := attempt(ctx, uow, sender, d, now); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// attempt sends d and records the attempt, unless d stopped being pending since it was claimed: its endpoint was
+// revoked while the run sent the deliveries before it.
+func attempt(ctx context.Context, uow *postgres.UnitOfWork, sender Sender, d app.Delivery, now func() time.Time) error {
+	var pending bool
+	if err := uow.Do(ctx, func(tx postgres.Tx) error {
+		var err error
+		pending, err = pg.NewStore(tx).Pending(ctx, d.ID)
+		return err
+	}); err != nil || !pending {
+		return err
+	}
+	a := app.Attempted(d, app.Send(ctx, sender, d, now()), now())
+	return uow.Do(ctx, func(tx postgres.Tx) error { return pg.NewStore(tx).Record(ctx, d.ID, a) })
 }
 
 // enqueue queues for each endpoint the next batch of its entity's events, each in its own transaction.

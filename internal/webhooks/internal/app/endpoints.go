@@ -13,6 +13,9 @@ import (
 // into its own network (SSRF).
 var ErrInvalidEndpoint = errors.New("invalid webhook endpoint")
 
+// ErrEndpointNotFound means the entity has no webhook endpoint with that id.
+var ErrEndpointNotFound = errors.New("webhook endpoint not found")
+
 // maxURL is the longest URL an endpoint has.
 const maxURL = 2048
 

@@ -292,6 +292,161 @@ func TestAnEndpointIsRegisteredWithASecret(t *testing.T) {
 	}
 }
 
+// revoke revokes the entity's endpoint id.
+func revoke(t *testing.T, entity, id ids.ID) (webhooks.RevokedEndpoint, error) {
+	t.Helper()
+	var revoked webhooks.RevokedEndpoint
+	err := postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error {
+		var err error
+		revoked, err = webhooks.New().RevokeEndpoint(t.Context(), tx, entity, id, "integrator-a")
+		return err
+	})
+	return revoked, err
+}
+
+// queuedFor is how many deliveries an endpoint has.
+func queuedFor(t *testing.T, endpointID ids.ID) int {
+	t.Helper()
+	var queued int
+	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM webhooks.deliveries WHERE endpoint_id = $1`, endpointID).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	return queued
+}
+
+// requests is how many requests r got.
+func (r *receiver) requests() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.ids)
+}
+
+// TestARevokedEndpointGetsNothingMore (Q-134): its pending delivery fails and is not retried, and the events emitted
+// after it are not queued for it.
+func TestARevokedEndpointGetsNothingMore(t *testing.T) {
+	r := &receiver{failures: 10}
+	server := httptest.NewTLSServer(r)
+	defer server.Close()
+	entity, endpointID := endpoint(t, server.URL+"/hooks")
+	emit(t, entity, opened)
+	now := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
+	first := deliverAt(t, server.Client(), endpointID, now, 1)
+
+	if _, err := revoke(t, entity, endpointID); err != nil {
+		t.Fatal(err)
+	}
+	later := emit(t, entity, settled)
+	read(t, entity, "", "", 50, 1+len(later))
+	if err := webhooks.New().Deliver(t.Context(), postgres.NewUnitOfWork(testPool), server.Client(), at(first.due), 50); err != nil {
+		t.Fatal(err)
+	}
+
+	queued := queuedFor(t, endpointID)
+	if d, _ := deliveryOf(t, endpointID); d.status != "failed" || d.attempts != 1 || d.lastErr != "the endpoint was revoked" || queued != 1 {
+		t.Fatalf("delivery %+v of %d queued, want only the first, failed by the revocation", d, queued)
+	}
+	if got := r.requests(); got != 1 {
+		t.Errorf("the endpoint got %d requests, want only the one before its revocation", got)
+	}
+}
+
+// TestAnEndpointRevokedWhileARunQueuesGetsNothing (Q-134): a run that read the endpoints before the revocation queues
+// nothing for it after it.
+func TestAnEndpointRevokedWhileARunQueuesGetsNothing(t *testing.T) {
+	entity, endpointID := endpoint(t, "https://93.184.216.34/hooks")
+	emitted := emit(t, entity, opened)
+	read(t, entity, "", "", 50, len(emitted))
+	uow := postgres.NewUnitOfWork(testPool)
+	var subscriptions []app.Subscription
+	if err := uow.Do(t.Context(), func(tx postgres.Tx) error {
+		var err error
+		subscriptions, err = pg.NewStore(tx).Subscriptions(t.Context())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := revoke(t, entity, endpointID); err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range subscriptions {
+		if sub.EndpointID != endpointID {
+			continue
+		}
+		if err := uow.Do(t.Context(), func(tx postgres.Tx) error {
+			return app.Enqueue(t.Context(), pg.NewStore(tx), sub, time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC), 50)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if queued := queuedFor(t, endpointID); queued != 0 {
+		t.Fatalf("%d deliveries queued for the revoked endpoint, want none", queued)
+	}
+}
+
+// revokingSender revokes an endpoint before it sends its first request: a revocation that lands while a run sends.
+type revokingSender struct {
+	t                *testing.T
+	entity, endpoint ids.ID
+	client           *http.Client
+	once             sync.Once
+}
+
+func (s *revokingSender) Do(r *http.Request) (*http.Response, error) {
+	s.once.Do(func() {
+		if _, err := revoke(s.t, s.entity, s.endpoint); err != nil {
+			s.t.Error(err)
+		}
+	})
+	return s.client.Do(r)
+}
+
+// TestARevocationWhileARunSendsStopsIt (Q-134): the request on its way goes out, but the run neither records it nor
+// sends the other delivery it claimed, and does not fail.
+func TestARevocationWhileARunSendsStopsIt(t *testing.T) {
+	r := &receiver{}
+	server := httptest.NewTLSServer(r)
+	defer server.Close()
+	entity, endpointID := endpoint(t, server.URL+"/hooks")
+	emitted := emit(t, entity, opened, settled)
+	read(t, entity, "", "", 50, len(emitted))
+	s := &revokingSender{t: t, entity: entity, endpoint: endpointID, client: server.Client()}
+
+	now := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
+	if err := webhooks.New().Deliver(t.Context(), postgres.NewUnitOfWork(testPool), s, at(now), 50); err != nil {
+		t.Fatal(err)
+	}
+
+	var failed int
+	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM webhooks.deliveries
+		WHERE endpoint_id = $1 AND status = 'failed' AND attempts = 0 AND last_error = 'the endpoint was revoked'`, endpointID).Scan(&failed); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.requests(); failed != 2 || got != 1 {
+		t.Fatalf("%d deliveries failed by the revocation and %d requests, want both failed and only the one on its way", failed, got)
+	}
+}
+
+// TestAnEndpointIsRevokedOnce (Q-134): revoking it again answers when it was first revoked, another entity cannot
+// revoke it, and not even the application's role can undo the revocation.
+func TestAnEndpointIsRevokedOnce(t *testing.T) {
+	entity, endpointID := endpoint(t, "https://93.184.216.34/hooks")
+	revoked, err := revoke(t, entity, endpointID)
+	if err != nil || revoked.URL != "https://93.184.216.34/hooks" || revoked.RevokedAt.IsZero() {
+		t.Fatalf("revoked %+v, %v", revoked, err)
+	}
+	if again, err := revoke(t, entity, endpointID); err != nil || again != revoked {
+		t.Errorf("revoking again = %+v, %v; want %+v", again, err, revoked)
+	}
+	if _, err := revoke(t, ids.New(), endpointID); !errors.Is(err, webhooks.ErrEndpointNotFound) {
+		t.Errorf("another entity revoking = %v, want ErrEndpointNotFound", err)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE webhooks.endpoints SET revoked_at = NULL, revoked_by = NULL WHERE id = $1`, endpointID); err == nil {
+		t.Error("the revocation was undone")
+	}
+}
+
 // TestAnAttemptIsRecordedOnce: a run whose claim expired does not overwrite the attempt another run recorded.
 func TestAnAttemptIsRecordedOnce(t *testing.T) {
 	r := &receiver{failures: 100}

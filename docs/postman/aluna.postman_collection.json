@@ -2084,6 +2084,33 @@
             },
             "description": "Registers an https endpoint for the events of the token's entity (FR-46, US-15) and answers with its secret, which no other response shows: keep it. From the transactions from this one on, each event is POSTed to it as a CloudEvent, signed as Standard Webhooks says (`webhook-id`, the same in every retry; `webhook-timestamp`, unix seconds; `webhook-signature`, `v1,` and the base64 HMAC-SHA256 with the secret's key of `id.timestamp.body`), in the Events API's order, until it answers 2xx: it is retried 8 times with an exponential backoff over 72 hours and then given up. Redirects are not followed. A URL that is not https, carries credentials, or whose host is or resolves to an address that is not public (private, loopback, link-local such as the cloud metadata service, shared, multicast) is 422 `invalid_endpoint`: Aluna does not send requests into its own network.\n\nPermission: `webhooks.endpoints.create`"
           }
+        },
+        {
+          "name": "Revoke a webhook endpoint",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/webhook-endpoints/:id/revocation",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "webhook-endpoints",
+                ":id",
+                "revocation"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "00000000-0000-0000-0000-000000000000",
+                  "description": "Format: uuid"
+                }
+              ]
+            },
+            "description": "Revokes an endpoint of the token's entity: it gets no more events, and the deliveries still pending fail, so an endpoint whose secret leaked stops being sent to; only a request already on its way still goes out. Revoking it again answers the same, with when it was first revoked. Another entity's endpoint, or one that does not exist, is 404 `not_found`.\n\nPermission: `webhooks.endpoints.revoke`"
+          }
         }
       ]
     }

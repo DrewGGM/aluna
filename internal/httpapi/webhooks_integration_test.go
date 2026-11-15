@@ -94,12 +94,7 @@ func TestAnOperatorDoesNotReadTheEvents(t *testing.T) {
 // TestAWebhookEndpointIsRegisteredOverHTTP (FR-46): an integrator registers a public https URL and gets its secret; a
 // private one is 422 invalid_endpoint, and an operator cannot register one.
 func TestAWebhookEndpointIsRegisteredOverHTTP(t *testing.T) {
-	entity := ids.New()
-	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
-		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
-			VALUES ($1, 'Entity', '2026-03-02', 'COP')`, entity)
-		return err
-	})
+	entity := legalEntity(t)
 	events, err := outbox.New(testPool)
 	if err != nil {
 		t.Fatal(err)
@@ -124,5 +119,71 @@ func TestAWebhookEndpointIsRegisteredOverHTTP(t *testing.T) {
 	}
 	if status := call(t, apiServer(t, entity), http.MethodPost, "/v1/webhook-endpoints", `{"url":"https://93.184.216.34/hooks"}`, &problem); status != http.StatusForbidden {
 		t.Fatalf("an operator registering = %d", status)
+	}
+}
+
+// legalEntity creates, as the owner, an entity on 2 March 2026.
+func legalEntity(t *testing.T) ids.ID {
+	t.Helper()
+	entity := ids.New()
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.legal_entities (id, name, business_date, functional_currency)
+			VALUES ($1, 'Entity', '2026-03-02', 'COP')`, entity)
+		return err
+	})
+	return entity
+}
+
+// webhookEndpoint inserts, as the owner, an endpoint of a new entity.
+func webhookEndpoint(t *testing.T) (entity, id ids.ID) {
+	t.Helper()
+	entity, id = legalEntity(t), ids.New()
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO webhooks.endpoints (id, legal_entity_id, url, secret, created_by)
+			VALUES ($1, $2, 'https://93.184.216.34/hooks', 'whsec_c2VjcmV0', 'tester')`, id, entity) // gitleaks:allow
+		return err
+	})
+	return entity, id
+}
+
+// TestAWebhookEndpointIsRevokedOverHTTP (Q-134): the integrator revokes its endpoint, and revoking it again answers
+// the same revocation.
+func TestAWebhookEndpointIsRevokedOverHTTP(t *testing.T) {
+	entity, id := webhookEndpoint(t)
+	revocation := "/v1/webhook-endpoints/" + id.String() + "/revocation"
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := apiServerAsRole(t, entity, events, "integrator-a", "integrator")
+
+	type revoked struct {
+		URL       string    `json:"url"`
+		RevokedAt time.Time `json:"revoked_at"`
+	}
+	var first, again revoked
+	firstStatus := call(t, ts, http.MethodPost, revocation, "", &first)
+	againStatus := call(t, ts, http.MethodPost, revocation, "", &again)
+	if firstStatus != http.StatusOK || againStatus != http.StatusOK || first.URL != "https://93.184.216.34/hooks" || first.RevokedAt.IsZero() || again != first {
+		t.Fatalf("revoke = %d %+v, again = %d %+v; want the same revocation twice", firstStatus, first, againStatus, again)
+	}
+}
+
+// TestOnlyItsIntegratorRevokesAWebhookEndpoint (Q-134): another entity's integrator gets 404, and an operator cannot
+// revoke one.
+func TestOnlyItsIntegratorRevokesAWebhookEndpoint(t *testing.T) {
+	entity, id := webhookEndpoint(t)
+	revocation := "/v1/webhook-endpoints/" + id.String() + "/revocation"
+	events, err := outbox.New(testPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problem Problem
+	other := apiServerAsRole(t, ids.New(), events, "integrator-b", "integrator")
+	if status := call(t, other, http.MethodPost, revocation, "", &problem); status != http.StatusNotFound || problem.Code != "not_found" {
+		t.Fatalf("another entity revoking = %d %+v", status, problem)
+	}
+	if status := call(t, apiServer(t, entity), http.MethodPost, revocation, "", &problem); status != http.StatusForbidden {
+		t.Fatalf("an operator revoking = %d", status)
 	}
 }

@@ -129,3 +129,4 @@ integrator:
   all:
     - webhooks.events.read
     - webhooks.endpoints.create
+    - webhooks.endpoints.revoke

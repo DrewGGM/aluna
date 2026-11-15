@@ -249,6 +249,7 @@ var problems = []struct {
 	{approvals.ErrNoReason, unprocessable("rejection_reason_required", "A rejection needs a reason")},
 	{approvals.ErrInvalidReason, unprocessable("invalid_rejection_reason", "A rejection reason is text without NUL characters")},
 	// webhooks
+	{webhooks.ErrEndpointNotFound, notFound},
 	{webhooks.ErrInvalidEndpoint, unprocessable("invalid_endpoint", "A webhook endpoint is an https URL of up to 2048 characters, without credentials, of a host that is and resolves only to public addresses")},
 	{webhooks.ErrInvalidPage, invalidRequest("Invalid page", "A page has 1 to 200 events and a cursor is the next_cursor of a page.")},
 }

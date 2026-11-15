@@ -1089,6 +1089,13 @@ type ResolveScreeningCase struct {
 // ResolveScreeningCaseResolution `cleared` if the subject is not on the lists, `confirmed` if the match is real
 type ResolveScreeningCaseResolution string
 
+// RevokedWebhookEndpoint defines model for RevokedWebhookEndpoint.
+type RevokedWebhookEndpoint struct {
+	Id        openapi_types.UUID `json:"id"`
+	RevokedAt time.Time          `json:"revoked_at"`
+	Url       string             `json:"url"`
+}
+
 // RiskLevel defines model for RiskLevel.
 type RiskLevel string
 
@@ -1613,6 +1620,9 @@ type ServerInterface interface {
 	// RegisterWebhookEndpoint Register a webhook endpoint
 	// (POST /v1/webhook-endpoints)
 	RegisterWebhookEndpoint(w http.ResponseWriter, r *http.Request)
+	// RevokeWebhookEndpoint Revoke a webhook endpoint
+	// (POST /v1/webhook-endpoints/{id}/revocation)
+	RevokeWebhookEndpoint(w http.ResponseWriter, r *http.Request, id ID)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -3578,6 +3588,32 @@ func (siw *ServerInterfaceWrapper) RegisterWebhookEndpoint(w http.ResponseWriter
 	handler.ServeHTTP(w, r)
 }
 
+// RevokeWebhookEndpoint operation middleware
+func (siw *ServerInterfaceWrapper) RevokeWebhookEndpoint(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeWebhookEndpoint(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -3741,6 +3777,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/reconciliation/breaks/{id}/resolution", wrapper.ResolveBreak)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/events", wrapper.ListEvents)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/webhook-endpoints", wrapper.RegisterWebhookEndpoint)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/webhook-endpoints/{id}/revocation", wrapper.RevokeWebhookEndpoint)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/transfers", wrapper.CreateTransfer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/deposit-accounts/{id}/gmf-exemption", wrapper.CreateGMFExemption)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/business-date", wrapper.GetBusinessDate)
@@ -7900,6 +7937,61 @@ func (response RegisterWebhookEndpointdefaultApplicationProblemPlusJSONResponse)
 	return err
 }
 
+type RevokeWebhookEndpointRequestObject struct {
+	Id ID `json:"id"`
+}
+
+type RevokeWebhookEndpointResponseObject interface {
+	VisitRevokeWebhookEndpointResponse(w http.ResponseWriter) error
+}
+
+type RevokeWebhookEndpoint200JSONResponse RevokedWebhookEndpoint
+
+func (response RevokeWebhookEndpoint200JSONResponse) VisitRevokeWebhookEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeWebhookEndpoint404ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response RevokeWebhookEndpoint404ApplicationProblemPlusJSONResponse) VisitRevokeWebhookEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeWebhookEndpointdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RevokeWebhookEndpointdefaultApplicationProblemPlusJSONResponse) VisitRevokeWebhookEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// RequestPeriodClose Request the close of an accounting period
@@ -8043,6 +8135,9 @@ type StrictServerInterface interface {
 	// RegisterWebhookEndpoint Register a webhook endpoint
 	// (POST /v1/webhook-endpoints)
 	RegisterWebhookEndpoint(ctx context.Context, request RegisterWebhookEndpointRequestObject) (RegisterWebhookEndpointResponseObject, error)
+	// RevokeWebhookEndpoint Revoke a webhook endpoint
+	// (POST /v1/webhook-endpoints/{id}/revocation)
+	RevokeWebhookEndpoint(ctx context.Context, request RevokeWebhookEndpointRequestObject) (RevokeWebhookEndpointResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -9487,6 +9582,32 @@ func (sh *strictHandler) RegisterWebhookEndpoint(w http.ResponseWriter, r *http.
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RegisterWebhookEndpointResponseObject); ok {
 		if err := validResponse.VisitRegisterWebhookEndpointResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RevokeWebhookEndpoint operation middleware
+func (sh *strictHandler) RevokeWebhookEndpoint(w http.ResponseWriter, r *http.Request, id ID) {
+	var request RevokeWebhookEndpointRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevokeWebhookEndpoint(ctx, request.(RevokeWebhookEndpointRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevokeWebhookEndpoint")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevokeWebhookEndpointResponseObject); ok {
+		if err := validResponse.VisitRevokeWebhookEndpointResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

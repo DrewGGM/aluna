@@ -1257,6 +1257,25 @@ paths:
         "400": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
         default: {$ref: "#/components/responses/Problem"}
+  /v1/webhook-endpoints/{id}/revocation:
+    post:
+      operationId: revokeWebhookEndpoint
+      summary: Revoke a webhook endpoint
+      description: >-
+        Revokes an endpoint of the token's entity: it gets no more events, and the deliveries still pending fail, so
+        an endpoint whose secret leaked stops being sent to; only a request already on its way still goes out.
+        Revoking it again answers the same, with when it was first revoked. Another entity's endpoint, or one that does not exist, is 404 `not_found`.
+      x-aluna-permission: webhooks.endpoints.revoke
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Endpoint revoked
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RevokedWebhookEndpoint"}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
   /v1/transfers:
     post:
       operationId: createTransfer
@@ -1586,6 +1605,13 @@ components:
         url: {type: string}
         secret: {type: string, description: "whsec_ and the key in base64: shown only here"}
         created_at: {type: string, format: date-time}
+    RevokedWebhookEndpoint:
+      type: object
+      required: [id, url, revoked_at]
+      properties:
+        id: {type: string, format: uuid}
+        url: {type: string}
+        revoked_at: {type: string, format: date-time}
     CloudEvent:
       description: >-
         A CloudEvent 1.0 (architecture §8): specversion, id (UUIDv7), source (aluna/<module>), type, subject, time,

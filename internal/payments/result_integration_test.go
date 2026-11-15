@@ -481,11 +481,10 @@ func TestOnlyAHeldOrderIsSent(t *testing.T) {
 	}
 }
 
-// TestTheWorkerSendsFromThePaymentsQueue: the worker takes payments.send from the payments queue, and cancels,
-// without retrying, the job of a payment the rail did not answer.
-func TestTheWorkerSendsFromThePaymentsQueue(t *testing.T) {
-	w := newWorld(t, true)
-	w.rail.answer = func() error { return context.DeadlineExceeded }
+// startWorker starts, on the payments queue, a River client with the world's payments workers, and is the channel of
+// the jobs it finishes.
+func (w world) startWorker(t *testing.T) <-chan *river.Event {
+	t.Helper()
 	workers := river.NewWorkers()
 	w.payments.AddWorkers(workers, postgres.NewUnitOfWork(testPool))
 	client, err := river.NewClient(riverpgxv5.New(testPool), &river.Config{
@@ -496,11 +495,7 @@ func TestTheWorkerSendsFromThePaymentsQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	finished, cancel := client.Subscribe(river.EventKindJobCompleted, river.EventKindJobCancelled, river.EventKindJobFailed)
-	defer cancel()
-	o, err := w.initiate(t, w.input(t, 30000000, "@beneficiary"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(cancel)
 	if err := client.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -509,8 +504,20 @@ func TestTheWorkerSendsFromThePaymentsQueue(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	return finished
+}
 
-	job := jobOf(t, finished, o.ID)
+// TestTheWorkerSendsFromThePaymentsQueue: the worker takes payments.send from the payments queue, and cancels,
+// without retrying, the job of a payment the rail did not answer.
+func TestTheWorkerSendsFromThePaymentsQueue(t *testing.T) {
+	w := newWorld(t, true)
+	w.rail.answer = func() error { return context.DeadlineExceeded }
+	o, err := w.initiate(t, w.input(t, 30000000, "@beneficiary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job := jobOf(t, w.startWorker(t), "payments.send", o.ID)
 
 	if job.State != rivertype.JobStateCancelled || job.Queue != payments.Queue || len(job.Errors) != 1 ||
 		!strings.Contains(job.Errors[0].Error, "the rail did not answer") {
@@ -521,18 +528,36 @@ func TestTheWorkerSendsFromThePaymentsQueue(t *testing.T) {
 	}
 }
 
-// jobOf waits up to 10 seconds for the payments.send job of order id to finish, and returns it.
-func jobOf(t *testing.T, finished <-chan *river.Event, id ids.ID) *rivertype.JobRow {
+// TestTheWorkerCancelsAReturnItCannotHand (FR-32, Q-144 d): the worker cancels, without retrying, the payments.return
+// job of a return the rail refused (handed again, it is refused again) or did not answer (it may have paid the bank).
+func TestTheWorkerCancelsAReturnItCannotHand(t *testing.T) {
+	for name, answer := range map[string]error{"refused": payments.ErrRailRefused, "no answer": context.DeadlineExceeded} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t, true)
+			w.rail.answer = func() error { return answer }
+			o := w.returnedToSender(t, w.transfer(t, 30000000, payments.AccountRef{Key: "@nobody"}))
+
+			job := jobOf(t, w.startWorker(t), "payments.return", o.id)
+
+			if job.State != rivertype.JobStateCancelled || job.Queue != payments.Queue || len(job.Errors) != 1 {
+				t.Fatalf("job = %s in %s with %+v, want it canceled in payments after one attempt", job.State, job.Queue, job.Errors)
+			}
+		})
+	}
+}
+
+// jobOf waits up to 10 seconds for the job of kind for order id to finish, and returns it.
+func jobOf(t *testing.T, finished <-chan *river.Event, kind string, id ids.ID) *rivertype.JobRow {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case e := <-finished:
-			if e.Job.Kind == "payments.send" && strings.Contains(string(e.Job.EncodedArgs), id.String()) {
+			if e.Job.Kind == kind && strings.Contains(string(e.Job.EncodedArgs), id.String()) {
 				return e.Job
 			}
 		case <-deadline:
-			t.Fatal("the worker did not finish the job in 10 s")
+			t.Fatalf("the worker did not finish the %s job in 10 s", kind)
 			return nil
 		}
 	}

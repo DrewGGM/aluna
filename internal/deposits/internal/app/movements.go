@@ -296,13 +296,18 @@ func move(ctx context.Context, s Movements, l Limiting, m movement) (ledger.Tran
 
 // CountDebit keeps a debit of units from account a, already locked, that another module posts (a payment's hold)
 // within the product's limits on the entity's business date (FR-24), and adds it to the account's counters: a
-// *domain.LimitError if it exceeds one. It returns the business date it counted on, which giving the debit back needs.
+// *domain.LimitError if it exceeds one. It records the business date as the account's last customer activity
+// (FR-27), and returns it: giving the debit back needs it.
 func CountDebit(ctx context.Context, s Movements, l Limiting, a domain.Account, units int64) (calendar.Date, error) {
-	return countOutside(ctx, s, l, leg{account: a, side: debit}, units)
+	today, err := countOutside(ctx, s, l, leg{account: a, side: debit}, units)
+	if err != nil {
+		return calendar.Date{}, err
+	}
+	return today, recordActivity(ctx, s, a, today)
 }
 
 // CountCredit is CountDebit for a credit of units to account a (a transfer received, credited at once or from
-// suspense).
+// suspense), but it is no customer activity: the account's last customer activity stays as it was.
 func CountCredit(ctx context.Context, s Movements, l Limiting, a domain.Account, units int64) error {
 	_, err := countOutside(ctx, s, l, leg{account: a, side: credit}, units)
 	return err
@@ -409,10 +414,13 @@ func post(ctx context.Context, s Movements, a domain.Account, today calendar.Dat
 	if err != nil {
 		return ledger.Transaction{}, err
 	}
-	if a.LastCustomerActivityOn != today {
-		if err := s.RecordActivity(ctx, a.ID, today); err != nil {
-			return ledger.Transaction{}, err
-		}
+	return posted, recordActivity(ctx, s, a, today)
+}
+
+// recordActivity records today as the last customer activity of account a, unless it already is.
+func recordActivity(ctx context.Context, s Movements, a domain.Account, today calendar.Date) error {
+	if a.LastCustomerActivityOn == today {
+		return nil
 	}
-	return posted, nil
+	return s.RecordActivity(ctx, a.ID, today)
 }

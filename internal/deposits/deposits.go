@@ -171,7 +171,8 @@ func (s *Service) Withdraw(ctx context.Context, tx postgres.Tx, in CashInput) (l
 // CountDebit keeps a debit of amount, in a's currency, from account a, which the caller locked (LockActive), within
 // the limits of its product on the entity's business date (FR-24) and counts it: a payment holds its amount through
 // the ledger, not through a movement of this module; if the payment's money never leaves, ReleaseDebit gives the
-// debit back. ErrLimitExceeded (a *LimitError) if it exceeds one; ErrMinimumWageMissing, ErrMinimumWageTooLow or
+// debit back. A payment the customer sends is customer activity (FR-27): the business date becomes the account's
+// last customer activity. ErrLimitExceeded (a *LimitError) if it exceeds one; ErrMinimumWageMissing, ErrMinimumWageTooLow or
 // ErrSMMLVOutsideCOP as Deposit. It returns the business date it counted on, which ReleaseDebit needs.
 func (s *Service) CountDebit(ctx context.Context, tx postgres.Tx, a Account, amount money.Amount) (time.Time, error) {
 	m := s.movements(tx)
@@ -191,7 +192,8 @@ func (s *Service) ReleaseDebit(ctx context.Context, tx postgres.Tx, a Account, a
 }
 
 // CountCredit is CountDebit for a credit of amount to account a: a transfer received, credited through the ledger,
-// not through a movement of this module.
+// not through a movement of this module. It is no customer activity: the account's last customer activity stays as
+// it was.
 func (s *Service) CountCredit(ctx context.Context, tx postgres.Tx, a Account, amount money.Amount) error {
 	m := s.movements(tx)
 	return app.CountCredit(ctx, m, m, a, amount.Units())

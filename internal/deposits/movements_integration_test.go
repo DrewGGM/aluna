@@ -350,6 +350,42 @@ func TestTheLastCustomerActivityIsTheBusinessDate(t *testing.T) {
 	}
 }
 
+// TestAPaymentOutIsCustomerActivity (FR-27): a debit another module counts, a payment the customer sends, records
+// the business date as the account's last customer activity, so that an account that only pays out never becomes
+// dormant; a credit counted, a transfer received, does not.
+func TestAPaymentOutIsCustomerActivity(t *testing.T) {
+	w := newWorld(t)
+	w.vault(t)
+	payer, payee := w.active(t), w.active(t)
+	monday, tuesday := calendar.Date{Year: 2026, Month: time.March, Day: 2}, calendar.Date{Year: 2026, Month: time.March, Day: 3}
+	inTx(t, func(tx postgres.Tx) error {
+		_, err := w.calendar.Rollover(t.Context(), tx, w.entity, monday)
+		return err
+	})
+
+	inTx(t, func(tx postgres.Tx) error {
+		from, err := w.deposits.LockActive(t.Context(), tx, w.entity, payer.ID)
+		if err != nil {
+			return err
+		}
+		if _, err := w.deposits.CountDebit(t.Context(), tx, from, money.New(100, from.Currency)); err != nil {
+			return err
+		}
+		to, err := w.deposits.LockActive(t.Context(), tx, w.entity, payee.ID)
+		if err != nil {
+			return err
+		}
+		return w.deposits.CountCredit(t.Context(), tx, to, money.New(100, to.Currency))
+	})
+
+	if got := w.reread(t, payer).LastCustomerActivityOn; got != tuesday {
+		t.Fatalf("last activity of the account that paid = %v, want %v", got, tuesday)
+	}
+	if got := w.reread(t, payee).LastCustomerActivityOn; got != monday {
+		t.Fatalf("last activity of the account paid = %v, want its opening %v", got, monday)
+	}
+}
+
 func (w world) reread(t *testing.T, a deposits.Account) deposits.Account {
 	t.Helper()
 	stored, err := w.deposits.Account(t.Context(), testPool, w.entity, a.ID)

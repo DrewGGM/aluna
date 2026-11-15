@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -421,9 +422,14 @@ func (s *Store) LockAsyncCursor(ctx context.Context) (app.AsyncCursor, error) {
 	return app.AsyncCursor{Xact: r.PostedXact, EntryID: r.EntryID}, nil
 }
 
-// AsyncEntriesAfter reads a batch of async-account entries after c and the cursor of the last one.
+// AsyncEntriesAfter reads a batch of async-account entries after c, below the aggregation horizon, and the cursor
+// to move to: the last one read or, after a short batch, the end of every transaction below the horizon.
 func (s *Store) AsyncEntriesAfter(ctx context.Context, c app.AsyncCursor, limit int) ([]domain.EntryInput, app.AsyncCursor, error) {
-	rows, err := s.q.AsyncEntriesAfter(ctx, sqlcgen.AsyncEntriesAfterParams{PostedXact: c.Xact, EntryID: c.EntryID, Batch: int64(limit)})
+	horizon, err := s.q.AggregationHorizon(ctx)
+	if err != nil {
+		return nil, c, fmt.Errorf("read the aggregation horizon: %w", err)
+	}
+	rows, err := s.q.AsyncEntriesAfter(ctx, sqlcgen.AsyncEntriesAfterParams{PostedXact: c.Xact, EntryID: c.EntryID, Horizon: horizon, Batch: int64(limit)})
 	if err != nil {
 		return nil, c, fmt.Errorf("read async entries: %w", err)
 	}
@@ -435,6 +441,10 @@ func (s *Store) AsyncEntriesAfter(ctx context.Context, c app.AsyncCursor, limit 
 		}
 		entries[i] = domain.EntryInput{AccountID: r.AccountID, Amount: money.New(r.Amount, cur)}
 		c = app.AsyncCursor{Xact: r.PostedXact, EntryID: r.ID}
+	}
+	// a short batch read every async entry below the horizon: past them, up to it, there are only sync ones
+	if len(rows) < limit {
+		c = app.AsyncCursor{Xact: horizon - 1, EntryID: math.MaxInt64}
 	}
 	return entries, c, nil
 }

@@ -149,6 +149,29 @@ func TestAnOlderTransactionWithNewerEntriesIsAggregated(t *testing.T) {
 	}
 }
 
+// TestARunOfSyncPostingsMovesTheCursorPastThem (Q-62): with no async entry left below the horizon, the cursor
+// moves past the transactions that only touched sync accounts, so the next runs do not walk them again.
+func TestARunOfSyncPostingsMovesTheCursorPastThem(t *testing.T) {
+	posted, _ := mustPostRef(t, transfer(t, createAccount(t, ledger.KindAsset).ID, createAccount(t, ledger.KindLiability).ID, ids.New().String()))
+	var xact uint64
+	if err := testPool.QueryRow(t.Context(), `SELECT posted_xact::text::bigint FROM ledger.transactions WHERE id = $1`, posted.ID).Scan(&xact); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		aggregate(t, 100)
+		var cursor uint64
+		if err := testPool.QueryRow(t.Context(), `SELECT posted_xact::text::bigint FROM ledger.async_cursor`).Scan(&cursor); err != nil {
+			t.Fatal(err)
+		}
+		if cursor >= xact {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after 10 s the cursor is at %d, behind the sync posting's %d", cursor, xact)
+		}
+	}
+}
+
 // TestTheCursorOnlyMovesForward: not even with direct SQL can the application role move the cursor back
 // or delete its row.
 func TestTheCursorOnlyMovesForward(t *testing.T) {

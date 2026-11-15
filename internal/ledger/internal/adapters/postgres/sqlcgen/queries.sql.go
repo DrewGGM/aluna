@@ -135,6 +135,20 @@ func (q *Queries) AddToBalance(ctx context.Context, arg AddToBalanceParams) erro
 	return err
 }
 
+const aggregationHorizon = `-- name: AggregationHorizon :one
+SELECT pg_snapshot_xmin(pg_current_snapshot())::xid8 AS horizon
+`
+
+// The aggregation horizon: the xmin of a snapshot of the server, the oldest transaction in progress (this one's
+// included) or, with none, the next to finish. Every transaction below it has committed or aborted and adds no
+// entries.
+func (q *Queries) AggregationHorizon(ctx context.Context) (uint64, error) {
+	row := q.db.QueryRow(ctx, aggregationHorizon)
+	var horizon uint64
+	err := row.Scan(&horizon)
+	return horizon, err
+}
+
 const asyncEntriesAfter = `-- name: AsyncEntriesAfter :many
 SELECT t.posted_xact, e.id, e.account_id, e.currency, e.amount
 FROM ledger.transactions t
@@ -145,14 +159,15 @@ JOIN ledger.accounts a ON a.id = e.account_id
 WHERE a.balance_mode = 'async'
   AND t.posted_xact >= $1::xid8
   AND (t.posted_xact > $1::xid8 OR e.id > $2::bigint)
-  AND t.posted_xact < pg_snapshot_xmin(pg_current_snapshot())
+  AND t.posted_xact < $3::xid8
 ORDER BY t.posted_xact, e.id
-LIMIT $3::bigint
+LIMIT $4::bigint
 `
 
 type AsyncEntriesAfterParams struct {
 	PostedXact uint64
 	EntryID    int64
+	Horizon    uint64
 	Batch      int64
 }
 
@@ -164,13 +179,18 @@ type AsyncEntriesAfterRow struct {
 	Amount     int64
 }
 
-// Async account entries after the cursor, in (posted_xact, id) order, only from database transactions
-// older than the oldest one in progress: those have already committed or aborted and add no entries. It
-// walks transactions by posted_xact and reads each one's entries by transaction_id: with a direct join,
+// Async account entries after the cursor, in (posted_xact, id) order, only from database transactions below the
+// horizon, read before this statement, so it sees all of them. It walks transactions by posted_xact and reads
+// each one's entries by transaction_id: with a direct join,
 // the planner enters through the async account and reads its whole history on every batch. OFFSET 0
 // keeps it from flattening the subquery and going back to that plan.
 func (q *Queries) AsyncEntriesAfter(ctx context.Context, arg AsyncEntriesAfterParams) ([]AsyncEntriesAfterRow, error) {
-	rows, err := q.db.Query(ctx, asyncEntriesAfter, arg.PostedXact, arg.EntryID, arg.Batch)
+	rows, err := q.db.Query(ctx, asyncEntriesAfter,
+		arg.PostedXact,
+		arg.EntryID,
+		arg.Horizon,
+		arg.Batch,
+	)
 	if err != nil {
 		return nil, err
 	}

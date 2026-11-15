@@ -4,6 +4,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -68,5 +69,33 @@ func TestTheOperationsStateIsReadAsTheApplication(t *testing.T) {
 	if after.OpenBreaks != before.OpenBreaks+1 || !servedKnown || served != 0 || after.QueueDepth["metrics-unserved"] < 1 ||
 		after.OldestUnsealed.IsZero() {
 		t.Fatalf("before %+v, after %+v", before, after)
+	}
+}
+
+// TestAnAsyncEntryWaitingIsReadAsTheApplication (Q-61): an entry of an async account past the aggregator's cursor,
+// the only one waiting in this package's database, shows up, as the application's role reads it, as the oldest async
+// entry waiting, with its transaction's time.
+func TestAnAsyncEntryWaitingIsReadAsTheApplication(t *testing.T) {
+	pool := appPool(t)
+	entity, cash, fees, tx := ids.New().String(), ids.New().String(), ids.New().String(), ids.New().String()
+	asOwner(t, pool,
+		`INSERT INTO ledger.accounts (id, legal_entity_id, code, kind, currency) VALUES ('`+cash+`', '`+entity+`', 'A.CASH', 'asset', 'COP')`,
+		`INSERT INTO ledger.accounts (id, legal_entity_id, code, kind, currency, balance_mode)
+			VALUES ('`+fees+`', '`+entity+`', 'I.FEES', 'income', 'COP', 'async')`,
+		`INSERT INTO ledger.transactions (id, legal_entity_id, code, value_date, business_date, source, external_ref, actor, channel, rule_version)
+			VALUES ('`+tx+`', '`+entity+`', 'fee', current_date, current_date, 'metrics', '`+tx+`', 'tester', 'test', 'v1')`,
+		`INSERT INTO ledger.entries (transaction_id, account_id, currency, amount)
+			VALUES ('`+tx+`', '`+cash+`', 'COP', 100), ('`+tx+`', '`+fees+`', 'COP', -100)`)
+
+	s, err := databaseState{pool: pool}.Read(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var posted time.Time
+	if err := pool.QueryRow(t.Context(), `SELECT posted_at FROM ledger.transactions WHERE id = $1`, tx).Scan(&posted); err != nil {
+		t.Fatal(err)
+	}
+	if !s.OldestUnaggregated.Equal(posted) {
+		t.Fatalf("the oldest async entry waiting was posted at %v, want %v, the one just posted", s.OldestUnaggregated, posted)
 	}
 }

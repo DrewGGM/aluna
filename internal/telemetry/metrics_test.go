@@ -115,12 +115,13 @@ func expect(t *testing.T, metrics map[string]metricdata.Metrics, cases []expecte
 }
 
 // TestTheOperationsMetricsReportTheState (FF-6): each metric reports what the source read, the pool's saturation
-// what the pool says, and the unsealed audit age counts from the oldest record waiting.
+// what the pool says, and the unsealed audit age and the async lag count from the oldest record and entry waiting.
 func TestTheOperationsMetricsReportTheState(t *testing.T) {
 	now := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
 	metrics := collect(t, fixed{s: telemetry.State{
 		Postings: 1200, PendingHolds: 7, OpenBreaks: 2, ApprovedRequests: 31, OldestUnsealed: now.Add(-90 * time.Second),
-		QueueDepth: map[string]int64{"default": 0, "webhooks": 9},
+		OldestUnaggregated: now.Add(-25 * time.Second),
+		QueueDepth:         map[string]int64{"default": 0, "webhooks": 9},
 	}}, now)
 
 	expect(t, metrics, []expected{
@@ -129,6 +130,7 @@ func TestTheOperationsMetricsReportTheState(t *testing.T) {
 		{"aluna.recon.breaks.open", "", "", 2},
 		{"aluna.approvals.approved", "", "", 31},
 		{"aluna.audit.unsealed.age", "", "", 90},
+		{"aluna.ledger.async.lag", "", "", 25},
 		{"aluna.jobs.queue.depth", "queue", "webhooks", 9},
 		{"aluna.jobs.queue.depth", "queue", "default", 0},
 		{"aluna.db.pool.connections", "state", "acquired", 5},
@@ -137,10 +139,11 @@ func TestTheOperationsMetricsReportTheState(t *testing.T) {
 	})
 }
 
-// TestNothingWaitingForItsSealIsAgeZero: with every record sealed the age is 0, so a quiet night does not page.
-func TestNothingWaitingForItsSealIsAgeZero(t *testing.T) {
+// TestNothingWaitingIsAgeZero: with every record sealed and every async entry aggregated the ages are 0, so a quiet
+// night does not page.
+func TestNothingWaitingIsAgeZero(t *testing.T) {
 	metrics := collect(t, fixed{s: telemetry.State{QueueDepth: map[string]int64{}}}, time.Now())
-	expect(t, metrics, []expected{{"aluna.audit.unsealed.age", "", "", 0}})
+	expect(t, metrics, []expected{{"aluna.audit.unsealed.age", "", "", 0}, {"aluna.ledger.async.lag", "", "", 0}})
 }
 
 // TestASourceThatFailsLeavesTheRest: the collection does not fail, so the process still exports the pool's metrics

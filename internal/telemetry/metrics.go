@@ -13,15 +13,17 @@ import (
 
 // State is what the operations metrics report of the database (quality-reliability §Observabilidad), read at each
 // collection: the transactions posted, the River jobs waiting by queue (every known queue, 0 when it is empty), the
-// holds pending, the reconciliation breaks open, the maker-checker requests a checker ever approved, and when the
-// oldest audit record still waiting for its seal was recorded (zero if none waits).
+// holds pending, the reconciliation breaks open, the maker-checker requests a checker ever approved, when the
+// oldest audit record still waiting for its seal was recorded and when the oldest entry of an async account still
+// waiting for the aggregator was posted (zero if none waits).
 type State struct {
-	Postings         int64
-	QueueDepth       map[string]int64
-	PendingHolds     int64
-	OpenBreaks       int64
-	ApprovedRequests int64
-	OldestUnsealed   time.Time
+	Postings           int64
+	QueueDepth         map[string]int64
+	PendingHolds       int64
+	OpenBreaks         int64
+	ApprovedRequests   int64
+	OldestUnsealed     time.Time
+	OldestUnaggregated time.Time
 }
 
 // Source reads the State.
@@ -84,7 +86,7 @@ func Register(meter metric.Meter, source Source, pool func() PoolState, now func
 type instruments struct {
 	postings, approved                   metric.Int64ObservableCounter
 	queueDepth, pendingHolds, openBreaks metric.Int64ObservableGauge
-	unsealedAge                          metric.Float64ObservableGauge
+	unsealedAge, asyncLag                metric.Float64ObservableGauge
 }
 
 func databaseInstruments(meter metric.Meter) (instruments, error) {
@@ -110,6 +112,9 @@ func databaseInstruments(meter metric.Meter) (instruments, error) {
 	in.unsealedAge, err = meter.Float64ObservableGauge("aluna.audit.unsealed.age", metric.WithUnit("s"),
 		metric.WithDescription("How long the oldest audit record has waited for its seal; 0 when none waits."))
 	add(err)
+	in.asyncLag, err = meter.Float64ObservableGauge("aluna.ledger.async.lag", metric.WithUnit("s"),
+		metric.WithDescription("How long the oldest entry of an async account has waited for the balance aggregator; 0 when none waits."))
+	add(err)
 	if err := errors.Join(errs...); err != nil {
 		return instruments{}, fmt.Errorf("operations metrics: %w", err)
 	}
@@ -117,7 +122,7 @@ func databaseInstruments(meter metric.Meter) (instruments, error) {
 }
 
 func (in instruments) all() []metric.Observable {
-	return []metric.Observable{in.postings, in.approved, in.queueDepth, in.pendingHolds, in.openBreaks, in.unsealedAge}
+	return []metric.Observable{in.postings, in.approved, in.queueDepth, in.pendingHolds, in.openBreaks, in.unsealedAge, in.asyncLag}
 }
 
 func (in instruments) observe(o metric.Observer, s State, now time.Time) {
@@ -128,9 +133,14 @@ func (in instruments) observe(o metric.Observer, s State, now time.Time) {
 	}
 	o.ObserveInt64(in.pendingHolds, s.PendingHolds)
 	o.ObserveInt64(in.openBreaks, s.OpenBreaks)
-	var age float64
-	if !s.OldestUnsealed.IsZero() {
-		age = now.Sub(s.OldestUnsealed).Seconds()
+	o.ObserveFloat64(in.unsealedAge, ageAt(s.OldestUnsealed, now))
+	o.ObserveFloat64(in.asyncLag, ageAt(s.OldestUnaggregated, now))
+}
+
+// ageAt is how long before now since was, in seconds; 0 if since is zero, when nothing waits.
+func ageAt(since, now time.Time) float64 {
+	if since.IsZero() {
+		return 0
 	}
-	o.ObserveFloat64(in.unsealedAge, age)
+	return now.Sub(since).Seconds()
 }

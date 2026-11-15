@@ -23,6 +23,7 @@ Dos reglas valen para todo el runbook:
 | `PostingLatencyHigh` | page | [Hot accounts lentas](#hot-accounts-lentas) |
 | `ReconciliationBreakOpen` | page | [Breaks de reconciliación](#breaks-de-reconciliación) |
 | `AuditSealLate` | page | [Cola River atascada](#cola-river-atascada) |
+| `AsyncBalancesLagging` | page | [Cola River atascada](#cola-river-atascada) o una transacción larga del clúster |
 | `OperationsMetricsMissing` | page | ningún proceso lee el estado de la base: base caída o procesos sin exportar |
 | `AuthorizationFailuresBurst` | page | [Falla del IAM](#falla-del-iam) o un cliente con tokens vencidos |
 | `MakerCheckerApproved` | info | registro de aprobaciones, no requiere acción |
@@ -121,8 +122,8 @@ su sujeto y la diferencia en unidades menores. Los controles corren cada 15 min:
    en cuentas `sync` o `async`), para los cambios en la base y
    [verifica la cadena de auditoría](#verificar-la-cadena-de-auditoría). Si la base fue alterada, sigue
    [Restauración PITR](#restauración-pitr). Un agregador async detenido no abre estos breaks: el control
-   compara hasta donde llegó, y el atraso se ve en `aluna_jobs_queue_depth{queue="ledger"}`
-   ([Cola River atascada](#cola-river-atascada)).
+   compara hasta donde llegó, y el atraso se ve en `aluna_ledger_async_lag_seconds` y la alerta
+   `AsyncBalancesLagging` ([Cola River atascada](#cola-river-atascada)).
 2. Un break no se cierra solo, aunque la diferencia desaparezca: resuélvelo.
 3. Si hay una diferencia real, corrígela con una reversa o un asiento de ajuste por la API, y resuelve
    el break con su causa en `POST /v1/reconciliation/breaks/{id}/resolution`.
@@ -202,7 +203,8 @@ espera locks, el cuello es el pool.
 
 ## Cola River atascada
 
-**Síntomas.** `AuditSealLate` (un registro de auditoría espera su sello más de 5 min),
+**Síntomas.** `AuditSealLate` (un registro de auditoría espera su sello más de 5 min), `AsyncBalancesLagging`
+(un asiento de una cuenta async espera al agregador más de 5 min),
 `aluna_jobs_queue_depth` que crece en una cola, saldos async atrasados, webhooks o extractos que no salen,
 pagos que se quedan `sent`.
 

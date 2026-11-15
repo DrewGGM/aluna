@@ -69,6 +69,13 @@ groups:
         annotations:
           summary: An audit record has waited more than 5 minutes for its seal
           description: The oldest audit record still unsealed was recorded {{ $value | humanizeDuration }} ago (ADR-0012).
+      - alert: AsyncBalancesLagging
+        expr: max(aluna_ledger_async_lag_seconds) > 300
+        labels:
+          severity: page
+        annotations:
+          summary: An entry of an async account has waited more than 5 minutes for the balance aggregator
+          description: The oldest entry not yet in its async account's balance was posted {{ $value | humanizeDuration }} ago (ADR-0004).
       - alert: OperationsMetricsMissing
         expr: absent(aluna_ledger_holds_pending)
         for: 10m
@@ -76,7 +83,7 @@ groups:
           severity: page
         annotations:
           summary: No process reports the database's state
-          description: Without these metrics the integrity alerts (breaks, audit seal) cannot fire; the reads of the database fail or no process runs.
+          description: Without these metrics the integrity alerts (breaks, audit seal, async lag) cannot fire; the reads of the database fail or no process runs.
 
   - name: aluna-security
     rules:

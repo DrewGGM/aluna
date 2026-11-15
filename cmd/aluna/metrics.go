@@ -46,22 +46,37 @@ type databaseState struct{ pool *pgxpool.Pool }
 
 // Read reads the state. The postings are the inserts into ledger.transactions as the table's statistics count them,
 // without scanning it: they include the attempts that rolled back, and they reset with the statistics. Approved
-// requests are those a checker approved, whether their command then ran or failed.
+// requests are those a checker approved, whether their command then ran or failed. The async entry waiting is the
+// next one the aggregator takes, read as the aggregator reads it (AsyncEntriesAfter in the ledger's queries):
+// transactions by posted_xact from the cursor, each one's entries by transaction_id, OFFSET 0 keeping the planner
+// from entering through the async account and its whole history; the cursor as a scalar subquery, so that the index
+// starts at it instead of filtering the whole index against a joined row; the first one, not the min, so that a
+// stopped aggregator does not make every collection read its whole backlog.
 func (d databaseState) Read(ctx context.Context) (telemetry.State, error) {
 	var s telemetry.State
-	var oldestUnsealed *time.Time
+	var oldestUnsealed, oldestUnaggregated *time.Time
 	err := d.pool.QueryRow(ctx, `SELECT
 			(SELECT coalesce(sum(n_tup_ins), 0)::bigint FROM pg_stat_user_tables WHERE schemaname = 'ledger' AND relname = 'transactions'),
 			(SELECT count(*) FROM ledger.holds WHERE status = 'pending'),
 			(SELECT count(*) FROM recon.breaks WHERE status = 'open'),
 			(SELECT count(*) FROM approvals.requests WHERE status IN ('approved', 'failed')),
-			(SELECT recorded_at FROM audit.records WHERE block_id IS NULL ORDER BY seq LIMIT 1)`).
-		Scan(&s.Postings, &s.PendingHolds, &s.OpenBreaks, &s.ApprovedRequests, &oldestUnsealed)
+			(SELECT recorded_at FROM audit.records WHERE block_id IS NULL ORDER BY seq LIMIT 1),
+			(SELECT t.posted_at FROM ledger.transactions t
+				CROSS JOIN LATERAL (SELECT id, account_id FROM ledger.entries WHERE transaction_id = t.id OFFSET 0) e
+				JOIN ledger.accounts a ON a.id = e.account_id
+				WHERE a.balance_mode = 'async'
+					AND t.posted_xact >= (SELECT posted_xact FROM ledger.async_cursor)
+					AND (t.posted_xact, e.id) > (SELECT posted_xact, entry_id FROM ledger.async_cursor)
+				ORDER BY t.posted_xact, e.id LIMIT 1)`).
+		Scan(&s.Postings, &s.PendingHolds, &s.OpenBreaks, &s.ApprovedRequests, &oldestUnsealed, &oldestUnaggregated)
 	if err != nil {
 		return telemetry.State{}, fmt.Errorf("read the operations state: %w", err)
 	}
 	if oldestUnsealed != nil {
 		s.OldestUnsealed = *oldestUnsealed
+	}
+	if oldestUnaggregated != nil {
+		s.OldestUnaggregated = *oldestUnaggregated
 	}
 	// the queues River serves, empty or not, and those with jobs waiting that nobody serves
 	rows, err := d.pool.Query(ctx, `SELECT name, sum(n)::bigint FROM (

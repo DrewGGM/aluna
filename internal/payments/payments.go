@@ -59,8 +59,9 @@ var (
 	// ErrDuplicatePayment means the entity already made a payment with that reference.
 	ErrDuplicatePayment = app.ErrDuplicatePayment
 	// ErrRailNotConfigured means the entity has no clearing or suspense account for the rail in the payment's
-	// currency: a payment through it cannot be held, nor a transfer received booked.
-	ErrRailNotConfigured = errors.New("the rail has no clearing or suspense account in the entity")
+	// currency, or one that is not a liability, or a clearing that is not async: a payment through it cannot be
+	// held, nor a transfer received booked.
+	ErrRailNotConfigured = errors.New("the rail's clearing or suspense account is missing or misconfigured in the entity")
 )
 
 // holdLife is how long a payment's hold lasts: the rail's outcome comes much sooner, and an order without one
@@ -255,8 +256,9 @@ const (
 )
 
 // railAccount is rail's account of kind in the entity's ledger, in currency c: L.<KIND>.<RAIL>, as
-// L.CLEARING.SIMBREB for simbreb's clearing account. One that is missing or in another currency is
-// ErrRailNotConfigured, the entity's misconfiguration and not the caller's.
+// L.CLEARING.SIMBREB for simbreb's clearing account, a liability, the clearing async. One that is missing, in another
+// currency, of another kind or a sync clearing is ErrRailNotConfigured, the entity's misconfiguration and not the
+// caller's.
 func (s *Service) railAccount(ctx context.Context, tx postgres.Tx, entity ids.ID, kind, rail string, c money.Currency) (ids.ID, error) {
 	code := "L." + kind + "." + strings.ToUpper(rail)
 	account, err := s.ledger.AccountByCode(ctx, tx, entity, code)
@@ -267,6 +269,10 @@ func (s *Service) railAccount(ctx context.Context, tx postgres.Tx, entity ids.ID
 		return ids.ID{}, err
 	case account.Currency != c:
 		return ids.ID{}, fmt.Errorf("%w: %s is in %s", ErrRailNotConfigured, code, account.Currency.Code())
+	case account.Kind != ledger.KindLiability:
+		return ids.ID{}, fmt.Errorf("%w: %s is %s, not a liability", ErrRailNotConfigured, code, account.Kind)
+	case kind == clearingAccount && account.Mode != ledger.BalanceModeAsync:
+		return ids.ID{}, fmt.Errorf("%w: %s is %s, not async: a transfer received debits it", ErrRailNotConfigured, code, account.Mode)
 	}
 	return account.ID, nil
 }

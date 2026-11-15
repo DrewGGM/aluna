@@ -166,7 +166,7 @@ por `lock_timeout` (2 s) y un `aluna_db_transaction_retries_total` que crece con
 `db_response_status_code="40P01"` o `"40001"`.
 
 **Diagnóstico.** Un posting bloquea con `FOR UPDATE` solo las cuentas `sync` que toca. Una cuenta interna
-compartida en modo `sync` (settlement, clearing, comisiones, GMF) serializa todo el tráfico que pasa por
+compartida en modo `sync` (settlement, comisiones, GMF) serializa todo el tráfico que pasa por
 ella:
 
 ```sql

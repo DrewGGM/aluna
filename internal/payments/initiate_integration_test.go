@@ -488,26 +488,36 @@ func TestAFreezeDuringAPaymentStopsIt(t *testing.T) {
 	}
 }
 
-// TestARailWithoutClearingAccountIsNotConfigured (FR-31): an entity without the rail's clearing account, or
-// with one in another currency, cannot pay through it: ErrRailNotConfigured.
+// TestARailWithoutClearingAccountIsNotConfigured (FR-31): an entity without the rail's clearing account, or with
+// one in another currency, not a liability or sync, cannot pay through it: ErrRailNotConfigured, before anything is
+// held.
 func TestARailWithoutClearingAccountIsNotConfigured(t *testing.T) {
-	w := newWorld(t, false)
-	if _, err := w.initiate(t, w.input(t, 30000000, "@beneficiary")); !errors.Is(err, payments.ErrRailNotConfigured) {
-		t.Fatalf("a payment without the clearing account = %v, want ErrRailNotConfigured", err)
-	}
 	usd, err := money.CurrencyOf("USD")
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustDo(t, func(tx postgres.Tx) error {
-		_, err := w.ledger.CreateAccount(t.Context(), tx, ledger.CreateAccountInput{
-			LegalEntityID: w.entity, Code: "L.CLEARING.SIMBREB", Kind: ledger.KindLiability, Currency: usd, Mode: ledger.BalanceModeAsync,
+	pesos := cop(t, 0).Currency()
+	for name, clearing := range map[string]*ledger.CreateAccountInput{
+		"missing":          nil,
+		"in dollars":       {Kind: ledger.KindLiability, Currency: usd, Mode: ledger.BalanceModeAsync},
+		"not a liability":  {Kind: ledger.KindAsset, Currency: pesos, Mode: ledger.BalanceModeAsync},
+		"in the sync mode": {Kind: ledger.KindLiability, Currency: pesos, Mode: ledger.BalanceModeSync},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t, false)
+			if clearing != nil {
+				mustDo(t, func(tx postgres.Tx) error {
+					in := *clearing
+					in.LegalEntityID, in.Code = w.entity, "L.CLEARING.SIMBREB"
+					_, err := w.ledger.CreateAccount(t.Context(), tx, in)
+					return err
+				})
+			}
+			if _, err := w.initiate(t, w.input(t, 30000000, "@beneficiary")); !errors.Is(err, payments.ErrRailNotConfigured) ||
+				w.balance(t).PendingDebits.Units() != 0 {
+				t.Fatalf("a payment = %v with %d held, want ErrRailNotConfigured and nothing held", err, w.balance(t).PendingDebits.Units())
+			}
 		})
-		return err
-	})
-
-	if _, err := w.initiate(t, w.input(t, 30000000, "@beneficiary")); !errors.Is(err, payments.ErrRailNotConfigured) {
-		t.Fatalf("a payment with a clearing account in USD = %v, want ErrRailNotConfigured", err)
 	}
 }
 

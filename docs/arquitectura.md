@@ -95,7 +95,8 @@ el pago restauran lo que el pago usó de la exención de GMF del mes, si `ALUNA_
    `legal_entity_id` que deben llevar los tokens de sus usuarios; con `--id` toma el que ya emite el IAM.
 2. **Cuentas del rail.** Antes del primer pago, alguien con `ledger.accounts.create` crea las dos cuentas del
    rail simulado, pasivos `async` en la moneda de la entidad. Una transferencia recibida debita la clearing,
-   y una cuenta `sync` sin saldo la rechazaría. Sin la clearing, `POST /v1/payment-orders` responde 500.
+   y una cuenta `sync` sin saldo la rechazaría. Sin la clearing, o con una que no sea un pasivo `async`,
+   `POST /v1/payment-orders` responde 500 sin retener nada.
 
    ```bash
    for code in L.CLEARING.SIMBREB L.SUSPENSE.SIMBREB; do

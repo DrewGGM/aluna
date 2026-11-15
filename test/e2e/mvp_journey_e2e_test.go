@@ -208,18 +208,20 @@ func (j *journey) loadCUIFMappings(t *testing.T) {
 	}
 }
 
-// createLedgerAccounts creates the accounts the product and the rail name, all sync so their balances are exact.
+// createLedgerAccounts creates the accounts the product and the rail name: the clearing async, as the rail requires;
+// the fee income and the GMF payable async, because giving back a returned payment's charges debits them; and the
+// rest sync so that their balances are exact.
 func (j *journey) createLedgerAccounts(t *testing.T) {
 	t.Helper()
 	j.accounts = map[string]string{}
-	for code, kind := range map[string]string{
-		"A.CASH.VAULT": "asset", "E.INTEREST.SAVINGS": "expense", "I.FEES.SAVINGS": "income", "L.TAX.GMF": "liability",
-		"L.CLEARING.SIMBREB": "liability", "L.SUSPENSE.SIMBREB": "liability",
+	for code, account := range map[string]struct{ kind, mode string }{
+		"A.CASH.VAULT": {"asset", "sync"}, "E.INTEREST.SAVINGS": {"expense", "sync"}, "I.FEES.SAVINGS": {"income", "async"},
+		"L.TAX.GMF": {"liability", "async"}, "L.CLEARING.SIMBREB": {"liability", "async"}, "L.SUSPENSE.SIMBREB": {"liability", "sync"},
 	} {
-		var account struct{ ID string }
-		body := fmt.Sprintf(`{"code":%q,"kind":%q,"currency":"COP","balance_mode":"sync"}`, code, kind)
-		expect(t, j.as("operator-a", "operator"), http.MethodPost, "/v1/ledger-accounts", body, http.StatusCreated, &account)
-		j.accounts[code] = account.ID
+		var created struct{ ID string }
+		body := fmt.Sprintf(`{"code":%q,"kind":%q,"currency":"COP","balance_mode":%q}`, code, account.kind, account.mode)
+		expect(t, j.as("operator-a", "operator"), http.MethodPost, "/v1/ledger-accounts", body, http.StatusCreated, &created)
+		j.accounts[code] = created.ID
 	}
 }
 

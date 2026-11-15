@@ -81,7 +81,9 @@ commands:
                              ALUNA_SCREENING_MAX_LIST_AGE_HOURS (48 by default, up to 168);
                              ALUNA_MANUAL_POSTING_APPROVAL sends through maker-checker the manual
                              postings whose debits reach, in a currency, its threshold in minor
-                             units (ADR-0019): COP:100000000,USD:500000; empty, none
+                             units (ADR-0019): COP:100000000,USD:500000; empty, none;
+                             ALUNA_PERIOD_CLOSE_ORDER is any (the default) or sequential, which
+                             closes accounting periods month by month after the first (ADR-0020)
   worker                     runs the jobs (outbox, holds, async balances, purges, audit sealing, controls, GL,
                              payments) on ALUNA_DATABASE_URL, anchoring blocks in
                              ALUNA_AUDIT_ANCHOR_DIR or, with Object Lock, in the S3 bucket at
@@ -264,6 +266,7 @@ type apiConfig struct {
 	screening           *compliance.ListScreeningConfig // nil with the fake vendor
 	railSecret          string
 	manualThresholds    httpapi.ManualPostingThresholds
+	sequentialCloses    bool
 }
 
 func apiConfigFromEnv() (apiConfig, error) {
@@ -282,6 +285,9 @@ func apiConfigFromEnv() (apiConfig, error) {
 		return apiConfig{}, err
 	}
 	if cfg.manualThresholds, err = manualThresholdsFromEnv(); err != nil {
+		return apiConfig{}, err
+	}
+	if cfg.sequentialCloses, err = sequentialClosesFromEnv(); err != nil {
 		return apiConfig{}, err
 	}
 	cfg.issuer, cfg.audience = os.Getenv("ALUNA_OIDC_ISSUER"), os.Getenv("ALUNA_OIDC_AUDIENCE")
@@ -312,6 +318,19 @@ func manualThresholdsFromEnv() (httpapi.ManualPostingThresholds, error) {
 		thresholds[cur.Code()] = n
 	}
 	return thresholds, nil
+}
+
+// sequentialClosesFromEnv is whether ALUNA_PERIOD_CLOSE_ORDER says sequential (ADR-0020): any, or empty, closes
+// in any order; anything else is an error.
+func sequentialClosesFromEnv() (bool, error) {
+	switch v := os.Getenv("ALUNA_PERIOD_CLOSE_ORDER"); v {
+	case "", "any":
+		return false, nil
+	case "sequential":
+		return true, nil
+	default:
+		return false, fmt.Errorf("%w: ALUNA_PERIOD_CLOSE_ORDER=%q is neither any nor sequential", errCloseOrder, v)
+	}
 }
 
 // charging is how the entity charges: the modality of its GMF exemption, and what a payment that does not go
@@ -411,6 +430,8 @@ var (
 	errChargesPolicy = errors.New("invalid policy on the charges of payments")
 	// errManualApproval means an ALUNA_MANUAL_POSTING_APPROVAL that is not thresholds CUR:units.
 	errManualApproval = errors.New("invalid ALUNA_MANUAL_POSTING_APPROVAL")
+	// errCloseOrder means an ALUNA_PERIOD_CLOSE_ORDER that is neither any nor sequential.
+	errCloseOrder = errors.New("invalid ALUNA_PERIOD_CLOSE_ORDER")
 )
 
 // connectTimeout bounds the initial connection: if the database does not respond, the process fails
@@ -496,6 +517,9 @@ func newAPI(ctx context.Context, pool *pgxpool.Pool, uow *postgres.UnitOfWork, c
 	}
 	keys := idempotency.NewStore(pool)
 	calendarSvc := calendar.New(events, time.Now)
+	if cfg.sequentialCloses {
+		calendarSvc.CloseInOrder()
+	}
 	ledgerSvc := ledger.New(calendarSvc, events)
 	complianceSvc, err := complianceFor(ctx, cfg.screening, events, pool, log)
 	if err != nil {

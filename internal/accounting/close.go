@@ -12,7 +12,8 @@ import (
 )
 
 // CheckPeriodClose reports whether the entity's period, yyyy-mm, can close: calendar.ErrInvalidPeriod,
-// calendar.ErrPeriodNotEnded or calendar.ErrPeriodClosed otherwise. q can be the pool or a Tx.
+// calendar.ErrPeriodNotEnded, calendar.ErrPeriodClosed or calendar.ErrPeriodOutOfOrder otherwise. q can be the pool or
+// a Tx.
 func (s *Service) CheckPeriodClose(ctx context.Context, q postgres.Querier, entity ids.ID, period string) error {
 	return s.calendar.CheckPeriodClose(ctx, q, entity, period)
 }

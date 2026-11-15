@@ -1064,7 +1064,9 @@ paths:
         from then on a posting with a business date in it or before it is 409 `period_closed`. If a check fails, the
         request is left `failed` with why and the period stays open. A closed period never reopens. A period that is not a
         month is 400; one the business date has not left is 422 `period_not_ended`; one closed already is 409
-        `period_closed`. Idempotent by `Idempotency-Key`.
+        `period_closed`. If the deployment closes in order (`ALUNA_PERIOD_CLOSE_ORDER=sequential`, ADR-0020), a
+        month later than the one after the last closed is 409 `period_out_of_order`. Idempotent by
+        `Idempotency-Key`.
       x-aluna-permission: accounting.periods.close
       parameters:
         - name: period

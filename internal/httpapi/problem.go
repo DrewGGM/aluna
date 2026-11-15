@@ -221,6 +221,7 @@ var problems = []struct {
 	// close of a period
 	{calendar.ErrInvalidPeriod, invalidRequest("Invalid period", "A period is a month, yyyy-mm.")},
 	{calendar.ErrPeriodNotEnded, unprocessable("period_not_ended", "The period has not ended: the business date is in it or before it")},
+	{calendar.ErrPeriodOutOfOrder, conflict("period_out_of_order", "Periods close in order: this one does not follow the last closed one")},
 	{accounting.ErrPeriodNotSquare, conflict("period_not_square", "The period's trial balance does not sum zero")},
 	{accounting.ErrOpenBreaks, conflict("open_breaks", "A period does not close with reconciliation breaks open")},
 	// reconciliation

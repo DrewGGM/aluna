@@ -68,7 +68,27 @@ var (
 	ErrInvalidPeriod = errors.New("a period is a month, yyyy-mm")
 	// ErrPeriodNotEnded means a period that is not over: the entity's business date is in it or before it.
 	ErrPeriodNotEnded = errors.New("the period has not ended")
+	// ErrPeriodOutOfOrder means, with sequential closes, a period after the next one to close (ADR-0020).
+	ErrPeriodOutOfOrder = errors.New("the period does not follow the last closed one")
 )
+
+// FollowsLastClose is ErrPeriodOutOfOrder if period is later than the month after the entity's last closed one
+// (ADR-0020): closes go month by month once one is closed. With none closed any month can be first, and one at or
+// before the last is left to the checks of the close (it is closed, or frozen by EnsureOpen).
+func FollowsLastClose(ctx context.Context, s ClosedPeriodStore, entity ids.ID, period string) error {
+	start, err := ParsePeriod(period)
+	if err != nil {
+		return err
+	}
+	last, err := s.LastClosedPeriod(ctx, entity)
+	if err != nil {
+		return err
+	}
+	if previous := start.AddDate(0, -1, 0).Format("2006-01"); last != "" && last < previous {
+		return fmt.Errorf("%w: %s, and the last closed is %s", ErrPeriodOutOfOrder, period, last)
+	}
+	return nil
+}
 
 // PeriodCloser is what closing a period needs.
 type PeriodCloser interface {

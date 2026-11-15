@@ -394,6 +394,7 @@ func TestAPIConfigFromEnv(t *testing.T) {
 			t.Setenv("ALUNA_GMF_RESTORE_EXEMPTION", "")
 			t.Setenv("ALUNA_QUOTE_POLICY", "")
 			t.Setenv("ALUNA_MANUAL_POSTING_APPROVAL", "")
+			t.Setenv("ALUNA_PERIOD_CLOSE_ORDER", "")
 			t.Setenv("ALUNA_RETURN_REFUND_GMF_REASONS", "")
 			unsetenv(t, "ALUNA_RETURN_REFUND_GMF_REASONS")
 
@@ -432,5 +433,20 @@ func TestTheManualPostingThresholdsComeFromTheEnvironment(t *testing.T) {
 		if _, err := manualThresholdsFromEnv(); !errors.Is(err, errManualApproval) {
 			t.Errorf("%q = %v, want errManualApproval", value, err)
 		}
+	}
+}
+
+// TestTheCloseOrderComesFromTheEnvironment (ADR-0020): any or empty closes in any order, sequential in order, and
+// anything else is an error.
+func TestTheCloseOrderComesFromTheEnvironment(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "any": false, "sequential": true} {
+		t.Setenv("ALUNA_PERIOD_CLOSE_ORDER", value)
+		if got, err := sequentialClosesFromEnv(); err != nil || got != want {
+			t.Errorf("%q = %v, %v; want %v", value, got, err, want)
+		}
+	}
+	t.Setenv("ALUNA_PERIOD_CLOSE_ORDER", "Sequential")
+	if _, err := sequentialClosesFromEnv(); !errors.Is(err, errCloseOrder) {
+		t.Errorf("Sequential = %v, want errCloseOrder", err)
 	}
 }

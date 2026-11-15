@@ -64,6 +64,7 @@ Todo sale del entorno:
 | `ALUNA_SCREENING_OFAC_SDN_URL`, `ALUNA_SCREENING_OFAC_ALT_URL`, `ALUNA_SCREENING_UN_URL`, `ALUNA_SCREENING_PEP_URL` | `worker` | las de sus dueños | De dónde se descargan las listas, para un espejo interno |
 | `ALUNA_QUOTE_POLICY` | `api`, `worker` | `lower_of` | Con qué comisión se cobra un pago que esperó a cumplimiento: `lower_of`, la menor entre la de la cotización que nombró al iniciarlo (`quote_id`) y la vigente al despejarlo, o `honor`, siempre la cotizada. Sin cotización se cobra la vigente: el core no le mostró ninguna. El GMF es el del momento del débito |
 | `ALUNA_MANUAL_POSTING_APPROVAL` | `api` | sin valor: ningún asiento manual pasa por maker-checker | Desde qué total de débitos, por moneda y en unidades menores, un asiento manual (`POST /v1/transactions`) queda como solicitud `ledger.manual_posting` (ADR-0019): `COP:100000000,USD:500000`; `COP:0` la exige en todo asiento en pesos |
+| `ALUNA_PERIOD_CLOSE_ORDER` | `api` | `any` | Si los periodos contables se cierran en cualquier orden (`any`) o mes a mes después del primero (`sequential`, ADR-0020): un mes posterior al siguiente del último cerrado es 409 `period_out_of_order` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `api`, `worker` | sin valor: nada sale del proceso | Exporta trazas y métricas por OTLP/HTTP, con el resto de variables `OTEL_*` |
 
 ### Notificaciones de los rails
@@ -327,7 +328,9 @@ nocturno.
 - **Cierre de periodo.** Un mes que la fecha de negocio ya dejó atrás se cierra con
   `POST /v1/accounting-periods/{period}/closure` (maker-checker). Al aprobarse, su balance de prueba debe
   sumar cero por moneda y no puede haber breaks abiertos; después, todo asiento con fecha de negocio en él o
-  antes, aunque ese mes no tenga fila, es 409 `period_closed`, y un periodo cerrado no se reabre. La base lo
+  antes, aunque ese mes no tenga fila, es 409 `period_closed`, y un periodo cerrado no se reabre. Con
+  `ALUNA_PERIOD_CLOSE_ORDER=sequential`, después del primer cierre ninguno posterior al siguiente del
+  último cerrado cierra; en cualquier orden, cerrar un mes deja sin asientos a los anteriores aunque sigan abiertos. La base lo
   refuerza (`0043_backdated_postings.sql`): un asiento con fecha anterior al mes de la entidad toma un lock de la
   entidad que el cierre toma exclusivo, así que un cierre espera a los asientos retroactivos en curso.
 - **Extractos.** Con el periodo cerrado, `deposits.statements.generate` genera el extracto del mes de cada

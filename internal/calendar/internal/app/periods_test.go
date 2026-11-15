@@ -146,3 +146,25 @@ func TestNothingPostsUpToTheLastClose(t *testing.T) {
 		t.Errorf("EnsureOpen with nothing closed = %v, want nil", err)
 	}
 }
+
+// TestSequentialClosesFollowTheLastOne (Q-131 f): after the first close, a later month closes only if it is the one
+// after the last closed; with none closed, any month can be first; one at or before the last is left to the checks
+// of the close.
+func TestSequentialClosesFollowTheLastOne(t *testing.T) {
+	p := newPeriods()
+	if err := app.FollowsLastClose(t.Context(), p, ids.New(), "2025-11"); err != nil {
+		t.Fatalf("the first close = %v, want nil", err)
+	}
+	p.statuses["2026-01"] = app.PeriodClosed
+	for period, want := range map[string]error{
+		"2026-02": nil,
+		"2026-03": app.ErrPeriodOutOfOrder,
+		"2027-01": app.ErrPeriodOutOfOrder,
+		"2026-01": nil,
+		"2025-12": nil,
+	} {
+		if err := app.FollowsLastClose(t.Context(), p, ids.New(), period); !errors.Is(err, want) {
+			t.Errorf("FollowsLastClose(%s) = %v, want %v", period, err, want)
+		}
+	}
+}

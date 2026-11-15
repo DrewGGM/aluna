@@ -54,6 +54,7 @@ var (
 	ErrPeriodClosed        = app.ErrPeriodClosed
 	ErrInvalidPeriod       = app.ErrInvalidPeriod
 	ErrPeriodNotEnded      = app.ErrPeriodNotEnded
+	ErrPeriodOutOfOrder    = app.ErrPeriodOutOfOrder
 )
 
 // typeRolled is the event of a rollover (architecture §8).
@@ -66,13 +67,21 @@ type Events interface {
 
 // Service is the calendar facade. Each operation receives the connection or the transaction it runs in.
 type Service struct {
-	events Events
-	now    func() time.Time
+	events       Events
+	now          func() time.Time
+	closeInOrder bool
 }
 
 // New creates the calendar service; it publishes its events to events, and now is the clock the rollover checks
 // the day against.
 func New(events Events, now func() time.Time) *Service { return &Service{events: events, now: now} }
+
+// CloseInOrder makes periods close month by month once one is closed (ADR-0020): a later one is
+// ErrPeriodOutOfOrder. Without it, they close in any order.
+func (s *Service) CloseInOrder() *Service {
+	s.closeInOrder = true
+	return s
+}
 
 // LegalEntity is a legal entity to register: its ID, its name, its first business date and its functional currency.
 type LegalEntity = app.LegalEntity
@@ -134,10 +143,15 @@ func ValidatePeriod(period string) error {
 }
 
 // CheckPeriodClose reports whether the entity's period, yyyy-mm, can close (FR-37): ErrInvalidPeriod if it is not
-// a month, ErrPeriodNotEnded if the business date has not left it, ErrPeriodClosed if it is closed or closing. q can
-// be the pool or a Tx.
+// a month, ErrPeriodNotEnded if the business date has not left it, ErrPeriodClosed if it is closed or closing, and,
+// if periods close in order (CloseInOrder), ErrPeriodOutOfOrder if it is later than the month after the last closed.
+// q can be the pool or a Tx.
 func (s *Service) CheckPeriodClose(ctx context.Context, q postgres.Querier, legalEntity ids.ID, period string) error {
-	return app.CheckClose(ctx, pg.NewStore(q), legalEntity, period)
+	store := pg.NewStore(q)
+	if err := app.CheckClose(ctx, store, legalEntity, period); err != nil || !s.closeInOrder {
+		return err
+	}
+	return app.FollowsLastClose(ctx, store, legalEntity, period)
 }
 
 // ClosePeriod closes the entity's period within tx, by who (FR-37): with the errors of CheckPeriodClose, or
@@ -145,7 +159,13 @@ func (s *Service) CheckPeriodClose(ctx context.Context, q postgres.Querier, lega
 // next month, excluded, while no posting gets into it; and it is closed, so nothing posts in it any more. If verify
 // fails, its error comes back and tx must roll back, which leaves the period open.
 func (s *Service) ClosePeriod(ctx context.Context, tx postgres.Tx, legalEntity ids.ID, period, by string, verify func(ctx context.Context, from, to Date) error) error {
-	return app.ClosePeriod(ctx, pg.NewStore(tx), legalEntity, period, by, verify)
+	store := pg.NewStore(tx)
+	if s.closeInOrder {
+		if err := app.FollowsLastClose(ctx, store, legalEntity, period); err != nil {
+			return err
+		}
+	}
+	return app.ClosePeriod(ctx, store, legalEntity, period, by, verify)
 }
 
 // EnsureOpen is ErrPeriodClosed if d falls in the entity's last closed period or before it (app.EnsureOpen): the

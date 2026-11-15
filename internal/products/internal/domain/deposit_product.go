@@ -300,6 +300,11 @@ func (in depositProductJSON) toDomain() (DepositProduct, error) {
 	return p, nil
 }
 
+// InSMMLV reports whether a limit is in SMMLV, which only converts to pesos.
+func (l Limits) InSMMLV() bool {
+	return l.PerOperation.SMMLV > 0 || l.DailyDebits.SMMLV > 0 || l.MonthlyDebits.SMMLV > 0 || l.MaxBalance.SMMLV > 0
+}
+
 func currency(code string) (money.Currency, error) {
 	if code == "" {
 		return money.Currency{}, invalid("currency", "required")
@@ -503,7 +508,7 @@ func gmfExemptEligible(v *bool) (bool, error) {
 	return *v, nil
 }
 
-// rules checks the names and the length of the rules; compiling them is up to the rules engine (T-043).
+// rules checks the names and the length of the rules; the rules engine compiles them when a version is written.
 func rules(in map[string]string) error {
 	if len(in) > maxRules {
 		return invalid("rules", fmt.Sprintf("at most %d rules", maxRules))

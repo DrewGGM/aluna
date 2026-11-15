@@ -108,7 +108,9 @@ func CreateProduct(ctx context.Context, s Products, p Product) (Product, error) 
 }
 
 // CreateVersion stores, as a draft written by author, the next version of product productID of the entity
-// with definition document, or domain.ErrInvalidProduct or ErrProductNotFound.
+// with definition document, or domain.ErrInvalidProduct or ErrProductNotFound. Besides what the definition says of
+// itself, its rules must compile and its limits in SMMLV be of a product in COP; a version stored before these
+// checks is still read, and its accounts fail closed when they move.
 func CreateVersion(ctx context.Context, s Drafts, entity, productID ids.ID, author string, document []byte) (Version, error) {
 	if _, err := s.Product(ctx, entity, productID); err != nil {
 		return Version{}, err
@@ -116,6 +118,12 @@ func CreateVersion(ctx context.Context, s Drafts, entity, productID ids.ID, auth
 	definition, err := domain.ParseDepositProduct(document)
 	if err != nil {
 		return Version{}, err
+	}
+	if err := compileRules(definition.Rules); err != nil {
+		return Version{}, err
+	}
+	if definition.Currency.Code() != "COP" && definition.Limits.InSMMLV() {
+		return Version{}, fmt.Errorf("%w: limits: limits in smmlv are for COP products, the minimum wage being in pesos", domain.ErrInvalidProduct)
 	}
 	if err := s.Lock(ctx, productID); err != nil {
 		return Version{}, err

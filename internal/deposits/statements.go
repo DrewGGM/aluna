@@ -9,7 +9,6 @@ import (
 	"github.com/DrewGGM/aluna/internal/deposits/internal/app"
 	"github.com/DrewGGM/aluna/internal/ids"
 	"github.com/DrewGGM/aluna/internal/postgres"
-	"github.com/DrewGGM/aluna/internal/products"
 )
 
 // ErrStatementNotFound means an account without a statement of that month: its period is not closed yet or the
@@ -88,15 +87,10 @@ func (st statements) CounterAccounts(ctx context.Context, a Account) (app.Counte
 	m := st.s.movements(st.tx)
 	var c app.CounterAccounts
 	for _, k := range []struct {
-		role string
-		code func(products.Version) string
+		role productRole
 		id   *ids.ID
-	}{
-		{"interest expense", func(v products.Version) string { return v.Definition.Accounts.InterestExpense }, &c.InterestExpense},
-		{"fee income", func(v products.Version) string { return v.Definition.Accounts.FeeIncome }, &c.FeeIncome},
-		{"GMF payable", func(v products.Version) string { return v.Definition.Accounts.GMFPayable }, &c.GMFPayable},
-	} {
-		id, err := m.productAccountOf(ctx, a, k.role, k.code)
+	}{{interestExpenseRole, &c.InterestExpense}, {feeIncomeRole, &c.FeeIncome}, {gmfPayableRole, &c.GMFPayable}} {
+		id, err := m.productAccountOf(ctx, a, k.role)
 		if err != nil && !errors.Is(err, ErrProductAccountMissing) {
 			return app.CounterAccounts{}, err
 		}

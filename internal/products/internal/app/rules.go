@@ -3,11 +3,15 @@ package app
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 
 	"cel.dev/cel-go/cel"
 	"cel.dev/cel-go/common/env"
 	"cel.dev/cel-go/common/operators"
+
+	"github.com/DrewGGM/aluna/internal/products/internal/domain"
 )
 
 // ErrInvalidRule means a rule that does not compile, reads a variable the environment does not have or is not
@@ -84,6 +88,17 @@ func CompileRule(expr string) (Rule, error) {
 		return Rule{}, fmt.Errorf("%w: %w", ErrInvalidRule, err)
 	}
 	return Rule{program: program}, nil
+}
+
+// compileRules compiles each of rules, so that one that does not compile is a definition refused when written, and
+// not a rule that is never satisfied when it is evaluated.
+func compileRules(rules map[string]string) error {
+	for _, name := range slices.Sorted(maps.Keys(rules)) {
+		if _, err := CompileRule(rules[name]); err != nil {
+			return fmt.Errorf("%w: rules.%s: %w", domain.ErrInvalidProduct, name, err)
+		}
+	}
+	return nil
 }
 
 // Eval reports whether vars satisfy the rule. A rule that fails or exceeds its cost limit is not

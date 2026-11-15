@@ -62,13 +62,7 @@ func (w world) simplified(t *testing.T) deposits.Account {
 // limited opens an active account of the savings product with limits (a JSON object) instead of its own.
 func (w world) limited(t *testing.T, limits string) deposits.Account {
 	t.Helper()
-	return w.limitedIn(t, "COP", limits)
-}
-
-// limitedIn is limited with the product in currency.
-func (w world) limitedIn(t *testing.T, currency, limits string) deposits.Account {
-	t.Helper()
-	return w.openWith(t, map[string]string{"limits": limits, "currency": `"` + currency + `"`})
+	return w.openWith(t, map[string]string{"limits": limits})
 }
 
 // moved is what an account moved in a period.
@@ -403,25 +397,6 @@ func TestTheLedgerRejectsFirst(t *testing.T) {
 	}
 	if got := counters(t, simplified.ID)["2026-03"]; got != (moved{0, threeSMMLV}) || w.balance(t, simplified) != threeSMMLV {
 		t.Fatalf("counters %v and balance %d, want the first deposit only", got, w.balance(t, simplified))
-	}
-}
-
-// TestAnSMMLVLimitOutsidePesosMovesNothing: a product in dollars with a limit in SMMLV cannot convert it, so
-// its accounts do not move money (a misconfigured product, ErrSMMLVOutsideCOP).
-func TestAnSMMLVLimitOutsidePesosMovesNothing(t *testing.T) {
-	w := newWorld(t)
-	w.minimumWage(t)
-	usd, err := money.CurrencyOf("USD")
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.vaultIn(t, usd)
-	a := w.limitedIn(t, "USD", `{"max_balance": {"smmlv": 3}}`)
-
-	err = w.depositOf(t, w.cashIn(100, a.ID, usd))
-
-	if !errors.Is(err, deposits.ErrSMMLVOutsideCOP) || w.balance(t, a) != 0 {
-		t.Fatalf("deposit = %v with a balance of %d, want ErrSMMLVOutsideCOP and 0", err, w.balance(t, a))
 	}
 }
 

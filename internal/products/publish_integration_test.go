@@ -3,6 +3,7 @@
 package products_test
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -268,8 +269,8 @@ func TestAnotherEntitysProductDoesNotExist(t *testing.T) {
 	}
 }
 
-// TestProductsAreChecked: a repeated code, an invalid code or name and an invalid definition are rejected,
-// and nothing is stored.
+// TestProductsAreChecked: a repeated code, an invalid code or name and an invalid definition, such as one whose
+// rule does not compile or one in dollars with limits in SMMLV, are rejected, and nothing is stored.
 func TestProductsAreChecked(t *testing.T) {
 	w := newWorld(t)
 	create := func(code, name string) error {
@@ -284,10 +285,29 @@ func TestProductsAreChecked(t *testing.T) {
 		_, err := w.svc.CreateVersion(t.Context(), tx, w.entity, w.product.ID, author, []byte(`{"currency": "COP"}`))
 		return err
 	})
+	version := func(document []byte) error {
+		return try(t, func(tx postgres.Tx) error {
+			_, err := w.svc.CreateVersion(t.Context(), tx, w.entity, w.product.ID, author, document)
+			return err
+		})
+	}
+	uncompiled := version(bytes.Replace(definition(t, "valid-tiered-savings.json"), []byte(`"month_tx_count < 3"`), []byte(`"month_tx_count < "`), 1))
+	smmlvInDollars := version(bytes.Replace(definition(t, "valid-simplified-deposit.json"), []byte(`"COP"`), []byte(`"USD"`), 1))
 
-	if !errors.Is(repeated, products.ErrProductExists) || !errors.Is(badCode, products.ErrInvalidProduct) ||
-		!errors.Is(noName, products.ErrInvalidProduct) || !errors.Is(invalid, products.ErrInvalidDefinition) {
-		t.Fatalf("repeated = %v, bad code = %v, no name = %v, invalid definition = %v", repeated, badCode, noName, invalid)
+	for name, c := range map[string]struct{ got, want error }{
+		"a repeated code":              {repeated, products.ErrProductExists},
+		"an invalid code":              {badCode, products.ErrInvalidProduct},
+		"no name":                      {noName, products.ErrInvalidProduct},
+		"an invalid definition":        {invalid, products.ErrInvalidDefinition},
+		"a rule that does not compile": {uncompiled, products.ErrInvalidDefinition},
+		"limits in SMMLV in dollars":   {smmlvInDollars, products.ErrInvalidDefinition},
+	} {
+		if !errors.Is(c.got, c.want) {
+			t.Errorf("%s = %v, want %v", name, c.got, c.want)
+		}
+	}
+	if uncompiled == nil || !strings.Contains(uncompiled.Error(), "rules.first_withdrawals_free") {
+		t.Errorf("a rule that does not compile = %v, want it named", uncompiled)
 	}
 	if v := w.version(t, "valid-savings.json"); v.Number != 1 {
 		t.Fatalf("first stored version = %d, the rejected one should not count", v.Number)

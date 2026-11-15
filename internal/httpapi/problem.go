@@ -183,8 +183,9 @@ var problems = []struct {
 	{products.ErrNoPublishedVersion, conflict("no_published_version", "The product has no published version")},
 	// deposits; deposits.ErrProductAccountMissing, ErrMinimumWageMissing, ErrMinimumWageTooLow and
 	// ErrSMMLVOutsideCOP have no problem on purpose: a misconfigured product or market parameter is a 500, which
-	// is not stored with the Idempotency-Key. A missing account or wage can be fixed and the request retried; a
-	// version with limits in SMMLV outside COP cannot change, so its accounts need another version
+	// is not stored with the Idempotency-Key. A missing account or wage can be fixed and the request retried;
+	// products refuses a version with limits in SMMLV outside COP; one stored before is still read, and its
+	// accounts need another version
 	{deposits.ErrAccountNotFound, notFound},
 	{deposits.ErrStatementNotFound, Problem{Status: http.StatusNotFound, Code: "statement_not_found", Title: "The account has no statement of that month: its period is not closed or not stated yet, the account did not exist then, or it was closed and did not move in it"}},
 	{deposits.ErrAccountNotActive, conflict("account_not_active", "Only an active account moves money")},

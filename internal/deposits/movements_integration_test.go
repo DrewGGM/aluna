@@ -268,8 +268,8 @@ func (w world) inStatus(t *testing.T, status deposits.Status) deposits.Account {
 }
 
 // TestAMovementIsChecked: an amount that is not positive, a transfer to the same account, another currency,
-// another entity's account and a product whose cash account does not exist, or is in another currency, are
-// rejected.
+// another entity's account and a product whose cash account does not exist, is in another currency or is not an
+// asset, are rejected.
 func TestAMovementIsChecked(t *testing.T) {
 	w := newWorld(t)
 	w.vault(t)
@@ -283,6 +283,9 @@ func TestAMovementIsChecked(t *testing.T) {
 	dollars := newWorld(t) // with its vault in USD
 	dollars.vaultIn(t, usd)
 	inPesos := dollars.active(t)
+	cashIsALiability := w.openWith(t, map[string]string{
+		"accounts": `{"cash": "L.TAX.GMF", "interest_expense": "E.INTEREST.SAVINGS", "fee_income": "I.FEES.SAVINGS", "gmf_payable": "L.TAX.GMF"}`,
+	})
 
 	for name, c := range map[string]struct{ got, want error }{
 		"zero amount":                {w.deposit(t, a.ID, 0), deposits.ErrInvalidMovement},
@@ -293,6 +296,7 @@ func TestAMovementIsChecked(t *testing.T) {
 		"another entity's account":   {w.deposit(t, theirs.ID, 100), deposits.ErrAccountNotFound},
 		"a product without its cash": {other.deposit(t, theirs.ID, 100), deposits.ErrProductAccountMissing},
 		"a cash in another currency": {dollars.deposit(t, inPesos.ID, 100), deposits.ErrProductAccountMissing},
+		"a cash that is a liability": {w.deposit(t, cashIsALiability.ID, 100), deposits.ErrProductAccountMissing},
 	} {
 		if !errors.Is(c.got, c.want) {
 			t.Errorf("%s = %v, want %v", name, c.got, c.want)

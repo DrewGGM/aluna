@@ -107,7 +107,9 @@ el pago restauran lo que el pago usó de la exención de GMF del mes, si `ALUNA_
 
 3. **Cuentas de los productos.** Cada versión de producto nombra en `accounts` los códigos de su caja
    (`cash`), gasto de intereses (`interest_expense`), ingreso por comisiones (`fee_income`) y GMF por pagar
-   (`gmf_payable`); deben existir en el ledger, en la moneda de las cuentas que se abran. `fee_income` y
+   (`gmf_payable`); deben existir en el ledger, en la moneda de las cuentas que se abran y del tipo de su papel
+   (`cash` activo, `interest_expense` gasto, `fee_income` ingreso, `gmf_payable` pasivo): una del tipo
+   equivocado deja las cuentas de esa versión sin mover dinero, y su código no se puede reusar. `fee_income` y
    `gmf_payable` deben ser `async`: el reintegro de los cargos de un pago devuelto las debita, y una `sync`
    sin saldo (por ejemplo, el GMF ya pagado a la DIAN) haría fallar la devolución entera, con el monto del
    cliente retenido en la clearing.

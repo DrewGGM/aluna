@@ -77,12 +77,12 @@ func (m movements) Charges(ctx context.Context, a Account, op pricing.Operation,
 
 // FeeIncome is the ledger account the product of a names for its fees.
 func (m movements) FeeIncome(ctx context.Context, a Account) (ids.ID, error) {
-	return m.productAccountOf(ctx, a, "fee income", func(v products.Version) string { return v.Definition.Accounts.FeeIncome })
+	return m.productAccountOf(ctx, a, feeIncomeRole)
 }
 
 // GMFPayable is the ledger account the product of a names for the GMF.
 func (m movements) GMFPayable(ctx context.Context, a Account) (ids.ID, error) {
-	return m.productAccountOf(ctx, a, "GMF payable", func(v products.Version) string { return v.Definition.Accounts.GMFPayable })
+	return m.productAccountOf(ctx, a, gmfPayableRole)
 }
 
 // FeeIncome is, within tx, the ledger account the product of deposit account a names for its fees, in a's

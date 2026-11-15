@@ -98,12 +98,12 @@ func (s *Service) Seal(ctx context.Context, uow *postgres.UnitOfWork, maxRecords
 		return 0, errNoAnchor
 	}
 	if !s.checked.Load() {
-		if err := uow.Do(ctx, func(tx postgres.Tx) error { return s.CheckAnchor(ctx, tx) }); err != nil {
+		if err := s.CheckAnchor(ctx, uow); err != nil {
 			return 0, err
 		}
 	}
 	var sealed app.Block
-	err := uow.Do(ctx, func(tx postgres.Tx) error {
+	err := asSealer(ctx, uow, func(tx postgres.Tx) error {
 		var err error
 		sealed, err = app.Seal(ctx, pg.NewStore(tx), s.anchor, maxRecords)
 		return err
@@ -119,26 +119,41 @@ func (s *Service) Seal(ctx context.Context, uow *postgres.UnitOfWork, maxRecords
 
 // Verify recomputes the chain of blocks from to to and compares it with their anchors: a record altered,
 // inserted or deleted, or a block changed or deleted within the range, is ErrChainBroken with the first
-// block that does not add up; a range with no blocks is ErrNoBlocks. q can be the pool or a Tx.
-func (s *Service) Verify(ctx context.Context, q postgres.Querier, from, to int64) error {
+// block that does not add up; a range with no blocks is ErrNoBlocks. The whole range is read in one transaction of
+// uow, as the sealer.
+func (s *Service) Verify(ctx context.Context, uow *postgres.UnitOfWork, from, to int64) error {
 	if s.anchor == nil {
 		return errNoAnchor
 	}
-	return app.Verify(ctx, pg.NewStore(q), s.anchor, from, to)
+	return asSealer(ctx, uow, func(tx postgres.Tx) error { return app.Verify(ctx, pg.NewStore(tx), s.anchor, from, to) })
 }
 
 // CheckAnchor is ErrAnchorAhead if the anchor holds a block after the database's last one, as after a restore to an
 // earlier point without a new anchor generation: Seal does not seal on top of it. Once it passes, Seal stops
-// checking. q can be the pool or a Tx.
-func (s *Service) CheckAnchor(ctx context.Context, q postgres.Querier) error {
+// checking. It reads in a transaction of uow, as the sealer.
+func (s *Service) CheckAnchor(ctx context.Context, uow *postgres.UnitOfWork) error {
 	if s.anchor == nil {
 		return errNoAnchor
 	}
-	if err := app.CheckAnchor(ctx, pg.NewStore(q), s.anchor); err != nil {
+	err := asSealer(ctx, uow, func(tx postgres.Tx) error { return app.CheckAnchor(ctx, pg.NewStore(tx), s.anchor) })
+	if err != nil {
 		return err
 	}
 	s.checked.Store(true)
 	return nil
+}
+
+// sealerRole is the database role that reads and seals the audit log (Q-89, migration 0049).
+const sealerRole = "aluna_sealer"
+
+// asSealer runs fn in a transaction of uow as sealerRole; the user of the process must be a member of it.
+func asSealer(ctx context.Context, uow *postgres.UnitOfWork, fn func(tx postgres.Tx) error) error {
+	return uow.Do(ctx, func(tx postgres.Tx) error {
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+sealerRole); err != nil {
+			return fmt.Errorf("set role %s (the user of the process must be granted it): %w", sealerRole, err)
+		}
+		return fn(tx)
+	})
 }
 
 // Record stores r within tx, the command's transaction: if the command rolls back, so does its record. A

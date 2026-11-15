@@ -209,10 +209,13 @@ func TestTheWorkerRunsEveryJob(t *testing.T) {
 		"payments.pending.expire")
 
 	var block *int64
-	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil || block == nil {
-		t.Fatalf("the audit record was left unsealed (%v)", err)
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block)
+	})
+	if block == nil {
+		t.Fatal("the audit record was left unsealed")
 	}
-	if err := deps.Audit.Verify(t.Context(), testPool, *block, *block); err != nil {
+	if err := deps.Audit.Verify(t.Context(), deps.UnitOfWork, *block, *block); err != nil {
 		t.Fatalf("the block the worker sealed does not verify: %v", err)
 	}
 }

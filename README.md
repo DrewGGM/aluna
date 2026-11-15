@@ -77,7 +77,8 @@ ALUNA_DATABASE_URL="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable"
 ALUNA_DATABASE_URL="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable" \
   ./aluna entity create --id 01a00000-0000-7000-8000-000000000001 --name "Entidad de prueba" \
   --business-date 2026-11-13 --currency COP
-# api y worker corren con el rol aluna_app, que no puede modificar ni borrar lo asentado; el secreto del
+# api y worker corren con el rol aluna_app, que no puede modificar ni borrar lo asentado (aquí con el mismo
+# usuario, solo para desarrollo: en un despliegue van separados, runbook "El rol del sellado"); el secreto del
 # rail simulado es el mismo para los dos
 export ALUNA_SIMBREB_SECRET="$(openssl rand -hex 32)"
 app_dsn="postgres://aluna:aluna@localhost:5432/aluna?sslmode=disable&options=-c%20role%3Daluna_app"

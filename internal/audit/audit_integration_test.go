@@ -107,11 +107,11 @@ func TestRecordsAreImmutable(t *testing.T) {
 		if _, err := testPool.Exec(t.Context(), stmt, r.CorrelationID); sqlState(err) != "42501" {
 			t.Errorf("%s as aluna_app = %v, want permission denied", stmt, err)
 		}
-		if state := ownerSQLState(t, stmt, r.CorrelationID); state != "2F003" {
+		if state := sqlStateAs(t, "NONE", stmt, r.CorrelationID); state != "2F003" {
 			t.Errorf("%s as owner = SQLSTATE %q, want the trigger (2F003)", stmt, state)
 		}
 	}
-	if state := ownerSQLState(t, `TRUNCATE audit.records`); state != "2F003" {
+	if state := sqlStateAs(t, "NONE", `TRUNCATE audit.records`); state != "2F003" {
 		t.Errorf("TRUNCATE as owner = SQLSTATE %q, want the trigger (2F003)", state)
 	}
 	if _, found := stored(t, r.CorrelationID); !found {
@@ -119,19 +119,22 @@ func TestRecordsAreImmutable(t *testing.T) {
 	}
 }
 
-// ownerSQLState runs stmt as the owner in its own transaction and returns the SQLSTATE it failed with.
-func ownerSQLState(t *testing.T, stmt string, args ...any) string {
+// sqlStateAs runs stmt with args as role (NONE is the owner) in a transaction it rolls back, and returns its
+// SQLSTATE.
+func sqlStateAs(t *testing.T, role, stmt string, args ...any) string {
 	t.Helper()
 	var state string
-	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(t.Context(), "SAVEPOINT attempt"); err != nil {
+	err := pgx.BeginFunc(t.Context(), testPool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(t.Context(), "SET LOCAL ROLE "+role); err != nil {
 			return err
 		}
 		_, err := tx.Exec(t.Context(), stmt, args...)
 		state = sqlState(err)
-		_, rbErr := tx.Exec(t.Context(), "ROLLBACK TO SAVEPOINT attempt")
-		return rbErr
+		return errUndo
 	})
+	if !errors.Is(err, errUndo) {
+		t.Fatal(err)
+	}
 	return state
 }
 

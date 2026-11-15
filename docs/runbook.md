@@ -54,6 +54,30 @@ ALUNA_DATABASE_URL=… ALUNA_AUDIT_ANCHOR_DIR=… aluna audit verify --from 1 --
 Sale con 0 si cada bloque cuadra con su ancla, y si no, nombra el primer bloque que no cuadra. Con el ancla
 en S3, `audit verify` lee las mismas variables que el worker.
 
+### El rol del sellado
+
+Desde la migración 0049 solo `aluna_sealer` lee la auditoría y escribe los bloques; `aluna_app`, el rol de la
+api, ya no. El worker y `audit verify` lo toman en cada transacción, así que todo usuario que los corra debe ser
+miembro, aun el dueño de las tablas si no es superusuario (en PostgreSQL 16, crear el rol no le da permiso de
+tomarlo), y el de la api no:
+
+```sql
+GRANT aluna_sealer TO <usuario del worker>;
+GRANT aluna_sealer TO <usuario de audit verify>;
+```
+
+Al actualizar:
+
+1. Si la api y el worker comparten usuario, crea antes uno propio para el worker (miembro de `aluna_app`) y
+   pásalo a su `ALUNA_DATABASE_URL`: darle `aluna_sealer` al usuario compartido se lo daría también a la api, y
+   la api podría volver a leer la auditoría y escribir bloques.
+2. Aplica las migraciones. Desde ahí, y hasta el paso 3, el worker no sella: los registros se acumulan sin
+   sellar (no se pierden) y la alerta del registro sin sellar más viejo puede disparar.
+3. Da los permisos de arriba y arranca el worker nuevo.
+
+Sin el permiso, el sellado y `audit verify` fallan con "set role aluna_sealer". `audit verify` lee todo su rango
+en una sola transacción: un rango muy ancho con el ancla en S3 la deja abierta mientras lee las anclas.
+
 ### El ancla de auditoría en S3
 
 El ancla de producción es un bucket S3 con Object Lock (ADR-0017). Cada bloque es un objeto

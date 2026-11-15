@@ -12,10 +12,10 @@ Un solo binario, `aluna`, con un subcomando por proceso.
 | Proceso | Qué hace | Rol en la base |
 |---|---|---|
 | `aluna api` | Sirve la API de los canales en `ALUNA_HTTP_ADDR` y las notificaciones de los rails en `ALUNA_RAIL_ADDR` | `aluna_app` |
-| `aluna worker` | Corre los jobs de River: outbox, pagos y [jobs periódicos](#jobs-del-worker) | `aluna_app` |
+| `aluna worker` | Corre los jobs de River: outbox, pagos y [jobs periódicos](#jobs-del-worker) | `aluna_app`, y `aluna_sealer` al sellar la auditoría |
 | `aluna migrate up\|down\|status` | Aplica, revierte la última o lista las migraciones | dueño de las tablas |
 | `aluna entity create` | Registra una entidad legal (ver [Alta de una entidad](#alta-de-una-entidad)) | dueño de las tablas |
-| `aluna audit verify --from N --to M` | Recalcula la cadena de auditoría de los bloques N a M y la compara con sus anclas | `aluna_app` |
+| `aluna audit verify --from N --to M` | Recalcula la cadena de auditoría de los bloques N a M y la compara con sus anclas | `aluna_sealer` |
 | `aluna healthcheck` | Sale con 0 si la `api` de `ALUNA_HTTP_ADDR` responde `/healthz`; es el `HEALTHCHECK` de la imagen | ninguno |
 | `aluna version` | Imprime la versión inyectada al compilar (`-ldflags "-X main.version=…"`) | ninguno |
 
@@ -40,7 +40,7 @@ Todo sale del entorno:
 
 | Variable | Procesos | Por defecto | Uso |
 |---|---|---|---|
-| `ALUNA_DATABASE_URL` | todos salvo `healthcheck` y `version` | obligatoria | Base de la entidad, con el rol de la tabla anterior: el dueño de las tablas, o un usuario miembro de `aluna_app` (o `options=-c role=aluna_app` en la URL) |
+| `ALUNA_DATABASE_URL` | todos salvo `healthcheck` y `version` | obligatoria | Base de la entidad, con el rol de la tabla anterior: el dueño de las tablas, o un usuario miembro de `aluna_app` (o `options=-c role=aluna_app` en la URL); el de `worker` y el de `audit verify`, además miembro de `aluna_sealer` |
 | `ALUNA_OIDC_ISSUER` | `api` | obligatoria | Emisor de los tokens, `https` (o `http` solo a esta máquina); se descubre y se le piden las llaves al arrancar |
 | `ALUNA_OIDC_AUDIENCE` | `api` | obligatoria | Audiencia que deben traer los tokens |
 | `ALUNA_SIMBREB_SECRET` | `api`, `worker` | obligatoria | Secreto, de al menos 32 bytes y el mismo en los dos, con que el rail simulado firma sus notificaciones |
@@ -160,10 +160,14 @@ telemetría y el adaptador HTTP. La [colección de Postman](postman/README.md) t
   todo `UPDATE` o `DELETE`, aun del dueño de las tablas, y `aluna_app` no tiene esos permisos. Un trigger
   diferido rechaza al confirmar toda transacción que no sume cero por moneda. Los registros de auditoría
   tampoco se modifican ni se borran.
-- **Dos roles.** El usuario que migra es dueño de las tablas. `aluna_app` no es dueño de nada y solo tiene
+- **Tres roles.** El usuario que migra es dueño de las tablas. `aluna_app` no es dueño de nada y solo tiene
   los permisos que cada migración le da: no puede alterar las tablas, ni modificar lo asentado, ni crear
-  entidades. En un despliegue, el usuario de `api` y `worker` se hace miembro suyo
-  (`GRANT aluna_app TO <usuario>`).
+  entidades. En un despliegue, el usuario de `api` y el de `worker`, distintos, se hacen miembros suyos
+  (`GRANT aluna_app TO <usuario>`). `aluna_sealer` es el único que lee la auditoría y la sella (Q-89,
+  migración 0049): el sellado, `audit verify` y la revisión del ancla lo toman dentro de su transacción, así
+  que el usuario del `worker` y el de `audit verify` son miembros suyos (aun el dueño de las tablas, salvo que
+  sea superusuario) y el de `api` no. `aluna_app` solo inserta registros y ve cuándo se guardó cada uno y si
+  está sellado, para la métrica, no qué dice.
 - **Retención.** Las claves de idempotencia se purgan a los 7 días y los eventos publicados a los 30.
 
 ## Flujo de un comando

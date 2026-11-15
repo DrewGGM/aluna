@@ -56,9 +56,9 @@ func TestTheWorkerDoesNotStartOnAnAnchorAhead(t *testing.T) {
 		t.Fatal(err)
 	}
 	var last int64
-	if err := appPool(t).QueryRow(t.Context(), `SELECT coalesce(max(id), 0) FROM audit.blocks`).Scan(&last); err != nil {
-		t.Fatal(err)
-	}
+	pgtest.AsOwner(t, appPool(t), func(tx pgx.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT coalesce(max(id), 0) FROM audit.blocks`).Scan(&last)
+	})
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%020d.sha256", last+1)), []byte(strings.Repeat("0", 64)), 0o400); err != nil {
 		t.Fatal(err)

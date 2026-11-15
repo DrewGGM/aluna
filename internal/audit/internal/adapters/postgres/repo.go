@@ -38,7 +38,7 @@ func Insert(ctx context.Context, tx postgres.Tx, row Row) error {
 	return nil
 }
 
-// Store is the audit block chain over q: a Tx to seal, the pool or a Tx to verify.
+// Store is the audit block chain over q, a Tx running as aluna_sealer: it seals and verifies.
 type Store struct{ q postgres.Querier }
 
 // NewStore creates the Store over q.

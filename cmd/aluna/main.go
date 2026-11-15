@@ -719,7 +719,7 @@ func runWorker(ctx context.Context, cfg workerConfig, log *slog.Logger) int {
 func anchorAhead(ctx context.Context, records *audit.Service, pool *pgxpool.Pool, log *slog.Logger) bool {
 	ctx, cancel := context.WithTimeout(ctx, anchorCheckTimeout)
 	defer cancel()
-	err := records.CheckAnchor(ctx, pool)
+	err := records.CheckAnchor(ctx, postgres.NewUnitOfWork(pool))
 	var ahead audit.ErrAnchorAhead
 	switch {
 	case errors.As(err, &ahead):
@@ -793,7 +793,7 @@ func runVerify(ctx context.Context, dsn string, from, to int64, out io.Writer) e
 		return err
 	}
 	defer pool.Close()
-	if err := records.Verify(ctx, pool, from, to); err != nil {
+	if err := records.Verify(ctx, postgres.NewUnitOfWork(pool), from, to); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "audit chain intact: blocks %d to %d (or up to the last sealed one)\n", from, to)

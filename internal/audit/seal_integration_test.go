@@ -79,9 +79,9 @@ func sealedRecords(t *testing.T, s *audit.Service, n int) ([]string, []int64) {
 func blockOf(t *testing.T, correlation string) int64 {
 	t.Helper()
 	var block *int64
-	if err := testPool.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block); err != nil {
-		t.Fatal(err)
-	}
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT block_id FROM audit.records WHERE correlation_id = $1`, correlation).Scan(&block)
+	})
 	if block == nil {
 		t.Fatalf("record %s was not sealed", correlation)
 	}
@@ -106,7 +106,7 @@ func tamper(t *testing.T, stmts ...string) {
 
 func expectBrokenAt(t *testing.T, s *audit.Service, from, to, block int64) {
 	t.Helper()
-	err := s.Verify(t.Context(), testPool, from, to)
+	err := s.Verify(t.Context(), postgres.NewUnitOfWork(testPool), from, to)
 	var broken audit.ErrChainBroken
 	if !errors.As(err, &broken) || broken.BlockID != block {
 		t.Fatalf("Verify(%d, %d) = %v, want the chain broken at block %d", from, to, err, block)
@@ -127,7 +127,7 @@ func TestSealedBlocksVerify(t *testing.T) {
 	if len(blocks) < 2 {
 		t.Fatalf("3 records in blocks of 2 gave %d blocks", len(blocks))
 	}
-	if err := s.Verify(t.Context(), testPool, blocks[0], blocks[len(blocks)-1]); err != nil {
+	if err := s.Verify(t.Context(), postgres.NewUnitOfWork(testPool), blocks[0], blocks[len(blocks)-1]); err != nil {
 		t.Fatalf("Verify of an untouched chain = %v", err)
 	}
 	if id, err := seal(t, s, 2); err != nil || id != 0 {
@@ -159,7 +159,7 @@ func TestTamperingBreaksTheChain(t *testing.T) {
 			sealedRecords(t, s, 1) // a block before the one holding the test's record
 			correlations, _ := sealedRecords(t, s, 1)
 			block := blockOf(t, correlations[0])
-			if err := s.Verify(t.Context(), testPool, block, block); err != nil {
+			if err := s.Verify(t.Context(), postgres.NewUnitOfWork(testPool), block, block); err != nil {
 				t.Fatalf("before tampering: %v", err)
 			}
 
@@ -203,7 +203,7 @@ func TestABlockWithoutItsAnchorBreaksTheChain(t *testing.T) {
 func TestAnEmptyRangeIsNotIntact(t *testing.T) {
 	far := lastBlock(t) + 1000
 
-	if err := sealer(t).Verify(t.Context(), testPool, far, far+10); !errors.Is(err, audit.ErrNoBlocks) {
+	if err := sealer(t).Verify(t.Context(), postgres.NewUnitOfWork(testPool), far, far+10); !errors.Is(err, audit.ErrNoBlocks) {
 		t.Fatalf("Verify of an empty range = %v, want ErrNoBlocks", err)
 	}
 }
@@ -254,7 +254,7 @@ func TestAFailedAnchorIsRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.Verify(t.Context(), testPool, block, blockOf(t, second.CorrelationID)); err != nil {
+	if err := s.Verify(t.Context(), postgres.NewUnitOfWork(testPool), block, blockOf(t, second.CorrelationID)); err != nil {
 		t.Fatalf("Verify after the anchor came back = %v", err)
 	}
 }
@@ -296,37 +296,44 @@ func TestTheFirstBrokenBlockIsReported(t *testing.T) {
 	expectBrokenAt(t, s, first, second, first)
 }
 
-// TestTheAppRoleCannotRewriteTheChain: aluna_app can only set block_id, and only to a block created in its
-// same transaction; a sealed record does not change block, not even as the owner; two blocks cannot hang
-// from the same previous one.
-func TestTheAppRoleCannotRewriteTheChain(t *testing.T) {
+// TestTheAppRoleCannotTouchTheChain (Q-89): aluna_app, the api's role, neither reads what the log says nor its blocks,
+// nor marks records, nor inserts blocks.
+func TestTheAppRoleCannotTouchTheChain(t *testing.T) {
+	correlations, _ := sealedRecords(t, sealer(t), 1)
+	c, block := correlations[0], blockOf(t, correlations[0])
+	for name, stmt := range map[string]string{
+		"read the log":    `SELECT result FROM audit.records WHERE correlation_id = '` + c + `'`,
+		"read the blocks": `SELECT hash FROM audit.blocks WHERE id = ` + itoa(block),
+		"mark a record":   `UPDATE audit.records SET block_id = NULL WHERE block_id IS NULL`,
+		"insert a block":  `INSERT INTO audit.blocks (prev_hash, hash, records) VALUES (sha256('a'::bytea), sha256('b'::bytea), 1)`,
+	} {
+		if state := sqlStateAs(t, "aluna_app", stmt); state != "42501" {
+			t.Errorf("%s: %s = SQLSTATE %q, want 42501", name, stmt, state)
+		}
+	}
+}
+
+// TestTheSealerCannotRewriteTheChain: aluna_sealer can only set block_id, and only to a block created in its same
+// transaction; a sealed record does not change block, not even as the owner; two blocks cannot hang from the same
+// previous one.
+func TestTheSealerCannotRewriteTheChain(t *testing.T) {
 	correlations, _ := sealedRecords(t, sealer(t), 1)
 	c, block := correlations[0], blockOf(t, correlations[0])
 	pending := record()
 	if err := save(t, pending); err != nil {
 		t.Fatal(err)
 	}
-	cases := map[string]struct {
-		stmt, state string
-		owner       bool
-	}{
-		"change the result":               {`UPDATE audit.records SET result = 'other' WHERE correlation_id = '` + c + `'`, "42501", false},
-		"remove its block":                {`UPDATE audit.records SET block_id = NULL WHERE correlation_id = '` + c + `'`, "2F003", false},
-		"put a pending one in an old one": {`UPDATE audit.records SET block_id = ` + itoa(block) + ` WHERE correlation_id = '` + pending.CorrelationID + `'`, "2F003", false},
-		"rewrite the block as the owner":  {`UPDATE audit.records SET block_id = block_id WHERE correlation_id = '` + c + `'`, "2F003", true},
-		"fork the chain":                  {`INSERT INTO audit.blocks (prev_hash, hash, records) SELECT prev_hash, hash, 1 FROM audit.blocks WHERE id = ` + itoa(block), "23505", false},
+	cases := map[string]struct{ role, stmt, state string }{
+		"change the result":               {"aluna_sealer", `UPDATE audit.records SET result = 'other' WHERE correlation_id = '` + c + `'`, "42501"},
+		"remove its block":                {"aluna_sealer", `UPDATE audit.records SET block_id = NULL WHERE correlation_id = '` + c + `'`, "2F003"},
+		"put a pending one in an old one": {"aluna_sealer", `UPDATE audit.records SET block_id = ` + itoa(block) + ` WHERE correlation_id = '` + pending.CorrelationID + `'`, "2F003"},
+		"rewrite the block as the owner":  {"NONE", `UPDATE audit.records SET block_id = block_id WHERE correlation_id = '` + c + `'`, "2F003"},
+		"fork the chain":                  {"aluna_sealer", `INSERT INTO audit.blocks (prev_hash, hash, records) SELECT prev_hash, hash, 1 FROM audit.blocks WHERE id = ` + itoa(block), "23505"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			var state string
-			if tc.owner {
-				state = ownerSQLState(t, tc.stmt)
-			} else {
-				_, err := testPool.Exec(t.Context(), tc.stmt)
-				state = sqlState(err)
-			}
-			if state != tc.state {
-				t.Fatalf("%s = SQLSTATE %q, want %q", tc.stmt, state, tc.state)
+			if state := sqlStateAs(t, tc.role, tc.stmt); state != tc.state {
+				t.Fatalf("%s as %s = SQLSTATE %q, want %q", tc.stmt, tc.role, state, tc.state)
 			}
 		})
 	}
@@ -359,7 +366,7 @@ func TestConcurrentSealersDoNotForkTheChain(t *testing.T) {
 	}
 	sealAll(t, s, 3)
 
-	if err := s.Verify(t.Context(), testPool, first, lastBlock(t)); err != nil {
+	if err := s.Verify(t.Context(), postgres.NewUnitOfWork(testPool), first, lastBlock(t)); err != nil {
 		t.Fatalf("Verify after sealing in parallel = %v", err)
 	}
 }
@@ -367,9 +374,9 @@ func TestConcurrentSealersDoNotForkTheChain(t *testing.T) {
 func lastBlock(t *testing.T) int64 {
 	t.Helper()
 	var id int64
-	if err := testPool.QueryRow(t.Context(), `SELECT coalesce(max(id), 0) FROM audit.blocks`).Scan(&id); err != nil {
-		t.Fatal(err)
-	}
+	pgtest.AsOwner(t, testPool, func(tx pgx.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT coalesce(max(id), 0) FROM audit.blocks`).Scan(&id)
+	})
 	return id
 }
 
@@ -428,7 +435,7 @@ func TestAWideRangeStopsAtTheLastBlock(t *testing.T) {
 	correlations, _ := sealedRecords(t, s, 1)
 	block := blockOf(t, correlations[0])
 
-	if err := s.Verify(t.Context(), testPool, block, math.MaxInt64); err != nil {
+	if err := s.Verify(t.Context(), postgres.NewUnitOfWork(testPool), block, math.MaxInt64); err != nil {
 		t.Fatalf("Verify up to the maximum = %v", err)
 	}
 }

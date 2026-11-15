@@ -87,8 +87,12 @@ func (s *Store) LastClosedPeriod(ctx context.Context, entity ids.ID) (string, er
 // MarkClosing moves the entity's period from open, or no row, to closing; false if it was not open. It holds the
 // period's lock until the transaction ends, so no posting gets into the period meanwhile.
 func (s *Store) MarkClosing(ctx context.Context, entity ids.ID, period string) (bool, error) {
+	// the period's lock first, as a back-dated posting takes them (migration 0043): the other order deadlocks with it
 	if err := s.q.LockPeriod(ctx, sqlcgen.LockPeriodParams{LegalEntityID: entity, Period: period}); err != nil {
 		return false, fmt.Errorf("lock period %s: %w", period, err)
+	}
+	if err := s.q.LockBackdated(ctx, entity); err != nil {
+		return false, fmt.Errorf("lock the back-dated postings: %w", err)
 	}
 	n, err := s.q.MarkPeriodClosing(ctx, sqlcgen.MarkPeriodClosingParams{LegalEntityID: entity, Period: period})
 	if err != nil {

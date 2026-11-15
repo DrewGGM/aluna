@@ -78,9 +78,19 @@ func (q *Queries) LastClosedPeriod(ctx context.Context, legalEntityID ids.ID) (s
 	return period, err
 }
 
+const lockBackdated = `-- name: LockBackdated :exec
+SELECT pg_advisory_xact_lock(calendar.period_lock_key($1, 'backdated'))
+`
+
+// Takes the entity's back-dated lock until the transaction ends, exclusive: the postings in flight before the
+// entity's month end first, and the rest wait for the close (migration 0043 takes it shared on those).
+func (q *Queries) LockBackdated(ctx context.Context, legalEntityID ids.ID) error {
+	_, err := q.db.Exec(ctx, lockBackdated, legalEntityID)
+	return err
+}
+
 const lockPeriod = `-- name: LockPeriod :exec
-SELECT pg_advisory_xact_lock(calendar.period_lock_key($1, $2)),
-    pg_advisory_xact_lock(calendar.period_lock_key($1, 'backdated'))
+SELECT pg_advisory_xact_lock(calendar.period_lock_key($1, $2))
 `
 
 type LockPeriodParams struct {
@@ -88,9 +98,8 @@ type LockPeriodParams struct {
 	Period        string
 }
 
-// Takes the period's advisory lock and the entity's back-dated lock until the transaction ends, exclusive: the
-// postings in flight in the period or before it end first, and the rest wait for the close (migrations 0029 and 0043
-// take them shared).
+// Takes the period's advisory lock until the transaction ends, exclusive: the postings in flight in it end first,
+// and the rest wait for the close (migration 0029 takes it shared on every transaction).
 func (q *Queries) LockPeriod(ctx context.Context, arg LockPeriodParams) error {
 	_, err := q.db.Exec(ctx, lockPeriod, arg.LegalEntityID, arg.Period)
 	return err

@@ -200,7 +200,7 @@ func TestTheCloseWaitsForAPostingInFlight(t *testing.T) {
 	closing := make(chan error, 1)
 	go func() { closing <- w.close(t, "2026-02") }()
 
-	waitsForThePeriod(t, w.entity, "2026-02")
+	waitsForTheLock(t, w.entity, "2026-02")
 	close(release)
 
 	if err := <-posting; err != nil {
@@ -223,7 +223,7 @@ func TestAPostingThatCheckedBeforeTheCloseIsRefusedAfterIt(t *testing.T) {
 		go func() {
 			posting <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error { return w.postIn(t, tx, "2026-02-28") })
 		}()
-		waitsForThePeriod(t, w.entity, "2026-02")
+		waitsForTheLock(t, w.entity, "2026-02")
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.periods (legal_entity_id, period, status, closed_at, closed_by)
 			VALUES ($1, '2026-02', 'closed', clock_timestamp(), 'finance-b')`, w.entity)
 		return err
@@ -246,7 +246,7 @@ func TestABackdatedPostingThatCheckedBeforeALaterCloseIsRefusedAfterIt(t *testin
 		go func() {
 			posting <- postgres.NewUnitOfWork(testPool).Do(t.Context(), func(tx postgres.Tx) error { return w.postIn(t, tx, "2026-01-15") })
 		}()
-		waitsForThePeriod(t, w.entity, "backdated")
+		waitsForTheLock(t, w.entity, "backdated")
 		_, err := tx.Exec(t.Context(), `INSERT INTO calendar.periods (legal_entity_id, period, status, closed_at, closed_by)
 			VALUES ($1, '2026-02', 'closed', clock_timestamp(), 'finance-b')`, w.entity)
 		return err
@@ -267,7 +267,7 @@ func TestACloseWaitsForTheBackdatedPostingsInFlight(t *testing.T) {
 			return err
 		}
 		go func() { closed <- w.close(t, "2026-02") }()
-		waitsForThePeriod(t, w.entity, "backdated")
+		waitsForTheLock(t, w.entity, "backdated")
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -278,19 +278,19 @@ func TestACloseWaitsForTheBackdatedPostingsInFlight(t *testing.T) {
 	}
 }
 
-// waitsForThePeriod returns once someone waits for the advisory lock of the entity's period.
-func waitsForThePeriod(t *testing.T, entity ids.ID, period string) {
+// waitsForTheLock returns once someone waits for the entity's advisory lock named name: a period, or "backdated".
+func waitsForTheLock(t *testing.T, entity ids.ID, name string) {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		var waiting bool
 		if err := testPool.QueryRow(t.Context(), `WITH k AS (SELECT calendar.period_lock_key($1, $2) AS key)
 			SELECT EXISTS (SELECT 1 FROM pg_locks, k WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
-				AND classid::bigint = (key >> 32) & 4294967295 AND objid::bigint = key & 4294967295)`, entity, period).Scan(&waiting); err != nil {
+				AND classid::bigint = (key >> 32) & 4294967295 AND objid::bigint = key & 4294967295)`, entity, name).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting {
 			return
 		}
 	}
-	t.Fatalf("nobody waits for the lock of %s", period)
+	t.Fatalf("nobody waits for the lock of %s", name)
 }

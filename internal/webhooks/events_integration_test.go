@@ -82,6 +82,7 @@ func TestTheEventsOfAnEntityPage(t *testing.T) {
 	entity := ids.New()
 	emitted := emit(t, entity, opened, settled, opened)
 	emit(t, ids.New(), opened)
+	read(t, entity, "", "", 3, 3) // all three visible: a page of two then knows whether there are more
 
 	first := read(t, entity, "", "", 2, 2)
 	second := read(t, entity, "", first.Next, 2, 1)

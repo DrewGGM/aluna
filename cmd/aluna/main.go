@@ -630,7 +630,7 @@ func auditFromEnv() (*audit.Service, error) {
 func runWorker(ctx context.Context, cfg workerConfig, log *slog.Logger) int {
 	openCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	pool, err := postgres.Open(openCtx, cfg.dsn)
+	pool, err := postgres.OpenWithConnections(openCtx, cfg.dsn, jobs.Connections())
 	if err != nil {
 		log.Error("could not connect to the database", "error", err)
 		return 1

@@ -187,9 +187,11 @@ espera locks, el cuello es el pool.
 
 **Mitigación.**
 
-- Si el pool está saturado y la base no, sube `pool_max_conns` en `ALUNA_DATABASE_URL` (por defecto, el
-  mayor entre 4 y el número de CPU) o agrega réplicas de `api`, dentro de lo que admite
-  `max_connections` del servidor.
+- Si el pool está saturado y la base no, sube `pool_max_conns` en `ALUNA_DATABASE_URL` (en la `api`, por
+  defecto, el mayor entre 4 y el número de CPU) o agrega réplicas de `api`. El pool del `worker` tiene como
+  mínimo una conexión por job que puede correr a la vez, una por cola y dos para River, aunque
+  `pool_max_conns` pida menos (`aluna_db_pool_max` muestra el real). Las réplicas de los dos, por su pool,
+  tienen que caber en `max_connections` del servidor.
 - El modo de una cuenta se fija al crearla, y una cuenta de depósito queda atada a la versión de producto
   con que se abrió. Hoy no hay forma de cambiar el modo ni la cuenta interna de las cuentas existentes: una
   versión nueva del producto que apunte a una cuenta `async` solo descarga las cuentas que se abran
@@ -229,7 +231,9 @@ GROUP BY 1;
 - Sin worker vivo, o sin líder (`expires_at` en el pasado): reinicia el worker. Varios workers eligen un
   líder solos.
 - Un job `running` que no termina (por ejemplo un rail que no responde): el worker cancela por contexto
-  al apagarse, y River rescata los jobs huérfanos al cabo de su plazo de rescate. Un pago que quedó
+  al apagarse, y River rescata los jobs huérfanos 5 minutos después de quedar así, o al vencer su propio
+  plazo si es más largo. Mientras tanto, un periódico de controles, GL, extractos o webhooks no se vuelve a
+  encolar, ni al reiniciar el worker: solo corre uno a la vez. Un pago que quedó
   `sent` no se reenvía solo: concíliealo contra el extracto del rail.
 - Un `outbox.publish` descartado deja sin entregar su evento a los consumidores internos (los
   acumulados de efectivo para la UIAF). El evento no se purga mientras no se publique, pero River borra

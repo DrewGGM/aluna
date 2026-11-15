@@ -9,6 +9,8 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -93,6 +95,36 @@ func TestOpenSetsSessionLimits(t *testing.T) {
 		}
 		if got != value {
 			t.Errorf("%s = %q, want %q", setting, got, value)
+		}
+	}
+}
+
+// TestAPoolCanHaveMoreConnections: OpenWithConnections raises the pool to the connections asked for, never below
+// what the DSN or pgx's default gives.
+func TestAPoolCanHaveMoreConnections(t *testing.T) {
+	dsn, byDefault := testPool.Config().ConnString(), testPool.Config().MaxConns
+	withMax := dsn + "&pool_max_conns=" + strconv.Itoa(int(byDefault)+20)
+	if !strings.Contains(dsn, "?") {
+		withMax = dsn + "?pool_max_conns=" + strconv.Itoa(int(byDefault)+20)
+	}
+	for _, tc := range []struct {
+		name  string
+		dsn   string
+		conns int32
+		want  int32
+	}{
+		{"more than the default", dsn, byDefault + 10, byDefault + 10},
+		{"fewer than the default", dsn, 1, byDefault},
+		{"fewer than the DSN's", withMax, byDefault + 10, byDefault + 20},
+	} {
+		pool, err := OpenWithConnections(t.Context(), tc.dsn, tc.conns)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := pool.Config().MaxConns
+		pool.Close()
+		if got != tc.want {
+			t.Errorf("%s: %d connections, want %d", tc.name, got, tc.want)
 		}
 	}
 }

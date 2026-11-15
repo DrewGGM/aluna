@@ -143,6 +143,35 @@ type Deps struct {
 	ListSources *compliance.ListSources
 }
 
+// queues are the worker's queues and how many of their jobs run at once.
+func queues() map[string]river.QueueConfig {
+	return map[string]river.QueueConfig{
+		river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1}, QueueControls: {MaxWorkers: 1},
+		QueueGL: {MaxWorkers: 1}, QueueWebhooks: {MaxWorkers: 1}, payments.Queue: {MaxWorkers: 4},
+	}
+}
+
+// riverConnections are the connections River uses besides its jobs' and its queues' fetches: the notifier's
+// LISTEN and the leader's work (its election and maintenance).
+const riverConnections = 2
+
+// Connections is the size of the worker's pool, enough for its normal load: a connection for each job that may run
+// at once (none holds two), one for each queue's fetches and River's own.
+func Connections() int32 {
+	q := queues()
+	n := riverConnections + len(q)
+	for _, c := range q {
+		n += c.MaxWorkers
+	}
+	return int32(n) //nolint:gosec // a few dozen, from the queues above
+}
+
+// rescueAfter is how long a job may stay running before River's rescuer takes it as orphaned (its worker died
+// without recording the end): a periodic run inserted only if no other waits or runs (controls, GL, statements,
+// webhooks) is blocked meanwhile. The rescuer leaves alone a job still within its own timeout, so the long ones
+// are not rescued early.
+const rescueAfter = 5 * time.Minute
+
 // Config is the worker's River configuration: the queues, the workers from Register, the periodic jobs
 // and the schema. The caller adds the logger and how it shuts down.
 func Config(deps Deps) *river.Config {
@@ -150,11 +179,8 @@ func Config(deps Deps) *river.Config {
 	Register(workers, deps)
 	periodic := addRefreshingLists(workers, deps, Periodic())
 	return &river.Config{
-		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: periodic,
-		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: 4}, QueueLedger: {MaxWorkers: 2}, QueueInterest: {MaxWorkers: 1}, QueueControls: {MaxWorkers: 1},
-			QueueGL: {MaxWorkers: 1}, QueueWebhooks: {MaxWorkers: 1}, payments.Queue: {MaxWorkers: 4},
-		},
+		Schema: outbox.RiverSchema, Workers: workers, PeriodicJobs: periodic, Queues: queues(),
+		RescueStuckJobsAfter: rescueAfter,
 		// REINDEX requires owning the index and the worker runs as aluna_app (migration 0009).
 		ReindexerIndexNames: []string{},
 	}

@@ -19,10 +19,17 @@ var sessionLimits = map[string]string{
 
 // Open opens the pool against dsn and checks the connection.
 func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	return OpenWithConnections(ctx, dsn, 0)
+}
+
+// OpenWithConnections is Open with at least conns connections in the pool, for a process whose work at once needs
+// more than pgx's default (the larger of 4 and the CPUs, or dsn's pool_max_conns).
+func OpenWithConnections(ctx context.Context, dsn string, conns int32) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("database config: %w", err)
 	}
+	cfg.MaxConns = max(cfg.MaxConns, conns)
 	for name, value := range sessionLimits {
 		cfg.ConnConfig.RuntimeParams[name] = value
 	}

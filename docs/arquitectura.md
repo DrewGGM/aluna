@@ -269,7 +269,9 @@ Cada evento se escribe en `infra.outbox` en la transacción de su efecto, como C
 ## Jobs del worker
 
 Los periódicos corren también al arrancar el worker y no se reintentan: si fallan, los repite el intervalo
-siguiente. Los marcados con *una a la vez* no se encolan si ya hay uno esperando o corriendo.
+siguiente. Los marcados con *una a la vez* no se encolan si ya hay uno esperando o corriendo; si el worker
+muere con uno corriendo, River lo rescata a los 5 minutos (o al vencer su plazo, si es más largo). El pool del
+worker tiene una conexión por cada job que puede correr a la vez, una por cola y dos para River.
 
 | Job | Cola | Intervalo | Qué hace |
 |---|---|---|---|
